@@ -109,6 +109,57 @@ function authenticateToken(req, res, next) {
 
 
 
+// Get client by ID
+router.get('/:clientId', async (req, res) => {
+  try {
+    const clientId = req.params.clientId;
+    
+    var client = await Client.findOne({ clientID: clientId });
+    console.log(client);
+
+    if (!client || Object.keys(client).length === 0) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+    res.json(client);
+  } catch (error) {
+    console.error('Error getting client by ID:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+
+
+// Edit client details
+router.put('/:clientId', async (req, res) => {
+  try {
+    const clientId = req.params.clientId;
+    const updates = req.body;
+    const options = { new: true }; // Return the modified document rather than the original
+
+    // Hash the password if it's being updated
+    if (updates.password) {
+      updates.password = await bcrypt.hashSync(updates.password, 10);
+    }
+
+    const updatedClient = await Client.findOneAndUpdate(
+      { clientID: clientId },
+      updates,
+      options
+    );
+
+    if (!updatedClient) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+
+    res.json(updatedClient);
+  } catch (error) {
+    console.error('Error updating client:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+
+
 
 
 // this is where they can login and get a session ID
