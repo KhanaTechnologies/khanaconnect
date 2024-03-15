@@ -184,9 +184,9 @@ router.get(`/get/totalsales`, authenticateToken, async (req, res) => {
             { $group: { _id: null, totalsales: { $sum: '$totalPrice' } } }
         ]);
 
-    console.log(totalSales);
+    console.log("total sales = ",totalSales);
         
-        if (totalSales => 1){ res.send(0)}
+        if (totalSales => 1){ return res.status(303).send(0);}
         if (!totalSales) {
             return res.status(400).send('The order sales cannot be generated!');
         }
@@ -201,9 +201,10 @@ router.get(`/get/totalsales`, authenticateToken, async (req, res) => {
 router.get(`/get/count`, authenticateToken, async (req, res) => {
     try {
         const orderCount = await Order.countDocuments({ client: req.clientId }); // Filter by clientId
-console.log(orderCount);
+console.log("orders count = ",orderCount);
 
-        if (orderCount=>0){res.send(0);}
+        if (orderCount => 1){ return res.status(303).send(0);}
+
         if (!orderCount) {
             return res.status(500).json({ success: false });
         }
