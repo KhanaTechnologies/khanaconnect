@@ -75,6 +75,8 @@ router.put('/:id', validateTokenAndExtractClientID, async (req, res) => {
 // Create a new category
 router.post('/', validateTokenAndExtractClientID, async (req, res) => {
   try {
+console.log(req.clientID);
+    
     let category = new Category({
       name: req.body.name,
       icon: req.body.icon,
