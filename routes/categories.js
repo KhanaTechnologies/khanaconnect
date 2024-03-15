@@ -75,7 +75,7 @@ router.put('/:id', validateTokenAndExtractClientID, async (req, res) => {
 // Create a new category
 router.post('/', validateTokenAndExtractClientID, async (req, res) => {
   try {
-console.log(req.clientID);
+
     
     let category = new Category({
       name: req.body.name,
@@ -83,6 +83,7 @@ console.log(req.clientID);
       color: req.body.color,
       clientId: req.clientID,
     });
+    console.log(category);
     category = await category.save();
     if (!category) {
       return res.status(404).send('The category could not be created');
