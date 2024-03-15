@@ -81,7 +81,7 @@ router.post('/', validateTokenAndExtractClientID, async (req, res) => {
       name: req.body.name,
       icon: req.body.icon,
       color: req.body.color,
-      clientId: req.clientID,
+      clientID: req.clientID,
     });
     console.log(category);
     category = await category.save();
