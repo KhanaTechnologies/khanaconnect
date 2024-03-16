@@ -22,11 +22,13 @@ const storage = multer.diskStorage({
       }
       cb(uploadError, 'public/uploads');
   },
-  filename: function (req, file, cb) {
-      const fileName = file.originalname.split(' ').join('-');
-      const extension = FILE_TYPE_MAP[file.mimetype];
-      cb(null, `${fileName}-${Date.now()}.${extension}`);
-  }
+ filename: function (req, file, cb) {
+    const originalName = file.originalname;
+    const extension = originalName.substring(originalName.lastIndexOf('.') + 1);
+    const fileNameWithoutExtension = originalName.substring(0, originalName.lastIndexOf('.'));
+    const sanitizedFileName = fileNameWithoutExtension.replace(/\s+/g, '-'); // Replace spaces with dashes
+    cb(null, `${sanitizedFileName}-${Date.now()}.${extension}`);
+}
 });
 
 
