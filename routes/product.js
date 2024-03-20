@@ -233,7 +233,7 @@ router.get(`/:id`, async (req, res) =>{
 //delete specific item
 router.delete(`/:id`, (req, res) =>{
   Product.findByIdAndRemove(req.params.id).then(product =>{
-      if(Product){return res.status(200).json({succsess: true, message: 'The product has been deleted'})}
+      if(product){return res.status(200).json({succsess: true, message: 'The product has been deleted'})}
       else{return res.status(404).json({succsess: false, message: 'The product has been not deleted'})}
   }).catch(err=>{return res.status(500).json({succsess: false, error: err})})
 });
