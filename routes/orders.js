@@ -103,6 +103,20 @@ router.post(`/`, async (req, res) => {
     });
 });
 
+// Route to delete an order by ID
+router.delete('/:id', async (req, res) => {
+    try {
+        const deletedOrder = await Order.findOneAndDelete({ _id: req.params.id });
+        if (!deletedOrder) {
+            return res.status(404).json({ success: false, error: 'Order not found' });
+        }
+        res.json({ success: true, message: 'Order deleted successfully' });
+    } catch (error) {
+        console.error('Error:', error);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
+
 
 //update
 router.put('/:id',async (req, res)=> {
