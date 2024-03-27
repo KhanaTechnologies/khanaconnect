@@ -3,6 +3,7 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 const Product = require('../models/product');
 const { Category } = require('../models/category');
+const { Size } = require('../models/size'); 
 const multer = require('multer');
 
 const FILE_TYPE_MAP = {
@@ -22,13 +23,11 @@ const storage = multer.diskStorage({
       }
       cb(uploadError, 'public/uploads');
   },
- filename: function (req, file, cb) {
-    const originalName = file.originalname;
-    const extension = originalName.substring(originalName.lastIndexOf('.') + 1);
-    const fileNameWithoutExtension = originalName.substring(0, originalName.lastIndexOf('.'));
-    const sanitizedFileName = fileNameWithoutExtension.replace(/\s+/g, '-'); // Replace spaces with dashes
-    cb(null, `${sanitizedFileName}-${Date.now()}.${extension}`);
-}
+  filename: function (req, file, cb) {
+      const fileName = file.originalname.split(' ').join('-');
+      const extension = FILE_TYPE_MAP[file.mimetype];
+      cb(null, `${fileName}-${Date.now()}.${extension}`);
+  }
 });
 
 
@@ -78,7 +77,7 @@ router.get('/', async (req, res) => {
         filter.category = { $in: req.query.categories.split(',') };
       }
 
-      const products = await Product.find(filter).populate('category');
+      const products = await Product.find(filter).populate('category').populate('sizes');
       res.json(products);
     });
   } catch (error) {
@@ -89,121 +88,202 @@ router.get('/', async (req, res) => {
 
 
 
-
-
-// Router for posting new product with images
-router.post('/', upload.single('image'), async (req, res) => { // 5 is the maximum number of images allowed
+// POST new product with images
+router.post('/', upload.array('images', 5), async (req, res) => {
   try {
-      const token = req.headers.authorization;
+    console.log(req.body);
 
-      if (!token || !token.startsWith('Bearer ')) {
-          return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
+    console.log(req.files);
+    const token = req.headers.authorization;
+
+    if (!token || !token.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
+    }
+
+    const files = req.files;
+    if (!files || files.length < 1) return res.status(400).send('No images in the request');
+
+    const tokenValue = token.split(' ')[1];
+    const category = await Category.findById(req.body.category);
+
+    // Split sizes string into an array of IDs
+    const sizes = req.body.sizes.split(',').map(id => id.trim());
+    const sizeDocuments = await Size.find({ _id: { $in: sizes } });
+
+    const basePath = `${req.protocol}://${req.get('host')}/public/uploads/`;
+
+    jwt.verify(tokenValue, process.env.secret, async (err, user) => {
+      if (err) {
+        return res.status(403).json({ error: 'Forbidden - Invalid token', err });
       }
-      const file = req.file;
-    if (!file) return res.status(400).send('No image in the request');
 
-      const tokenValue = token.split(' ')[1];
-      const category = await Category.findById(req.body.category);
+      const clientId = user.clientID;
 
-      const fileName = file.filename;
-      const basePath = `${req.protocol}://${req.get('host')}/public/uploads/`;
+      // Process all images and save their paths
+      const imagePaths = files.map(file => basePath + file.filename);
 
-      
-      jwt.verify(tokenValue, process.env.secret, async (err, user) => {
-          if (err) {
-              return res.status(403).json({ error: 'Forbidden - Invalid token', err });
-          }
-
-          const clientId = user.clientID;
-
-          // const images = req.files.map(file => file.path); // Get paths of uploaded images
-
-          const newProduct = new Product({
-              productName: req.body.productName,
-              description: req.body.description,
-              richDescription: req.body.richDescription,
-              // image: req.files.length > 0 ? req.files[0].path : '', // Save the path of the first uploaded image
-              // images: images,
-              image:`${basePath}${fileName}`, //"http://localhost:3000/public/upload/image-2323232"
-              brand: req.body.brand,
-              price: req.body.price,
-              category: category,
-              countInStock: req.body.countInStock,
-              rating: req.body.rating,
-              numReviews: req.body.numReviews,
-              isFeatured: req.body.isFeatured,
-              client: clientId,
-          });
-
-          // Save the new product to the database
-          const savedProduct = await newProduct.save();
-
-          res.json(savedProduct);
+      const newProduct = new Product({
+        productName: req.body.productName,
+        description: req.body.description,
+        richDescription: req.body.richDescription,
+        images: imagePaths, // Save all images under 'images'
+        brand: req.body.brand,
+        price: req.body.price,
+        category: category,
+        countInStock: req.body.countInStock,
+        rating: req.body.rating,
+        numReviews: req.body.numReviews,
+        isFeatured: req.body.isFeatured,
+        client: clientId,
+        sizes: sizeDocuments // Use the array of size documents
       });
+
+      // Save the new product to the database
+      const savedProduct = await newProduct.save();
+
+      res.json(savedProduct);
+    });
   } catch (error) {
-      console.error('Error:', error);
-      res.status(500).json({ error: 'Internal Server Error' });
+    console.error('Error:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
-// Router for updating an existing product with images
-router.put('/:id', upload.single('image'), async (req, res) => { // 5 is the maximum number of images allowed
-  try {
-      const token = req.headers.authorization;
 
-      if (!token || !token.startsWith('Bearer ')) {
-          return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
+
+
+// // PUT to update an existing product with images
+// router.put('/:id', upload.array('images', 5), async (req, res) => {
+//   try {
+//     const token = req.headers.authorization;
+    
+//     console.log('Sizes: ', req.body.sizes);
+
+//     if (!token || !token.startsWith('Bearer ')) {
+//       return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
+//     }
+
+//     const files = req.files;
+//     const tokenValue = token.split(' ')[1];
+//     const category = await Category.findById(req.body.category);
+
+//     // Split the string of sizes into an array of size IDs
+//     const sizeIds = req.body.sizes.split(',');
+
+//     // Find all sizes based on the size IDs
+//     const sizes = await Size.find({ _id: { $in: sizeIds } });
+
+//     const basePath = `${req.protocol}://${req.get('host')}/public/uploads/`;
+//     const newImagePaths = files.map(file => basePath + file.filename); // Get paths of uploaded images
+
+//     jwt.verify(tokenValue, process.env.secret, async (err, user) => {
+//       if (err) {
+//         return res.status(403).json({ error: 'Forbidden - Invalid token', err });
+//       }
+
+//       const clientId = user.clientID;
+
+//       const product = await Product.findById(req.params.id);
+//       if (!product) return res.status(404).json({ error: 'Product not found' });
+
+//       // Append new image paths to the existing images array
+//       const updatedImages = product.images.concat(newImagePaths);
+
+//       const updatedProduct = {
+//         // Populate other product details from req.body
+//         productName: req.body.productName,
+//         description: req.body.description,
+//         richDescription: req.body.richDescription,
+//         image: updatedImages,
+//         brand: req.body.brand,
+//         price: req.body.price,
+//         category: category,
+//         countInStock: req.body.countInStock,
+//         rating: req.body.rating,
+//         numReviews: req.body.numReviews,
+//         isFeatured: req.body.isFeatured,
+//         client: clientId,
+//         sizes: sizes // Include sizes from the array of size IDs
+//       };
+
+//       // Find and update the existing product in the database
+//       const updatedProductResult = await Product.findByIdAndUpdate(req.params.id, updatedProduct, { new: true });
+
+//       res.json(updatedProductResult);
+//     });
+//   } catch (error) {
+//     console.error('Error:', error);
+//     res.status(500).json({ error: 'Internal Server Error' });
+//   }
+// });
+
+
+
+
+// PUT to update an existing product with images
+router.put('/:id', upload.array('images', 5), async (req, res) => {
+  try {
+    const token = req.headers.authorization;
+    
+    console.log('Sizes: ', req.body.sizes);
+
+    if (!token || !token.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
+    }
+
+    const files = req.files;
+    const tokenValue = token.split(' ')[1];
+    const category = await Category.findById(req.body.category);
+
+    // Split the string of sizes into an array of size IDs
+    const sizeIds = req.body.sizes.split(',');
+
+    // Find all sizes based on the size IDs
+    const sizes = await Size.find({ _id: { $in: sizeIds } });
+
+    const basePath = `${req.protocol}://${req.get('host')}/public/uploads/`;
+    const newImagePaths = files.map(file => basePath + file.filename); // Get paths of uploaded images
+
+    jwt.verify(tokenValue, process.env.secret, async (err, user) => {
+      if (err) {
+        return res.status(403).json({ error: 'Forbidden - Invalid token', err });
       }
 
-      const tokenValue = token.split(' ')[1];
-      const category = await Category.findById(req.body.category);
-      jwt.verify(tokenValue, process.env.secret, async (err, user) => {
-          if (err) {
-              return res.status(403).json({ error: 'Forbidden - Invalid token', err });
-          }
+      const clientId = user.clientID;
 
-          const clientId = user.clientID;
+      const product = await Product.findById(req.params.id);
+      if (!product) return res.status(404).json({ error: 'Product not found' });
 
-          const file = req.file;
-          let imagepath;
-      
-          if (file) {
-              const fileName = file.filename;
-              const basePath = `${req.protocol}://${req.get('host')}/public/uploads/`;
-              imagepath = `${basePath}${fileName}`;
-          } else {
-              // imagepath = product.image;
-          }
-          const updatedProduct = {
-              productName: req.body.productName,
-              description: req.body.description,
-              richDescription: req.body.richDescription,
-              // image: req.files.length > 0 ? req.files[0].path : '', // Save the path of the first uploaded image
-              // images: images,
-              image: imagepath,
-              brand: req.body.brand,
-              price: req.body.price,
-              category: req.body.category,
-              countInStock: req.body.countInStock,
-              rating: req.body.rating,
-              numReviews: req.body.numReviews,
-              isFeatured: req.body.isFeatured,
-              client: clientId,
-          };
+      // Merge existing images with new image paths
+      const updatedImages = [...product.images, ...newImagePaths];
 
+      // Construct the updated product object
+      const updatedProduct = {
+        productName: req.body.productName,
+        description: req.body.description,
+        richDescription: req.body.richDescription,
+        images: updatedImages,
+        brand: req.body.brand,
+        price: req.body.price,
+        category: category,
+        countInStock: req.body.countInStock,
+        rating: req.body.rating,
+        numReviews: req.body.numReviews,
+        isFeatured: req.body.isFeatured,
+        sizes: sizes // Include sizes from the array of size IDs
+      };
 
-          console.log(updatedProduct);
+      // Find and update the existing product in the database
+      const updatedProductResult = await Product.findByIdAndUpdate(req.params.id, updatedProduct, { new: true });
 
-          // Find and update the existing product in the database
-          const updatedProductResult = await Product.findByIdAndUpdate(req.params.id, updatedProduct, { new: true });
-
-          res.json(updatedProductResult);
-      });
+      res.json(updatedProductResult);
+    });
   } catch (error) {
-      console.error('Error:', error);
-      res.status(500).json({ error: 'Internal Server Error' });
+    console.error('Error:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 });
+
 
 
   //get specific item
@@ -218,7 +298,7 @@ router.get(`/:id`, async (req, res) =>{
       jwt.verify(tokenValue, process.env.secret, async (err, user) => {if (err) {return res.status(403).json({ error: 'Forbidden - Invalid token', err });}
 
         const clientId = user.clientID;
-        const product = await Product.findById(req.params.id).populate('category');//creating reationships .populate('category') ---- get back to this!!!!!!!!!!!!!!!!!!!
+        const product = await Product.findById(req.params.id).populate('category').populate('sizes');//creating reationships .populate('category') ---- get back to this!!!!!!!!!!!!!!!!!!!
         if(!product){return res.status(500).json({succsess: false})}
         res.send(product);
 
