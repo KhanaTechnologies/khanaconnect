@@ -23,7 +23,7 @@ var customerRoutes = require('./routes/customer');
 var clientRoutes = require('./routes/client');
 var productRoutes = require('./routes/product');
 var indexRouter = require('./routes/index');
-
+var sizeRoutes = require('./routes/sizes');
 var orderRoutes = require('./routes/orders');
 var emailRouter = require('./routes/email');
 var categoriesRouter = require('./routes/categories');
@@ -63,9 +63,7 @@ app.options('*',cors());
  app.use(`${api}/products`, productRoutes);
  app.use(`${api}/customer`, customerRoutes);
  app.use(`${api}/client`, clientRoutes);
-
-
-
+ app.use(`${api}/size`, sizeRoutes);
 mongoose.connect(process.env.CONNECTION_STRING,{ useNewUrlParser: true,useUnifiedTopology: true, dbName: 'KhanaConnect_DevDB'} )
 .then(()=>{
     console.log('Database Connection is ready...')
