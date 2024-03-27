@@ -6,7 +6,7 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 const {Customer} = require('../models/customer');
 const {Product} = require('../models/product');
-
+const {Size} = require('../models/size');
 
 router.get(`/`, async (req, res) =>{
 
@@ -57,7 +57,8 @@ router.post(`/`, async (req, res) => {
                 const orderItemsIds = Promise.all(req.body.orderItems.map(async orderItem => {
                     let newOrderItem = new OrderItem({
                         quantity: orderItem.quantity,
-                        product: orderItem.product
+                        product: orderItem.product,
+                        size: orderItem.size
                     });
                     newOrderItem = await newOrderItem.save();
 
@@ -141,7 +142,7 @@ router.get('/:id', async (req, res) => {
 
             const order = await Order.findOne({ _id: req.params.id, client: clientId })
                 .populate('customer', 'customerFirstName emailAddress phoneNumber')
-                .populate({path: 'orderItems', populate: {path: 'product', populate: 'category'}});
+                .populate({path: 'orderItems', populate: {path: 'product', populate: 'category'}}).populate({path: 'orderItems',populate: {path: 'size'}});
 
             if (!order) {
                 return res.status(404).json({ success: false, error: 'Order not found' });
@@ -183,10 +184,6 @@ router.get(`/get/totalsales`, authenticateToken, async (req, res) => {
             { $match: { client: req.clientId } }, // Filter by clientId
             { $group: { _id: null, totalsales: { $sum: '$totalPrice' } } }
         ]);
-
-    console.log("total sales = ",totalSales);
-        
-        if (totalSales => 1){ return res.status(303).send(0);}
         if (!totalSales) {
             return res.status(400).send('The order sales cannot be generated!');
         }
@@ -201,10 +198,6 @@ router.get(`/get/totalsales`, authenticateToken, async (req, res) => {
 router.get(`/get/count`, authenticateToken, async (req, res) => {
     try {
         const orderCount = await Order.countDocuments({ client: req.clientId }); // Filter by clientId
-console.log("orders count = ",orderCount);
-
-        if (orderCount => 1){ return res.status(303).send(0);}
-
         if (!orderCount) {
             return res.status(500).json({ success: false });
         }
