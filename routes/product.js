@@ -24,9 +24,12 @@ const storage = multer.diskStorage({
       cb(uploadError, 'public/uploads');
   },
   filename: function (req, file, cb) {
-      const fileName = file.originalname.split(' ').join('-');
+      const originalFileName = file.originalname;
+      const fileNameWithoutSpaces = originalFileName.split(' ').join('-');
+      const fileNameWithoutExtension = fileNameWithoutSpaces.split('.').slice(0, -1).join('.');
+      const timestamp = Date.now();
       const extension = FILE_TYPE_MAP[file.mimetype];
-      cb(null, `${fileName}-${Date.now()}.${extension}`);
+      cb(null, `${fileNameWithoutExtension}-${timestamp}.${extension}`);
   }
 });
 
