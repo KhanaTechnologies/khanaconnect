@@ -256,8 +256,7 @@ router.get(`/get/count`, authenticateToken, async (req, res) => {
     try {
         const orderCount = await Order.countDocuments({ client: req.clientId }); // Filter by clientId
         if (!orderCount) {
-            res.send({ orderCount: 0 });
-            return res.status(500).json({ success: false });
+           return res.send({ orderCount: 0 });
         }
         res.send({ orderCount: orderCount });
     } catch (error) {
