@@ -25,7 +25,6 @@ var productRoutes = require('./routes/product');
 var indexRouter = require('./routes/index');
 var sizeRoutes = require('./routes/sizes');
 var orderRoutes = require('./routes/orders');
-var emailRouter = require('./routes/email');
 var categoriesRouter = require('./routes/categories');
 //Middleware
 app.use(express.json());
