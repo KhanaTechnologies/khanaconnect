@@ -244,7 +244,7 @@ router.get(`/get/totalsales`, authenticateToken, async (req, res) => {
         if (!totalSales) {
             return res.status(400).send('The order sales cannot be generated!');
         }
-        res.send({ totalsales: totalSales.pop().totalsales });
+        res.send({ totalsales: totalSales.pop() });
     } catch (error) {
         console.error('Error:', error);
         res.status(500).json({ error: 'Internal Server Error' });
@@ -256,7 +256,8 @@ router.get(`/get/count`, authenticateToken, async (req, res) => {
     try {
         const orderCount = await Order.countDocuments({ client: req.clientId }); // Filter by clientId
         if (!orderCount) {
-           return res.send({ orderCount: 0 });
+            return  res.send({ orderCount: 0 });
+
         }
         res.send({ orderCount: orderCount });
     } catch (error) {
@@ -264,6 +265,7 @@ router.get(`/get/count`, authenticateToken, async (req, res) => {
         res.status(500).json({ error: 'Internal Server Error' });
     }
 });
+
 // Route to get user orders by user ID for a specific client (authenticated)
 router.get(`/get/userorders/:userid`, authenticateToken, async (req, res) => {
     try {
