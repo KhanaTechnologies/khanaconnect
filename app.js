@@ -57,7 +57,6 @@ app.options('*',cors());
 
 
  app.use(`${api}/categories`, categoriesRouter);
- app.use(`${api}/email`, emailRouter);
  app.use(`${api}/orders`, orderRoutes);
  app.use(`${api}/products`, productRoutes);
  app.use(`${api}/customer`, customerRoutes);
