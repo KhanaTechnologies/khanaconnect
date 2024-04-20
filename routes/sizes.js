@@ -93,7 +93,7 @@ router.post('/', validateTokenAndExtractClientID, async (req, res) => {
 // Delete a category
 router.delete('/:id', validateTokenAndExtractClientID, async (req, res) => {
   try {
-    const size = await Size.findOneAndDelete({ _id: req.params.id, clientId: req.clientID });
+    const size = await Size.findOneAndDelete({ _id: req.params.id });
     if (!size) {
       return res.status(404).json({ success: false, message: 'size not found' });
     }
