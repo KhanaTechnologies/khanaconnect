@@ -5,6 +5,7 @@ const Product = require('../models/product');
 const { Category } = require('../models/category');
 const { Size } = require('../models/size'); 
 const multer = require('multer');
+const fs = require('fs');
 
 const FILE_TYPE_MAP = {
   'image/png': 'png',
@@ -12,6 +13,11 @@ const FILE_TYPE_MAP = {
   'image/jpg': 'jpg'
 };
 
+const uploadPath = 'public/uploads';
+
+if (!fs.existsSync(uploadPath)) {
+  fs.mkdirSync(uploadPath, { recursive: true });
+}
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
