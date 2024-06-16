@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
-const EmailSubscriber = require('../models/EmailSubscriber'); // Correct import path and case
+const EmailSubscriber = require('../models/emailSubscriber'); // Correct import path and case
 const createCsvWriter = require('csv-writer').createObjectCsvWriter;
 
 // Middleware to validate token
