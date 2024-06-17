@@ -3,7 +3,7 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 const Product = require('../models/product');
 const { Category } = require('../models/category');
-const { Size } = require('../models/size'); 
+const { Size } = require('../models/size');
 const multer = require('multer');
 const { Octokit } = require("@octokit/rest");
 require('dotenv').config();
@@ -163,6 +163,45 @@ router.put('/:id', upload.array('images', 5), async (req, res) => {
 
       res.json(updatedProductResult);
     });
+  } catch (error) {
+    console.error('Error:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// GET all products
+router.get('/', async (req, res) => {
+  try {
+    const productList = await Product.find().populate('category').populate('sizes');
+    res.json(productList);
+  } catch (error) {
+    console.error('Error:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// GET a single product by id
+router.get('/:id', async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.id).populate('category').populate('sizes');
+    if (!product) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+    res.json(product);
+  } catch (error) {
+    console.error('Error:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// DELETE a product by id
+router.delete('/:id', async (req, res) => {
+  try {
+    const product = await Product.findByIdAndRemove(req.params.id);
+    if (!product) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+    res.json({ message: 'Product deleted successfully' });
   } catch (error) {
     console.error('Error:', error);
     res.status(500).json({ error: 'Internal Server Error' });
