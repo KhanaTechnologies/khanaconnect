@@ -4,8 +4,8 @@ const jwt = require('jsonwebtoken');
 const Product = require('../models/product');
 const { Category } = require('../models/category');
 const { Size } = require('../models/size');
-const multer = require('multer');
 const { Octokit } = require("@octokit/rest");
+const multer = require('multer');
 require('dotenv').config();
 
 const octokit = new Octokit({
@@ -18,42 +18,56 @@ const FILE_TYPE_MAP = {
   'image/jpg': 'jpg'
 };
 
-// Multer configuration remains unchanged for in-memory storage
 const storage = multer.memoryStorage();
-
 const upload = multer({ storage: storage });
 
-// Helper function to create a file path for the image
-const createFilePath = (fileName) => `public/uploads/${fileName}`;
-
-// Helper function to upload image to GitHub
-const uploadImageToGitHub = async (file, fileName) => {
-    const filePath = createFilePath(fileName);
-    const content = file.buffer.toString('base64');
-    const { data } = await octokit.repos.createOrUpdateFileContents({
-        owner: process.env.GITHUB_REPO.split('/')[0],
-        repo: process.env.GITHUB_REPO.split('/')[1],
-        path: filePath,
-        message: `Upload ${fileName}`,
-        content: content,
-        branch: process.env.GITHUB_BRANCH
-    });
-    return data.content.download_url;
+const validateTokenAndExtractClientID = (req, res, next) => {
+  const token = req.headers.authorization;
+  if (!token || !token.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
+  }
+  const tokenValue = token.split(' ')[1];
+  jwt.verify(tokenValue, process.env.secret, (err, decoded) => {
+    if (err) {
+      return res.status(403).json({ error: 'Forbidden - Invalid token', err });
+    }
+    req.clientID = decoded.clientID;
+    next();
+  });
 };
 
-// POST new product with images
-router.post('/', upload.array('images', 5), async (req, res) => {
+// GET all products that the client can access
+router.get('/', validateTokenAndExtractClientID, async (req, res) => {
   try {
-    const token = req.headers.authorization;
+    const productList = await Product.find({ client: req.clientID }).populate('category').populate('sizes');
+    res.json(productList);
+  } catch (error) {
+    console.error('Error:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
 
-    if (!token || !token.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
+// GET a single product by id
+router.get('/:id', validateTokenAndExtractClientID, async (req, res) => {
+  try {
+    const product = await Product.findOne({ _id: req.params.id, client: req.clientID }).populate('category').populate('sizes');
+    if (!product) {
+      return res.status(404).json({ error: 'Product not found' });
     }
+    res.json(product);
+  } catch (error) {
+    console.error('Error:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
 
+// POST new product with images
+router.post('/', validateTokenAndExtractClientID, upload.array('images', 5), async (req, res) => {
+  try {
     const files = req.files;
     if (!files || files.length < 1) return res.status(400).send('No images in the request');
 
-    const tokenValue = token.split(' ')[1];
+    const tokenValue = req.headers.authorization.split(' ')[1];
     const category = await Category.findById(req.body.category);
 
     // Split sizes string into an array of IDs
@@ -103,16 +117,10 @@ router.post('/', upload.array('images', 5), async (req, res) => {
 });
 
 // PUT to update an existing product with images
-router.put('/:id', upload.array('images', 5), async (req, res) => {
+router.put('/:id', validateTokenAndExtractClientID, upload.array('images', 5), async (req, res) => {
   try {
-    const token = req.headers.authorization;
-
-    if (!token || !token.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
-    }
-
     const files = req.files;
-    const tokenValue = token.split(' ')[1];
+    const tokenValue = req.headers.authorization.split(' ')[1];
     const category = await Category.findById(req.body.category);
 
     // Split the string of sizes into an array of size IDs
@@ -169,33 +177,8 @@ router.put('/:id', upload.array('images', 5), async (req, res) => {
   }
 });
 
-// GET all products
-router.get('/', async (req, res) => {
-  try {
-    const productList = await Product.find().populate('category').populate('sizes');
-    res.json(productList);
-  } catch (error) {
-    console.error('Error:', error);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
-
-// GET a single product by id
-router.get('/:id', async (req, res) => {
-  try {
-    const product = await Product.findById(req.params.id).populate('category').populate('sizes');
-    if (!product) {
-      return res.status(404).json({ error: 'Product not found' });
-    }
-    res.json(product);
-  } catch (error) {
-    console.error('Error:', error);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
-
 // DELETE a product by id
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', validateTokenAndExtractClientID, async (req, res) => {
   try {
     const product = await Product.findByIdAndRemove(req.params.id);
     if (!product) {
@@ -209,3 +192,21 @@ router.delete('/:id', async (req, res) => {
 });
 
 module.exports = router;
+
+// Helper function to upload image to GitHub
+const uploadImageToGitHub = async (file, fileName) => {
+    const filePath = createFilePath(fileName);
+    const content = file.buffer.toString('base64');
+    const { data } = await octokit.repos.createOrUpdateFileContents({
+        owner: process.env.GITHUB_REPO.split('/')[0],
+        repo: process.env.GITHUB_REPO.split('/')[1],
+        path: filePath,
+        message: `Upload ${fileName}`,
+        content: content,
+        branch: process.env.GITHUB_BRANCH
+    });
+    return data.content.download_url;
+};
+
+// Helper function to create a file path for the image
+const createFilePath = (fileName) => `public/uploads/${fileName}`;
