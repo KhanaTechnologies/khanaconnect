@@ -221,5 +221,26 @@ const uploadImageToGitHub = async (file, fileName) => {
     return data.content.download_url;
 };
 
+router.get('/get/count', validateTokenAndExtractClientID, async (req, res) => {
+  try {
+    const productCount = await Product.countDocuments({ clientID: req.clientID });
+    res.json({ productCount });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, error: 'Internal Server Error' });
+  }
+});
+
+router.get('/get/featured/:count', validateTokenAndExtractClientID, async (req, res) => {
+  try {
+    const count = req.params.count ? parseInt(req.params.count, 10) : 0;
+    const featureProducts = await Product.find({ clientID: req.clientID, isFeatured: true }).limit(count);
+    res.json(featureProducts);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, error: 'Internal Server Error' });
+  }
+});
+
 // Helper function to create a file path for the image
 const createFilePath = (fileName) => `public/uploads/${fileName}`;
