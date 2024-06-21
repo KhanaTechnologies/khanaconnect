@@ -236,6 +236,7 @@ router.get('/get/featured/:count', validateTokenAndExtractClientID, async (req, 
       console.log(req.clientID);
     const count = req.params.count ? parseInt(req.params.count, 10) : 0;
     const featureProducts = await Product.find({ clientID: req.clientID, isFeatured: true }).limit(count);
+     console.log(featureProducts);
     res.json(featureProducts);
   } catch (error) {
     console.error(error);
