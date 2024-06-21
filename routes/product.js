@@ -48,15 +48,26 @@ router.get('/', validateTokenAndExtractClientID, async (req, res) => {
 });
 
 // GET all products by categories
-router.get(`/`, async (req, res) =>{
-    // localhost:3000/api/v1/products?categories=3497,2954
+router.get('/', validateTokenAndExtractClientID, async (req, res) => {
+  try {
     let filter = {};
-    if(req.query.categories)
-    {filter = {category: req.query.categories.split(',')}}
-    const product = await Product.find({filter,client: req.clientID}).populate('category');
-    if(!product){return res.status(500).json({succsess: false})}
-    res.status(200).send(product);
-})
+    if (req.query.categories) {
+      const categoryIds = req.query.categories.split(',').map(id => id.trim());
+      filter = { category: { $in: categoryIds }, client: req.clientID };
+    }
+
+    const products = await Product.find(filter).populate('category');
+    if (!products) {
+      return res.status(500).json({ success: false, message: 'Failed to fetch products' });
+    }
+
+    res.status(200).json(products);
+  } catch (error) {
+    console.error('Error:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
 
 // GET a single product by id
 router.get('/:id', validateTokenAndExtractClientID, async (req, res) => {
