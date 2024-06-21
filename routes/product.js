@@ -36,29 +36,19 @@ const validateTokenAndExtractClientID = (req, res, next) => {
   });
 };
 
-// GET all products that the client can access
+// GET products with optional category filter
 router.get('/', validateTokenAndExtractClientID, async (req, res) => {
   try {
-    const productList = await Product.find({ client: req.clientID }).populate('category').populate('sizes');
-    res.json(productList);
-  } catch (error) {
-    console.error('Error:', error);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
+    let filter = { client: req.clientID };
 
-// GET all products by categories
-router.get('/', validateTokenAndExtractClientID, async (req, res) => {
-  try {
-    let filter = {};
     if (req.query.categories) {
       const categoryIds = req.query.categories.split(',').map(id => id.trim());
-      filter = { category: { $in: categoryIds }, client: req.clientID };
+      filter.category = { $in: categoryIds };
     }
 
-    const products = await Product.find(filter).populate('category');
-    if (!products) {
-      return res.status(500).json({ success: false, message: 'Failed to fetch products' });
+    const products = await Product.find(filter).populate('category').populate('sizes');
+    if (!products || products.length === 0) {
+      return res.status(404).json({ success: false, message: 'No products found' });
     }
 
     res.status(200).json(products);
@@ -67,6 +57,7 @@ router.get('/', validateTokenAndExtractClientID, async (req, res) => {
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
+
 
 
 // GET a single product by id
