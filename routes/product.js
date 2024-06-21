@@ -114,7 +114,7 @@ router.post('/', validateTokenAndExtractClientID, upload.array('images', 5), asy
         rating: req.body.rating,
         numReviews: req.body.numReviews,
         isFeatured: req.body.isFeatured,
-        client: clientId,
+        clientID: clientId,
         sizes: sizeDocuments // Use the array of size documents
       });
 
