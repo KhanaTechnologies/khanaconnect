@@ -47,6 +47,17 @@ router.get('/', validateTokenAndExtractClientID, async (req, res) => {
   }
 });
 
+// GET all products by categories
+router.get(`/`, async (req, res) =>{
+    // localhost:3000/api/v1/products?categories=3497,2954
+    let filter = {};
+    if(req.query.categories)
+    {filter = {category: req.query.categories.split(',')}}
+    const product = await Product.find({filter,client: req.clientID}).populate('category');
+    if(!product){return res.status(500).json({succsess: false})}
+    res.status(200).send(product);
+})
+
 // GET a single product by id
 router.get('/:id', validateTokenAndExtractClientID, async (req, res) => {
   try {
