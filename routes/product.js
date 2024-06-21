@@ -39,7 +39,7 @@ const validateTokenAndExtractClientID = (req, res, next) => {
 // GET products with optional category filter
 router.get('/', validateTokenAndExtractClientID, async (req, res) => {
   try {
-    let filter = { client: req.clientID };
+    let filter = { clientID: req.clientID };
 
     if (req.query.categories) {
       const categoryIds = req.query.categories.split(',').map(id => id.trim());
@@ -63,7 +63,7 @@ router.get('/', validateTokenAndExtractClientID, async (req, res) => {
 // GET a single product by id
 router.get('/:id', validateTokenAndExtractClientID, async (req, res) => {
   try {
-    const product = await Product.findOne({ _id: req.params.id, client: req.clientID }).populate('category').populate('sizes');
+    const product = await Product.findOne({ _id: req.params.id, clientID: req.clientID }).populate('category').populate('sizes');
     if (!product) {
       return res.status(404).json({ error: 'Product not found' });
     }
