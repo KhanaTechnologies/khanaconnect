@@ -92,9 +92,9 @@ router.post('/', validateTokenAndExtractClientID, async (req, res) => {
 });
 
 // Delete a category
-router.delete('/:id', validateTokenAndExtractClientID, async (req, res) => {
+router.delete('/:id', async (req, res) => {
   try {
-    const category = await Category.findOneAndDelete({ _id: req.params.id, clientId: req.clientID });
+    const category = await Category.findOneAndDelete({ _id: req.params.id });
     if (!category) {
       return res.status(404).json({ success: false, message: 'Category not found' });
     }
