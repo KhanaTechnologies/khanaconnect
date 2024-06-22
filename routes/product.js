@@ -194,6 +194,7 @@ router.put('/:id', validateTokenAndExtractClientID, upload.array('images', 5), a
 router.delete('/:id', async (req, res) => {
   try {
     const product = await Product.findOneAndDelete(req.params.id);
+      console.log(product);
     if (!product) {
       return res.status(404).json({ error: 'Product not found' });
     }
@@ -204,7 +205,7 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-module.exports = router;
+
 
 // Helper function to upload image to GitHub
 const uploadImageToGitHub = async (file, fileName) => {
@@ -246,3 +247,5 @@ router.get('/get/featured/:count', validateTokenAndExtractClientID, async (req, 
 
 // Helper function to create a file path for the image
 const createFilePath = (fileName) => `public/uploads/${fileName}`;
+
+module.exports = router;
