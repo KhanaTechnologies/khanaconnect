@@ -91,7 +91,7 @@ router.post('/', validateTokenAndExtractClientID, upload.array('images', 5), asy
       if (err) {
         return res.status(403).json({ error: 'Forbidden - Invalid token', err });
       }
-
+    console.log(user.clientID);
       const clientId = user.clientID;
 
       // Process all images and upload them to GitHub
