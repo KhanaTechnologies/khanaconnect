@@ -140,9 +140,9 @@ router.post('/', validateTokenAndExtractClientID, upload.array('images', 5), asy
         const fileName = `${baseName}_${Date.now()}.${extension}`;
         return uploadImageToGitHub(file, fileName);
       });
-
+    console.log('hit 1');
       const imagePaths = await Promise.all(imageUploadPromises);
-
+ console.log('hit 2');
       const newProduct = new Product({
         productName: req.body.productName,
         description: req.body.description,
@@ -158,10 +158,10 @@ router.post('/', validateTokenAndExtractClientID, upload.array('images', 5), asy
         clientID: clientId,
         sizes: sizeDocuments // Use the array of size documents
       });
-
+ console.log('hit 3');
       // Save the new product to the database
       const savedProduct = await newProduct.save();
-
+console.log('hit 4');
       res.json(savedProduct);
     });
   } catch (error) {
