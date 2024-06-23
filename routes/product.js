@@ -79,7 +79,7 @@ const createFilePath = (fileName) => {
   const date = new Date();
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
-  return `uploads/${year}/${month}/${fileName}`;
+  return `public/uploads/${year}/${month}/${fileName}`;
 };
 
 const uploadImageToGitHub = async (file, fileName) => {
@@ -285,6 +285,6 @@ router.get('/get/featured/:count', validateTokenAndExtractClientID, async (req, 
 });
 
 // Helper function to create a file path for the image
-const createFilePath = (fileName) => `public/uploads/${fileName}`;
+// const createFilePath = (fileName) => `public/uploads/${fileName}`;
 
 module.exports = router;
