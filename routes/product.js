@@ -248,19 +248,19 @@ router.delete('/:id', async (req, res) => {
 
 
 // Helper function to upload image to GitHub
-const uploadImageToGitHub = async (file, fileName) => {
-    const filePath = createFilePath(fileName);
-    const content = file.buffer.toString('base64');
-    const { data } = await octokit.repos.createOrUpdateFileContents({
-        owner: process.env.GITHUB_REPO.split('/')[0],
-        repo: process.env.GITHUB_REPO.split('/')[1],
-        path: filePath,
-        message: `Upload ${fileName}`,
-        content: content,
-        branch: process.env.GITHUB_BRANCH
-    });
-    return data.content.download_url;
-};
+// const uploadImageToGitHub = async (file, fileName) => {
+//     const filePath = createFilePath(fileName);
+//     const content = file.buffer.toString('base64');
+//     const { data } = await octokit.repos.createOrUpdateFileContents({
+//         owner: process.env.GITHUB_REPO.split('/')[0],
+//         repo: process.env.GITHUB_REPO.split('/')[1],
+//         path: filePath,
+//         message: `Upload ${fileName}`,
+//         content: content,
+//         branch: process.env.GITHUB_BRANCH
+//     });
+//     return data.content.download_url;
+// };
 
 router.get('/get/count', validateTokenAndExtractClientID, async (req, res) => {
   try {
