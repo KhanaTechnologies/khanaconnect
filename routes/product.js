@@ -75,6 +75,45 @@ router.get('/:id', validateTokenAndExtractClientID, async (req, res) => {
 });
 
 // POST new product with images
+const createFilePath = (fileName) => {
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  return `uploads/${year}/${month}/${fileName}`;
+};
+
+const uploadImageToGitHub = async (file, fileName) => {
+  const filePath = createFilePath(fileName);
+
+  try {
+    // Check if file already exists
+    await octokit.repos.getContent({
+      owner: process.env.GITHUB_REPO.split('/')[0],
+      repo: process.env.GITHUB_REPO.split('/')[1],
+      path: filePath,
+      ref: process.env.GITHUB_BRANCH
+    });
+    throw new Error('File already exists');
+  } catch (error) {
+    if (error.status === 404) {
+      // File does not exist, proceed with creation
+      const content = file.buffer.toString('base64');
+      const { data } = await octokit.repos.createOrUpdateFileContents({
+        owner: process.env.GITHUB_REPO.split('/')[0],
+        repo: process.env.GITHUB_REPO.split('/')[1],
+        path: filePath,
+        message: `Upload ${fileName}`,
+        content: content,
+        branch: process.env.GITHUB_BRANCH
+      });
+      return data.content.download_url;
+    } else {
+      // Other errors
+      throw error;
+    }
+  }
+};
+
 router.post('/', validateTokenAndExtractClientID, upload.array('images', 5), async (req, res) => {
   try {
     const files = req.files;
@@ -91,17 +130,17 @@ router.post('/', validateTokenAndExtractClientID, upload.array('images', 5), asy
       if (err) {
         return res.status(403).json({ error: 'Forbidden - Invalid token', err });
       }
-    console.log(user.clientID);
       const clientId = user.clientID;
 
-     // Process all images and upload them to GitHub
-const imageUploadPromises = files.map(file => {
-    const fileNameParts = file.originalname.split(' ').join('-').split('.');
-    const extension = fileNameParts.pop();
-    const baseName = fileNameParts.join('.');
-    const fileName = `${baseName}_${Date.now()}.${FILE_TYPE_MAP[file.mimetype]}`;
-    return uploadImageToGitHub(file, fileName);
-});
+      // Process all images and upload them to GitHub
+      const imageUploadPromises = files.map(file => {
+        const fileNameParts = file.originalname.split(' ').join('-').split('.');
+        const extension = fileNameParts.pop();
+        const baseName = fileNameParts.join('.');
+        const fileName = `${baseName}_${Date.now()}.${extension}`;
+        return uploadImageToGitHub(file, fileName);
+      });
+
       const imagePaths = await Promise.all(imageUploadPromises);
 
       const newProduct = new Product({
@@ -130,7 +169,6 @@ const imageUploadPromises = files.map(file => {
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
-
 // PUT to update an existing product with images
 router.put('/:id', validateTokenAndExtractClientID, upload.array('images', 5), async (req, res) => {
   try {
