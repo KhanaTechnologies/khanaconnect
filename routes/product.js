@@ -158,7 +158,7 @@ router.put('/:id', validateTokenAndExtractClientID, upload.array('images', 5), a
       let updatedImages = product.images;
       if (files.length > 0) {
         const imageUploadPromises = files.map(file => {
-          const fileName = `${file.originalname.split(' ').join('-')}-${Date.now()}.${FILE_TYPE_MAP[file.mimetype]}`;
+          const fileName = `${file.baseName.split(' ').join('-')}-${Date.now()}.${FILE_TYPE_MAP[file.mimetype]}`;
           return uploadImageToGitHub(file, fileName);
         });
         const newImagePaths = await Promise.all(imageUploadPromises);
@@ -236,7 +236,6 @@ router.get('/get/count', validateTokenAndExtractClientID, async (req, res) => {
 
 router.get('/get/featured/:count', validateTokenAndExtractClientID, async (req, res) => {
   try {
-      console.log(req.clientID);
     const count = req.params.count ? parseInt(req.params.count, 10) : 0;
     const featureProducts = await Product.find({ clientID: req.clientID, isFeatured: true }).limit(count);
      console.log(featureProducts);
