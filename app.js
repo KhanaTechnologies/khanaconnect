@@ -65,6 +65,7 @@ app.options('*',cors());
  app.use(`${api}/customer`, customerRoutes);
  app.use(`${api}/client`, clientRoutes);
  app.use(`${api}/size`, sizeRoutes);
+ mongoose.set('strictQuery', true);
 // mongoose.connect(process.env.CONNECTION_STRING,{ useNewUrlParser: true,useUnifiedTopology: true, dbName: 'KhanaConnect_DevDB',} )
  mongoose.connect(process.env.CONNECTION_STRING,{ useNewUrlParser: true,useUnifiedTopology: true, dbName: 'KhanaConnect_ProdDB'} )
 .then(()=>{
