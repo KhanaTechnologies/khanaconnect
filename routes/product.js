@@ -94,12 +94,14 @@ router.post('/', validateTokenAndExtractClientID, upload.array('images', 5), asy
     console.log(user.clientID);
       const clientId = user.clientID;
 
-      // Process all images and upload them to GitHub
-      const imageUploadPromises = files.map(file => {
-          const fileName = `${file.originalname.split(' ').join('-')}-${Date.now()}.${FILE_TYPE_MAP[file.mimetype]}`;
-          return uploadImageToGitHub(file, fileName);
-      });
-
+     // Process all images and upload them to GitHub
+const imageUploadPromises = files.map(file => {
+    const fileNameParts = file.originalname.split(' ').join('-').split('.');
+    const extension = fileNameParts.pop();
+    const baseName = fileNameParts.join('.');
+    const fileName = `${baseName}_${Date.now()}.${FILE_TYPE_MAP[file.mimetype]}`;
+    return uploadImageToGitHub(file, fileName);
+});
       const imagePaths = await Promise.all(imageUploadPromises);
 
       const newProduct = new Product({
