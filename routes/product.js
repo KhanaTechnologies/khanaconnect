@@ -91,8 +91,11 @@ const uploadImageToGitHub = async (file, fileName) => {
       owner: process.env.GITHUB_REPO.split('/')[0],
       repo: process.env.GITHUB_REPO.split('/')[1],
       path: filePath,
+      message: `Upload ${fileName}`,
+      content: content,
       ref: process.env.GITHUB_BRANCH
     });
+      
     throw new Error('File already exists');
   } catch (error) {
     if (error.status === 404) {
@@ -107,6 +110,7 @@ const uploadImageToGitHub = async (file, fileName) => {
         branch: process.env.GITHUB_BRANCH
       });
       return data.content.download_url;
+        
     } else {
       // Other errors
       throw error;
@@ -114,6 +118,7 @@ const uploadImageToGitHub = async (file, fileName) => {
   }
 };
 
+// add product
 router.post('/', validateTokenAndExtractClientID, upload.array('images', 5), async (req, res) => {
   try {
     const files = req.files;
@@ -169,6 +174,7 @@ console.log('hit 4');
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
+
 // PUT to update an existing product with images
 router.put('/:id', validateTokenAndExtractClientID, upload.array('images', 5), async (req, res) => {
   try {
@@ -177,7 +183,7 @@ router.put('/:id', validateTokenAndExtractClientID, upload.array('images', 5), a
     const category = await Category.findById(req.body.category);
 
     // Split the string of sizes into an array of size IDs
-    const sizeIds = req.body.sizes.split(',');
+    const sizeIds = req.body.sizes.split(',').map(id => id.trim());
 
     // Find all sizes based on the size IDs
     const sizes = await Size.find({ _id: { $in: sizeIds } });
@@ -192,16 +198,22 @@ router.put('/:id', validateTokenAndExtractClientID, upload.array('images', 5), a
       const product = await Product.findById(req.params.id);
       if (!product) return res.status(404).json({ error: 'Product not found' });
 
-      // Merge existing images with new image paths
-      let updatedImages = product.images;
-      if (files.length > 0) {
+      // Process all new images and upload them to GitHub
+      let newImagePaths = [];
+      if (files && files.length > 0) {
         const imageUploadPromises = files.map(file => {
-          const fileName = `${file.baseName.split(' ').join('-')}-${Date.now()}.${FILE_TYPE_MAP[file.mimetype]}`;
+          const fileNameParts = file.originalname.split(' ').join('-').split('.');
+          const extension = fileNameParts.pop();
+          const baseName = fileNameParts.join('.');
+          const fileName = `${baseName}_${Date.now()}.${extension}`;
           return uploadImageToGitHub(file, fileName);
         });
-        const newImagePaths = await Promise.all(imageUploadPromises);
-        updatedImages = [...updatedImages, ...newImagePaths];
+
+        newImagePaths = await Promise.all(imageUploadPromises);
       }
+
+      // Merge existing images with new image paths
+      const updatedImages = [...product.images, ...newImagePaths];
 
       // Construct the updated product object
       const updatedProduct = {
@@ -216,7 +228,8 @@ router.put('/:id', validateTokenAndExtractClientID, upload.array('images', 5), a
         rating: req.body.rating,
         numReviews: req.body.numReviews,
         isFeatured: req.body.isFeatured,
-        sizes: sizes // Include sizes from the array of size IDs
+        sizes: sizes, // Include sizes from the array of size IDs
+        clientID: clientId
       };
 
       // Find and update the existing product in the database
