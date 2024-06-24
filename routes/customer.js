@@ -131,10 +131,10 @@ router.post('/registration', async (req, res) => {
       try {
         const savedCustomer = await newCustomer.save();
          // Send verification email
-      const verificationToken = jwt.sign({ customerId: savedCustomer._id }, process.env.emailSecret, { expiresIn: '1h' });
+      const verificationToken = jwt.sign({ customerId: savedCustomer._id, clientID: customer.clientID }, process.env.emailSecret, { expiresIn: '1h' });
       await sendVerificationEmail(savedCustomer.emailAddress, verificationToken, client.businessEmail, client.businessEmailPassword);
 
-        res.json(savedCustomer);
+        res.json(savedCustomer,verificationToken);
       } catch (saveError) {
         console.error('Error saving customer:', saveError);
         res.status(500).json({ error: 'Error saving customer' });
