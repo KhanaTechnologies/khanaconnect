@@ -144,7 +144,7 @@ router.post('/registration', async (req, res) => {
         );
   var token = verificationToken;  
         // Respond with the saved customer and verification token
-        res.status(201).json({ savedCustomer, token });
+        res.status(201).json(savedCustomer);
       } catch (saveError) {
         console.error('Error saving customer:', saveError);
         res.status(500).json({ error: 'Error saving customer' });
