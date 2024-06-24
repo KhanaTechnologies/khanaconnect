@@ -216,7 +216,7 @@ router.post('/login', async (req, res) => {
     // Extract email, password, and site's token from request body
     const { emailAddress, password } = req.body;
     const siteToken = req.headers.authorization;
-
+  console.log(req.headers.authorization);
     // Ensure siteToken starts with 'Bearer '
     if (!siteToken || !siteToken.startsWith('Bearer ')) {
       return res.status(401).json({ error: 'Unauthorized - Site token missing or invalid format' });
