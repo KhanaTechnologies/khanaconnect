@@ -7,12 +7,6 @@ const emailSubscriberSchema = new mongoose.Schema({
         unique: true,
         trim: true,
         lowercase: true,
-        validate: {
-            validator: function(v) {
-                return /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/.test(v);
-            },
-            message: props => `${props.value} is not a valid email address!`
-        }
     },
     name: { type: String, required: true }, // Changed "Name" to "name" to follow naming convention
     clientID: { type: String, required: true }, // Reference to the client
