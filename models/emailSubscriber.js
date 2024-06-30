@@ -14,7 +14,7 @@ const emailSubscriberSchema = new mongoose.Schema({
             message: props => `${props.value} is not a valid email address!`
         }
     },
-    firstName: { type: String, required: true }, // Changed "Name" to "name" to follow naming convention
+    name: { type: String, required: true }, // Changed "Name" to "name" to follow naming convention
     clientID: { type: String, required: true }, // Reference to the client
     dateSubscribed: {
         type: Date,
