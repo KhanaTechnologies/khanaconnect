@@ -30,7 +30,7 @@ router.post('/subscribe', validateToken, async (req, res) => {
         const subscription = new EmailSubscriber({ 
             email: req.body.email, 
             name: req.body.name, 
-            clientID: this.clientID });
+            clientID: clientID });
         await subscription.save();
         res.status(201).send('Subscription successful.');
     } catch (error) {
