@@ -25,7 +25,7 @@ router.post('/subscribe', validateToken, async (req, res) => {
 //const { email, name } = req.body;
    
     const clientID = req.clientID; // Extracted from token via middleware
-     console.log(clientID);
+     console.log(req.body,"from :  ",clientID);
     try {
         const subscription = new EmailSubscriber({ 
             email: req.body.email, 
