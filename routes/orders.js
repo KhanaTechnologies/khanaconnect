@@ -7,6 +7,7 @@ const jwt = require('jsonwebtoken');
 const {Customer} = require('../models/customer');
 const {Product} = require('../models/product');
 const {Size} = require('../models/size');
+const { sendOrderConfirmationEmail } = require('../utils/email');
 
 
 
@@ -56,48 +57,36 @@ router.delete('/:id', async (req, res) => {
     }
 });
 
-// Add item
 router.post(`/`, async (req, res) => {
     try {
-        // Extract the token from the request headers or body
         const token = req.headers.authorization ? req.headers.authorization.split(' ')[1] : req.body.token;
 
-        // Verify the token
         jwt.verify(token, process.env.secret, async (err, user) => {
             if (err) {
                 return res.status(401).json({ error: 'Unauthorized' });
             } else {
                 try {
-                    // Extract the site ID from the decoded token
-                    req.user = user;
-
-                    console.log(req.user);
                     const clientId = user.clientID;
-                    // Rest of your existing code
-                    const orderItemsIds = Promise.all(req.body.orderItems.map(async orderItem => {
+                    const orderItemsIds = await Promise.all(req.body.orderItems.map(async orderItem => {
                         let newOrderItem = new OrderItem({
                             quantity: orderItem.quantity,
                             product: orderItem.product,
                             size: orderItem.size
                         });
                         newOrderItem = await newOrderItem.save();
-
-                        // Reduce the quantity of the ordered product from inventory
                         return newOrderItem._id;
                     }));
-                    const orderItemsIdsResolved = await orderItemsIds;
+
                     const delivery = req.body.delivery;
                     const deliveryType = req.body.deliveryType;
-                    const totalPrices = await Promise.all(orderItemsIdsResolved.map(async (orderItemsId) => {
+                    const totalPrices = await Promise.all(orderItemsIds.map(async (orderItemsId) => {
                         const orderItem = await OrderItem.findById(orderItemsId).populate('product', 'price');
-                        const totalPrice = (orderItem.product.price * orderItem.quantity);
-                        return totalPrice;
+                        return (orderItem.product.price * orderItem.quantity);
                     }));
-
                     const totalPrice = totalPrices.reduce((a, b) => a + b, 0);
 
                     let order = new Order({
-                        orderItems: orderItemsIdsResolved,
+                        orderItems: orderItemsIds,
                         address: req.body.address,
                         postalCode: req.body.postalCode,
                         phone: req.body.phone,
@@ -109,32 +98,17 @@ router.post(`/`, async (req, res) => {
                         client: clientId,
                     });
 
-
-                     // Update customer's details if provided
-                     const updatedCustomerDetails = {};
-                     if (req.body.name) updatedCustomerDetails.customerFirstName = req.body.name;
-                     if (req.body.lastname) updatedCustomerDetails.customerLastName = req.body.lastname;
-                     if (req.body.email) updatedCustomerDetails.emailAddress = req.body.email;
-                     if (req.body.phone) updatedCustomerDetails.phoneNumber = req.body.phone;
-                     if (req.body.address) updatedCustomerDetails.address = req.body.address;
-                     if (req.body.postalCode) updatedCustomerDetails.postalCode = req.body.postalCode;
- 
-                   
-                    //  if (Object.keys(updatedCustomerDetails).length !== 0) {
-                    //      await Customer.findOne({ _id: req.user.customerID, clientID: req.user.clientID }, updatedCustomerDetails);
-                    //  }
-
-                    // if (Object.keys(updatedCustomerDetails).length !== 0) {
-                    //     await Customer.findOneAndUpdate(
-                    //         { _id: req.user.customerID, clientID: req.user.clientID },
-                    //         updatedCustomerDetails,
-                    //         { new: true } // This option returns the updated document
-                    //     );
-                    // }
-
+                    const updatedCustomerDetails = {};
+                    if (req.body.name) updatedCustomerDetails.customerFirstName = req.body.name;
+                    if (req.body.lastname) updatedCustomerDetails.customerLastName = req.body.lastname;
+                    if (req.body.email) updatedCustomerDetails.emailAddress = req.body.email;
+                    if (req.body.phone) updatedCustomerDetails.phoneNumber = req.body.phone;
+                    if (req.body.address) updatedCustomerDetails.address = req.body.address;
+                    if (req.body.postalCode) updatedCustomerDetails.postalCode = req.body.postalCode;
 
                     order = await order.save();
                     if (!order) return res.status(500).send('The order cannot be created');
+
                     res.send(order);
                 } catch (error) {
                     console.error('Error creating order:', error);
@@ -147,6 +121,7 @@ router.post(`/`, async (req, res) => {
         res.status(500).json({ error: 'Internal Server Error' });
     }
 });
+
 
 
 //update
@@ -260,6 +235,75 @@ function authenticateToken(req, res, next) {
         next(); // Call next middleware
     });
 }
+
+
+// Route to update the order payment status based on the notification
+router.post('/update-order-payment', async (req, res) => {
+    try {
+        const { orderId, paid, totalPrice } = req.body;
+
+        // Validate the required fields
+        if (!orderId || typeof paid === 'undefined') {
+            return res.status(400).json({ error: 'Order ID and paid status are required' });
+        }
+
+        // Find the order by ID and update the paid status and total price
+        const order = await Order.findById(orderId).populate('orderItems');
+        if (!order) {
+            return res.status(404).json({ error: 'Order not found' });
+        }
+
+        // Update the order's paid status and total price
+        order.paid = paid;
+        order.totalPrice = totalPrice;
+        await order.save();
+
+        // Deduct the quantity from the stock of each product
+        for (const item of order.orderItems) {
+            const product = await Product.findById(item.product);
+            if (product) {
+                // Find the variant if applicable and deduct its quantity
+                if (item.size) {
+                    const sizeVariant = product.sizes.id(item.size);
+                    if (sizeVariant) {
+                        sizeVariant.quantity -= item.quantity;
+                    }
+                }
+                if (item.color) {
+                    const colorVariant = product.colors.id(item.color);
+                    if (colorVariant) {
+                        colorVariant.quantity -= item.quantity;
+                    }
+                }
+                // Similarly handle other variants like materials, styles, and titles if needed
+
+                // Deduct the countInStock for the product
+                product.countInStock -= item.quantity;
+                await product.save();
+            }
+        }
+
+        // Send order confirmation email
+        const client = await Client.findOne({ clientID: order.client });
+        if (client) {
+            await sendOrderConfirmationEmail(
+                order.customer.emailAddress,
+                order.orderItems,
+                client.businessEmail,
+                client.businessEmailPassword,
+                order.deliveryPrice
+            );
+        }
+
+        res.json({ success: true, order });
+    } catch (error) {
+        console.error('Error updating order payment status:', error);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
+
+
+
 
 // Route to get total sales for a specific client (authenticated)
 router.get(`/get/totalsales`, authenticateToken, async (req, res) => {
