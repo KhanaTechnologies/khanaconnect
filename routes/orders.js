@@ -56,64 +56,77 @@ router.delete('/:id', async (req, res) => {
         res.status(500).json({ error: 'Internal Server Error' });
     }
 });
-
-router.post(`/`, async (req, res) => {
+router.post('/', async (req, res) => {
     try {
+        console.log(req.body.orderItem);
+        // Extract the token from the headers or body
         const token = req.headers.authorization ? req.headers.authorization.split(' ')[1] : req.body.token;
+        if (!token) {
+            return res.status(401).json({ error: 'Unauthorized - Token missing' });
+        }
 
+        // Verify the token
         jwt.verify(token, process.env.secret, async (err, user) => {
             if (err) {
-                return res.status(401).json({ error: 'Unauthorized' });
-            } else {
-                try {
-                    const clientId = user.clientID;
-                    const orderItemsIds = await Promise.all(req.body.orderItems.map(async orderItem => {
-                        let newOrderItem = new OrderItem({
-                            quantity: orderItem.quantity,
-                            product: orderItem.product,
-                            size: orderItem.size
-                        });
-                        newOrderItem = await newOrderItem.save();
-                        return newOrderItem._id;
-                    }));
+                return res.status(401).json({ error: 'Unauthorized - Invalid token' });
+            }
 
-                    const delivery = req.body.delivery;
-                    const deliveryType = req.body.deliveryType;
-                    const totalPrices = await Promise.all(orderItemsIds.map(async (orderItemsId) => {
-                        const orderItem = await OrderItem.findById(orderItemsId).populate('product', 'price');
-                        return (orderItem.product.price * orderItem.quantity);
-                    }));
-                    const totalPrice = totalPrices.reduce((a, b) => a + b, 0);
+            try {
+                const clientId = user.clientID;
 
-                    let order = new Order({
-                        orderItems: orderItemsIds,
-                        address: req.body.address,
-                        postalCode: req.body.postalCode,
-                        phone: req.body.phone,
-                        status: req.body.status,
-                        totalPrice: totalPrice + delivery,
-                        customer: req.body.customer,
-                        deliveryPrice: req.body.delivery,
-                        deliveryType: deliveryType,
-                        client: clientId,
+                // Create OrderItem documents and save them
+                const orderItemsIds = await Promise.all(req.body.orderItems.map(async orderItem => {
+                    let newOrderItem = new OrderItem({
+                        quantity: orderItem.quantity,
+                        product: orderItem.product,
+                        size: orderItem.size,
+                        color: orderItem.color,
+                        material: orderItem.material,
+                        style: orderItem.style,
+                        title: orderItem.title
                     });
+                    newOrderItem = await newOrderItem.save();
+                    return newOrderItem._id;
+                }));
 
-                    const updatedCustomerDetails = {};
-                    if (req.body.name) updatedCustomerDetails.customerFirstName = req.body.name;
-                    if (req.body.lastname) updatedCustomerDetails.customerLastName = req.body.lastname;
-                    if (req.body.email) updatedCustomerDetails.emailAddress = req.body.email;
-                    if (req.body.phone) updatedCustomerDetails.phoneNumber = req.body.phone;
-                    if (req.body.address) updatedCustomerDetails.address = req.body.address;
-                    if (req.body.postalCode) updatedCustomerDetails.postalCode = req.body.postalCode;
+                // Calculate total prices
+                const totalPrices = await Promise.all(orderItemsIds.map(async (orderItemsId) => {
+                    const orderItem = await OrderItem.findById(orderItemsId).populate('product', 'price');
+                    return (orderItem.product.price * orderItem.quantity);
+                }));
+                const totalPrice = totalPrices.reduce((a, b) => a + b, 0);
 
-                    order = await order.save();
-                    if (!order) return res.status(500).send('The order cannot be created');
+                // Create and save the new Order
+                let order = new Order({
+                    orderItems: orderItemsIds,
+                    address: req.body.address,
+                    postalCode: req.body.postalCode,
+                    phone: req.body.phone,
+                    status: req.body.status,
+                    totalPrice: totalPrice + req.body.delivery,
+                    customer: req.body.customer,
+                    deliveryPrice: req.body.delivery,
+                    deliveryType: req.body.deliveryType,
+                    client: clientId,
+                });
 
-                    res.send(order);
-                } catch (error) {
-                    console.error('Error creating order:', error);
-                    res.status(500).json({ error: 'Internal Server Error' });
-                }
+                // Update customer details if provided
+                const updatedCustomerDetails = {};
+                if (req.body.name) updatedCustomerDetails.customerFirstName = req.body.name;
+                if (req.body.lastname) updatedCustomerDetails.customerLastName = req.body.lastname;
+                if (req.body.email) updatedCustomerDetails.emailAddress = req.body.email;
+                if (req.body.phone) updatedCustomerDetails.phoneNumber = req.body.phone;
+                if (req.body.address) updatedCustomerDetails.address = req.body.address;
+                if (req.body.postalCode) updatedCustomerDetails.postalCode = req.body.postalCode;
+
+                // Save the order
+                order = await order.save();
+                if (!order) return res.status(500).send('The order cannot be created');
+
+                res.send(order);
+            } catch (error) {
+                console.error('Error creating order:', error);
+                res.status(500).json({ error: 'Internal Server Error' });
             }
         });
     } catch (error) {
@@ -125,9 +138,9 @@ router.post(`/`, async (req, res) => {
 
 
 //update
+// Route to update the order
 router.put('/:id', async (req, res) => {
     try {
-
         const token = req.headers.authorization;
 
         if (!token || !token.startsWith('Bearer ')) {
@@ -140,43 +153,46 @@ router.put('/:id', async (req, res) => {
         const decodedToken = jwt.verify(tokenValue, process.env.secret);
         const { clientID } = decodedToken;
 
-
-
-        const order = await Order.findByIdAndUpdate(
-            req.params.id,
-            { status: req.body.status,orderLink : req.body.orderTrackingLink, orderCode : req.body.orderTrackingCode},
-            { new: true }
-        ).populate('customer').populate('orderItems');
-
-       
-    // Now 'products' should contain the updated order with populated 'orderItems' and 'product' fields
-    
-        let client = '';
-        // Find the client based on a specific value (clientID in this example)
-        client = await Client.findOne({ clientID: order.client });
-
-        
+        // Find the order by ID and update it
+        const order = await Order.findOneAndUpdate(
+            { _id: req.params.id, client: clientID },  // Ensure the order belongs to the client
+            {
+                status: req.body.status,
+                orderLink: req.body.orderTrackingLink,
+                orderCode: req.body.orderTrackingCode
+            },
+            { new: true }  // Return the updated document
+        ).populate('customer')
+         .populate('orderItems');
 
         if (!order) {
-            return res.status(400).send('The order cannot be updated!');
+            return res.status(404).json({ error: 'Order not found or does not belong to client' });
         }
 
+        // Find the client based on clientID
+        const client = await Client.findOne({ clientID: order.client });
+        
         if (!client) {
-             console.error('Client not found!');
+            console.error('Client not found!');
         } else {
-
-            if(req.body.status == 1){
-                await orderItemProcessed(order.customer.emailAddress, client.businessEmail, client.businessEmailPassword);}
-           
+            // Send email notification if status is 1
+            if (req.body.status === 1) {
+                await orderItemProcessed(
+                    order.customer.emailAddress,
+                    client.businessEmail,
+                    client.businessEmailPassword
+                );
+            }
         }
 
-        res.send(order);
+        res.json(order);
 
     } catch (error) {
-        console.error('Error:', error);
+        console.error('Error updating order:', error);
         res.status(500).json({ error: 'Internal Server Error' });
     }
 });
+
 
 
 
@@ -201,7 +217,7 @@ router.get('/:id', async (req, res) => {
 
             const order = await Order.findOne({ _id: req.params.id, client: clientId })
                 .populate('customer', 'customerFirstName emailAddress phoneNumber')
-                .populate({path: 'orderItems', populate: {path: 'product', populate: 'category'}}).populate({path: 'orderItems',populate: {path: 'size'}});
+                .populate({path: 'orderItems',populate: {path: 'colors'}, populate: {path: 'product', populate: 'category'}});
 
             if (!order) {
                 return res.status(404).json({ success: false, error: 'Order not found' });
