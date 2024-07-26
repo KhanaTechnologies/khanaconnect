@@ -20,7 +20,8 @@ const orderSchema = mongoose.Schema({
     },
     client:{type: String,required: true},
     orderTrackingLink:{type: String,required: false},
-    orderTrackingCode: {type: String,required: false}
+    orderTrackingCode: {type: String,required: false},
+    paid: { type: Boolean, default: false }
 });
 
 orderSchema.virtual('id').get(function (){return this._id.toHexString();});
