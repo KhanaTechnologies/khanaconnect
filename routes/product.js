@@ -219,7 +219,7 @@ router.get('/:id', validateClient, async (req, res) => {
 // DELETE a product by id
 router.delete('/:id', validateClient, async (req, res) => {
   try {
-    const product = await Product.findByIdAndRemove(req.params.id);
+    const product = await Product.findOneAndDelete(req.params.id);
     if (!product) {
       return res.status(404).json({ error: 'Product not found' });
     }
