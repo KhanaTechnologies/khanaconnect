@@ -68,7 +68,7 @@ const validateClient = async (req, res, next) => {
       if (err) {
         return res.status(403).json({ error: 'Forbidden - Invalid token', err });
       }
-      req.clientId = user.clientID; // Attach client ID to request object
+      req.clientID = user.clientID; // Attach client ID to request object
       next();
     });
   } catch (error) {
