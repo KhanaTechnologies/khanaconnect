@@ -189,9 +189,9 @@ router.get('/get/featured/:count', validateClient, async (req, res) => {
 // GET all products
 router.get('/', validateClient, async (req, res) => {
   try {
-    const clientId = req.clientId;
+    const clientId = req.clientId; // Ensure this matches the variable used in the query
     console.log(clientId);
-    const productList = await Product.find({ clientID: req.clientID })
+    const productList = await Product.find({ clientID: clientId }) // Use clientId here
       .populate('category');
     res.json(productList);
   } catch (error) {
