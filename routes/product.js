@@ -107,7 +107,7 @@ router.post('/', upload.array('images', 5), validateClient, async (req, res) => 
       rating: req.body.rating,
       numReviews: req.body.numReviews,
       isFeatured: req.body.isFeatured,
-      clientID: req.clientId,
+      clientID: req.clientID,
       sizes: processVariants(req.body.sizes),
       colors: processVariants(req.body.colors),
       materials: processVariants(req.body.materials),
@@ -176,9 +176,9 @@ router.put('/:id', upload.array('images', 5), validateClient, async (req, res) =
 // GET featured products
 router.get('/get/featured/:count', validateClient, async (req, res) => {
   try {
-    const clientId = req.clientId;
+    const clientID = req.clientID;
     const count = req.params.count ? parseInt(req.params.count, 10) : 0;
-    const featuredProducts = await Product.find({ isFeatured: true, clientID: clientId }).limit(count);
+    const featuredProducts = await Product.find({ isFeatured: true, clientID: clientID }).limit(count);
     res.json(featuredProducts);
   } catch (error) {
     console.error('Error:', error);
@@ -189,9 +189,9 @@ router.get('/get/featured/:count', validateClient, async (req, res) => {
 // GET all products
 router.get('/', validateClient, async (req, res) => {
   try {
-    const clientId = req.clientId; // Ensure this matches the variable used in the query
-    console.log(clientId);
-    const productList = await Product.find({ clientID: clientId }) // Use clientId here
+    const clientID = req.clientID; // Ensure this matches the variable used in the query
+    console.log(clientID);
+    const productList = await Product.find({ clientID: clientID }) // Use clientID here
       .populate('category');
     res.json(productList);
   } catch (error) {
@@ -203,8 +203,8 @@ router.get('/', validateClient, async (req, res) => {
 // GET a single product by id
 router.get('/:id', validateClient, async (req, res) => {
   try {
-    const clientId = req.clientId;
-    const product = await Product.findOne({ _id: req.params.id, clientID: clientId })
+    const clientID = req.clientID;
+    const product = await Product.findOne({ _id: req.params.id, clientID: clientID })
       .populate('category');
     if (!product) {
       return res.status(404).json({ error: 'Product not found' });
