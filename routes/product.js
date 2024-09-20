@@ -193,6 +193,7 @@ router.get('/', validateClient, async (req, res) => {
     console.log(clientID);
     const productList = await Product.find({ clientID: clientID }) // Use clientID here
       .populate('category');
+      console.log(productList);
     res.json(productList);
   } catch (error) {
     console.error('Error:', error);
