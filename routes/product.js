@@ -190,18 +190,25 @@ router.get('/get/featured/:count', validateClient, async (req, res) => {
 /// GET all products
 router.get('/', validateClient, async (req, res) => {
   try {
-    const clientID = req.clientID; // Ensure this matches the variable used in the query
-    let filter = {};
-	 if(req.query.categories){filter = {category: req.query.categories.split(',')}}
-    const productList = await Product.find({ clientID: clientID, filter }) // Use clientID here
-      .populate('category');
-      console.log(productList);
+    const clientID = req.clientID;
+    
+    let filter = { clientID: clientID }; // Start the filter with clientID
+
+    // If categories are provided, split them and add to the filter
+    if (req.query.categories) {
+      filter.category = { $in: req.query.categories.split(',') }; // Use $in to filter multiple categories
+    }
+
+    const productList = await Product.find(filter).populate('category'); // Pass the merged filter object
+
+    console.log(productList);
     res.json(productList);
   } catch (error) {
     console.error('Error:', error);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
+
 
 // GET a single product by id
 router.get('/:id', validateClient, async (req, res) => {
