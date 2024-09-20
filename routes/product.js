@@ -194,7 +194,7 @@ router.get('/', validateClient, async (req, res) => {
     const { category } = req.query; 
     
     let filter = { clientID: clientID }; 
-
+    console.log(category);
     // Convert category to ObjectId if provided
     if (category) {
       filter.category = mongoose.Types.ObjectId(category); 
