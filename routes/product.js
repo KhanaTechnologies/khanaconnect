@@ -189,19 +189,20 @@ router.get('/get/featured/:count', validateClient, async (req, res) => {
 // GET all products
 router.get('/', validateClient, async (req, res) => {
   try {
-    const clientID = req.clientID; // Ensure this matches the variable used in the query
-    const { category } = req.query; // Get category from query params (if needed)
+    const clientID = req.clientID; 
+    const { category } = req.query; 
     
-    let filter = { clientID: clientID }; // Filter by clientID
+    let filter = { clientID: clientID }; 
 
-    // If category is provided in the query, include it in the filter
+    // Convert category to ObjectId if provided
     if (category) {
-      filter.category = category;
+      filter.category = mongoose.Types.ObjectId(category); 
     }
 
     const productList = await Product.find(filter)
-      .populate('category'); // Populate category field if needed
+      .populate('category'); 
 
+    console.log(productList);
     res.json(productList);
   } catch (error) {
     console.error('Error:', error);
