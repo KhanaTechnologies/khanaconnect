@@ -190,10 +190,18 @@ router.get('/get/featured/:count', validateClient, async (req, res) => {
 router.get('/', validateClient, async (req, res) => {
   try {
     const clientID = req.clientID; // Ensure this matches the variable used in the query
-    console.log(clientID);
-    const productList = await Product.find({ clientID: clientID }) // Use clientID here
-      .populate('category');
-      console.log(productList);
+    const { category } = req.query; // Get category from query params (if needed)
+    
+    let filter = { clientID: clientID }; // Filter by clientID
+
+    // If category is provided in the query, include it in the filter
+    if (category) {
+      filter.category = category;
+    }
+
+    const productList = await Product.find(filter)
+      .populate('category'); // Populate category field if needed
+
     res.json(productList);
   } catch (error) {
     console.error('Error:', error);
