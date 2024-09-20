@@ -190,21 +190,24 @@ router.get('/get/featured/:count', validateClient, async (req, res) => {
 // GET all products
 router.get('/', validateClient, async (req, res) => {
   try {
-    const clientID = req.clientID; 
-    const { category } = req.query; 
-    
-    let filter = { clientID: clientID }; 
-    console.log(category);
-    // Convert category to ObjectId if provided
-    if (category) {
-      filter.category = mongoose.Types.ObjectId(category); 
+    const clientID = req.clientID;
+    const { categories } = req.query; // Using categories query param for multiple categories
+
+    let filter = { clientID: clientID };
+
+    // If categories are provided, split them and convert them to ObjectIds
+    if (categories) {
+      const categoryIds = categories.split(',').map(id => mongoose.Types.ObjectId(id.trim()));
+      filter.category = { $in: categoryIds }; // Use $in to match any of the provided category IDs
     }
 
-    const productList = await Product.find(filter)
-      .populate('category'); 
+    const productList = await Product.find(filter).populate('category');
 
-    console.log(productList);
-    res.json(productList);
+    if (!productList) {
+      return res.status(500).json({ success: false });
+    }
+
+    res.status(200).send(productList);
   } catch (error) {
     console.error('Error:', error);
     res.status(500).json({ error: 'Internal Server Error' });
