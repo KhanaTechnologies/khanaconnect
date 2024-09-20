@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const Product = require('../models/product');
 const { Category } = require('../models/category');
 const multer = require('multer');
+const mongoose = require('mongoose'); // Ensure mongoose is required to use ObjectId
 const { Octokit } = require("@octokit/rest");
 require('dotenv').config();
 
