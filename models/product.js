@@ -21,7 +21,7 @@ const productSchema = new Schema({
   rating: { type: Number, default: 0 },
   numReviews: { type: Number, default: 0 },
   isFeatured: { type: Boolean, default: false },
-  client: { type: String, required: true }, // Assuming client ID is stored as a string
+  clientID: { type: String, required: true }, // Assuming client ID is stored as a string
   dateCreated: { type: Date, default: Date.now },
   sizes: [variantSchema], // Array of objects representing size variants
   colors: [variantSchema], // Array of objects representing color variants
