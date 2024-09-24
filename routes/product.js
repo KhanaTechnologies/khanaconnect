@@ -198,8 +198,9 @@ router.get('/', validateClient, async (req, res) => {
     if (req.query.categories) {
       filter.category = { $in: req.query.categories.split(',') }; // Use $in to filter multiple categories
     }
-
-    const productList = await Product.find(filter).populate('category'); // Pass the merged filter object
+    
+    const productList = await Product.find({ clientID: { $eq: filter.clientID } }).populate('category');
+   // const productList = await Product.find(filter).populate('category'); // Pass the merged filter object
 
     
     res.json(productList);
