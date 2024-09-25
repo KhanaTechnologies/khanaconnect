@@ -269,7 +269,7 @@ router.post('/update-order-payment', async (req, res) => {
         }
 
         // Find the order by ID and update the paid status and total price
-        const order = await Order.findById(orderId).populate('orderItems');
+        const order = await Order.findOne({ _id: orderId }).populate('orderItems');
         if (!order) {
             return res.status(404).json({ error: 'Order not found' });
         }
