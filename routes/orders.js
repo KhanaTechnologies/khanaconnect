@@ -280,29 +280,29 @@ router.post('/update-order-payment', async (req, res) => {
         await order.save();
 
         // Deduct the quantity from the stock of each product
-        for (const item of order.orderItems) {
-            const product = await Product.findById(item.product);
-            if (product) {
-                // Find the variant if applicable and deduct its quantity
-                if (item.size) {
-                    const sizeVariant = product.sizes.id(item.size);
-                    if (sizeVariant) {
-                        sizeVariant.quantity -= item.quantity;
-                    }
-                }
-                if (item.color) {
-                    const colorVariant = product.colors.id(item.color);
-                    if (colorVariant) {
-                        colorVariant.quantity -= item.quantity;
-                    }
-                }
-                // Similarly handle other variants like materials, styles, and titles if needed
+        // for (const item of order.orderItems) {
+        //     const product = await Product.findById(item.product);
+        //     if (product) {
+        //         // Find the variant if applicable and deduct its quantity
+        //         if (item.size) {
+        //             const sizeVariant = product.sizes.id(item.size);
+        //             if (sizeVariant) {
+        //                 sizeVariant.quantity -= item.quantity;
+        //             }
+        //         }
+        //         if (item.color) {
+        //             const colorVariant = product.colors.id(item.color);
+        //             if (colorVariant) {
+        //                 colorVariant.quantity -= item.quantity;
+        //             }
+        //         }
+        //         // Similarly handle other variants like materials, styles, and titles if needed
 
-                // Deduct the countInStock for the product
-                product.countInStock -= item.quantity;
-                await product.save();
-            }
-        }
+        //         // Deduct the countInStock for the product
+        //         product.countInStock -= item.quantity;
+        //         await product.save();
+        //     }
+        // }
 
         // Send order confirmation email
         const client = await Client.findOne({ clientID: order.client });
