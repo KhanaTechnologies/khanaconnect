@@ -30,7 +30,7 @@ router.get(`/`, async (req, res) =>{
         req.user = user;
         const clientId = user.clientID;
 
-        const orderList = await Order.find({ client: clientId }).populate('customer','customerFirstName emailAddress phoneNumber').populate('orderItems').sort({'dateOrdered': -1});
+        const orderList = await Order.find({ clientID: clientId }).populate('customer','customerFirstName emailAddress phoneNumber').populate('orderItems').sort({'dateOrdered': -1});
         // const orderList = await Order.find().populate('user', 'name').sort({'dateOrdered': -1});
         if(!orderList){res.status(500).json({succsess: false})}
         res.send(orderList);
@@ -58,7 +58,6 @@ router.delete('/:id', async (req, res) => {
 });
 router.post('/', async (req, res) => {
     try {
-        console.log(req.body.orderItem);
         // Extract the token from the headers or body
         const token = req.headers.authorization ? req.headers.authorization.split(' ')[1] : req.body.token;
         if (!token) {
@@ -107,7 +106,7 @@ router.post('/', async (req, res) => {
                     customer: req.body.customer,
                     deliveryPrice: req.body.delivery,
                     deliveryType: req.body.deliveryType,
-                    client: clientId,
+                    clientID: clientId,
                 });
 
                 // Update customer details if provided
