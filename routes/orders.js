@@ -29,7 +29,7 @@ router.get(`/`, async (req, res) =>{
 
         req.user = user;
         const clientId = user.clientID;
-
+        console.log(clientId);
         const orderList = await Order.find({ clientID: clientId }).populate('customer','customerFirstName emailAddress phoneNumber').populate('orderItems').sort({'dateOrdered': -1});
         // const orderList = await Order.find().populate('user', 'name').sort({'dateOrdered': -1});
         if(!orderList){res.status(500).json({succsess: false})}
