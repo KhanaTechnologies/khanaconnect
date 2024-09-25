@@ -256,10 +256,15 @@ function authenticateToken(req, res, next) {
 // Route to update the order payment status based on the notification
 router.post('/update-order-payment', async (req, res) => {
     try {
-        const { orderId, paid, totalPrice } = req.body;
-        console.log(req.body);
+      // Extract orderId from the message
+    const message = req.body.item_name; // Example: 'Order#66f3d162d1a4c2dd08106bb1'
+    const orderId = message.split('#')[1]; // Extract the part after the '#' which is the orderId
+    console.log('Extracted orderId:', orderId);
+    const paid = req.body.payment_status;
+    const { totalPrice } = req.body;
+        
         // Validate the required fields
-        if (!orderId || typeof paid === 'undefined') {
+        if (!orderId || paid !== 'COMPLETE') {
             return res.status(400).json({ error: 'Order ID and paid status are required' });
         }
 
