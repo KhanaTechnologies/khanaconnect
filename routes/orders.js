@@ -29,8 +29,8 @@ router.get(`/`, async (req, res) =>{
 
         req.user = user;
         const clientId = user.clientID;
-        console.log(clientId);
-        const orderList = await Order.find({ clientID: clientId }).populate('customer','customerFirstName emailAddress phoneNumber').populate('orderItems').sort({'dateOrdered': -1});
+
+        const orderList = await Order.find({ client: clientId }).populate('customer','customerFirstName emailAddress phoneNumber').populate('orderItems').sort({'dateOrdered': -1});
         // const orderList = await Order.find().populate('user', 'name').sort({'dateOrdered': -1});
         if(!orderList){res.status(500).json({succsess: false})}
         res.send(orderList);
@@ -58,6 +58,7 @@ router.delete('/:id', async (req, res) => {
 });
 router.post('/', async (req, res) => {
     try {
+        console.log(req.body.orderItem);
         // Extract the token from the headers or body
         const token = req.headers.authorization ? req.headers.authorization.split(' ')[1] : req.body.token;
         if (!token) {
@@ -106,7 +107,7 @@ router.post('/', async (req, res) => {
                     customer: req.body.customer,
                     deliveryPrice: req.body.delivery,
                     deliveryType: req.body.deliveryType,
-                    clientID: clientId,
+                    client: clientId,
                 });
 
                 // Update customer details if provided
@@ -154,7 +155,7 @@ router.put('/:id', async (req, res) => {
 
         // Find the order by ID and update it
         const order = await Order.findOneAndUpdate(
-            { _id: req.params.id, clientID: clientID },  // Ensure the order belongs to the client
+            { _id: req.params.id, client: clientID },  // Ensure the order belongs to the client
             {
                 status: req.body.status,
                 orderLink: req.body.orderTrackingLink,
@@ -178,8 +179,8 @@ router.put('/:id', async (req, res) => {
             if (req.body.status === 1) {
                 await orderItemProcessed(
                     order.customer.emailAddress,
-                    clientID.businessEmail,
-                    clientID.businessEmailPassword
+                    client.businessEmail,
+                    client.businessEmailPassword
                 );
             }
         }
@@ -214,7 +215,7 @@ router.get('/:id', async (req, res) => {
             const clientId = user.clientID;
 
 
-            const order = await Order.findOne({ _id: req.params.id, clientID: clientId })
+            const order = await Order.findOne({ _id: req.params.id, client: clientId })
                 .populate('customer', 'customerFirstName emailAddress phoneNumber')
                 .populate({path: 'orderItems',populate: {path: 'colors'}, populate: {path: 'product', populate: 'category'}});
 
@@ -304,8 +305,8 @@ router.post('/update-order-payment', async (req, res) => {
             await sendOrderConfirmationEmail(
                 order.customer.emailAddress,
                 order.orderItems,
-                clientID.businessEmail,
-                clientID.businessEmailPassword,
+                client.businessEmail,
+                client.businessEmailPassword,
                 order.deliveryPrice
             );
         }
@@ -324,7 +325,7 @@ router.post('/update-order-payment', async (req, res) => {
 router.get(`/get/totalsales`, authenticateToken, async (req, res) => {
     try {
         const totalSales = await Order.aggregate([
-            { $match: { clientID: req.clientId } }, // Filter by clientId
+            { $match: { client: req.clientId } }, // Filter by clientId
             { $group: { _id: null, totalsales: { $sum: '$totalPrice' } } }
         ]);
         if (!totalSales) {
@@ -340,7 +341,7 @@ router.get(`/get/totalsales`, authenticateToken, async (req, res) => {
 // Route to get order count for a specific client (authenticated)
 router.get(`/get/count`, authenticateToken, async (req, res) => {
     try {
-        const orderCount = await Order.countDocuments({ clientID: req.clientId }); // Filter by clientId
+        const orderCount = await Order.countDocuments({ client: req.clientId }); // Filter by clientId
         if (!orderCount) {
             return  res.send({ orderCount: 0 });
 
@@ -355,7 +356,7 @@ router.get(`/get/count`, authenticateToken, async (req, res) => {
 // Route to get user orders by user ID for a specific client (authenticated)
 router.get(`/get/userorders/:userid`, authenticateToken, async (req, res) => {
     try {
-        const userOrderList = await Order.find({ user: req.params.userid, clientID: req.clientId }) // Filter by clientId
+        const userOrderList = await Order.find({ user: req.params.userid, client: req.clientId }) // Filter by clientId
             .populate({ path: 'orderItems', populate: { path: 'product', populate: 'category' } })
             .sort({ 'dateOrderd': -1 });
 
