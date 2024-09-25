@@ -257,7 +257,7 @@ function authenticateToken(req, res, next) {
 router.post('/update-order-payment', async (req, res) => {
     try {
         const { orderId, paid, totalPrice } = req.body;
-
+        console.log(req.body);
         // Validate the required fields
         if (!orderId || typeof paid === 'undefined') {
             return res.status(400).json({ error: 'Order ID and paid status are required' });
