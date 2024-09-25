@@ -273,7 +273,7 @@ router.post('/update-order-payment', async (req, res) => {
         if (!order) {
             return res.status(404).json({ error: 'Order not found' });
         }
-
+        console.log(order);
         // Update the order's paid status and total price
         order.paid = true;
         order.totalPrice = totalPrice;
