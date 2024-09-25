@@ -18,7 +18,7 @@ const orderSchema = mongoose.Schema({
         type: Date,
         default: Date.now
     },
-    client:{type: String,required: true},
+    clientID:{type: String,required: true},
     orderTrackingLink:{type: String,required: false},
     orderTrackingCode: {type: String,required: false},
     paid: { type: Boolean, default: false }
