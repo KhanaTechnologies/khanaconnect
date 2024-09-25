@@ -241,4 +241,18 @@ router.delete('/:id', validateClient, async (req, res) => {
   }
 });
 
+// Get product count
+router.get(`/get/count`, validateClient, async (req, res) => {
+    try {
+        const productCount = await Product.countDocuments({ clientID: req.clientId }); // Filter by clientId
+        if (!productCount) {
+            return  res.send({ productCount: 0 });
+        }
+        res.send({ productCount: productCount });
+    } catch (error) {
+        console.error('Error:', error);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
+
 module.exports = router;
