@@ -275,7 +275,7 @@ router.post('/update-order-payment', async (req, res) => {
         }
 
         // Update the order's paid status and total price
-        order.paid = paid;
+        order.paid = true;
         order.totalPrice = totalPrice;
         await order.save();
 
