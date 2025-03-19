@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 
 // Middleware to validate token and extract clientID
 const validateTokenAndExtractClientID = (req, res, next) => {
+
   const token = req.headers.authorization;
   if (!token || !token.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
@@ -22,8 +23,8 @@ const validateTokenAndExtractClientID = (req, res, next) => {
 
 // Get all categories
 router.get('/', validateTokenAndExtractClientID, async (req, res) => {
+
   try {
-    
     const categoryList = await Category.find({ clientID: req.clientID });
     if (!categoryList) {
       res.status(500).json({ success: false, message: 'Failed to fetch categories' });
@@ -92,9 +93,9 @@ router.post('/', validateTokenAndExtractClientID, async (req, res) => {
 });
 
 // Delete a category
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', validateTokenAndExtractClientID, async (req, res) => {
   try {
-    const category = await Category.findOneAndDelete({ _id: req.params.id });
+    const category = await Category.findByIdAndDelete({ _id: req.params.id, clientId: req.clientID });
     if (!category) {
       return res.status(404).json({ success: false, message: 'Category not found' });
     }
