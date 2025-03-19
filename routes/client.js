@@ -165,6 +165,7 @@ router.post('/login', async (req, res) => {
   try {
     const client = await Client.findOne({ clientID: req.body.clientID });
     const secret = process.env.secret;
+    console.log(req.body)
 
     if (!client) {
       return res.status(400).send('The client could not be found');
