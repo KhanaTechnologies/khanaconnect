@@ -6,6 +6,7 @@ const { Category } = require('../models/category');
 const multer = require('multer');
 const { Octokit } = require("@octokit/rest");
 const { body, validationResult } = require('express-validator');
+const { SalesItem } = require('../models/salesItem')
 require('dotenv').config();
 
 const octokit = new Octokit({
@@ -97,7 +98,7 @@ router.use((err, req, res, next) => {
     res.status(500).json({ error: 'Internal Server Error' });
 });
 
-// POST new product with images
+//Create new product
 router.post(
     '/',
     upload.array('images', 5),
@@ -109,8 +110,7 @@ router.post(
     ],
     validateClient,
     async (req, res) => {
-        console.log(req.body);
-        console.log(req.clientId);
+  
         try {
             const errors = validationResult(req);
             if (!errors.isEmpty()) {
@@ -123,6 +123,59 @@ router.post(
             const category = await Category.findById(req.body.category);
             if (!category) return res.status(400).json({ error: 'Invalid category ID' });
 
+            // ✅ Parse the variants JSON string into the desired format
+            let variants = [];
+            console.log('hit here3');
+            try {
+                // Ensure the variants are in string format
+                if (!req.body.variants || typeof req.body.variants !== 'string') {
+                    throw new Error('Variants data is required and should be a string');
+                }
+            
+                // Parse the JSON string into an array
+                variants = JSON.parse(req.body.variants);
+                
+                // Check if the parsed data is actually an array
+                if (!Array.isArray(variants)) {
+                    throw new Error('Parsed variants are not an array');
+                }
+            
+                console.log('hit here');
+            
+                // Modify the structure of the variants
+                variants = variants.map(variant => {
+                    if (!variant.attributes || !Array.isArray(variant.attributes)) {
+                        throw new Error('Attributes is missing or not an array');
+                    }
+            
+                    // Log the variant's attribute structure for debugging
+                    console.log('Attribute name:', variant.attributes[0].name);
+                    console.log('Values:', variant.attributes[0].values);
+            
+                    return {
+                        name: variant.attributes[0].name,  // Extract name from attributes
+                        values: variant.attributes[0].values.map(value => {
+                            console.log('Value object:', value); // Log each value object to check its structure
+                            return {
+                                value: value.value,
+                                price: value.price,
+                                stock: value.stock
+                            };
+                        })
+                    };
+                });
+            
+                // Log the final transformed variants with stringified objects to view the full data
+                console.log('Modified variants:', JSON.stringify(variants, null, 2));  // Pretty-print the JSON
+            
+            } catch (err) {
+                console.log('Error in parsing or transforming variants:', err.message);
+                return res.status(400).json({ error: 'Invalid variants format', details: err.message });
+            }
+            
+
+
+            // ✅ Upload images and get URLs
             const imageUploadPromises = files.map(file => {
                 if (!FILE_TYPE_MAP[file.mimetype]) {
                     throw new Error('Invalid file type');
@@ -132,26 +185,24 @@ router.post(
             });
 
             const imagePaths = await Promise.all(imageUploadPromises);
-            console.log(imagePaths);
+
+            // ✅ Create and save the product
             const newProduct = new Product({
                 productName: req.body.productName,
                 description: req.body.description,
-                richDescription: req.body.richDescription,
+                richDescription: req.body.richDescription || '',
                 images: imagePaths,
-                brand: req.body.brand,
-                price: req.body.price,
-                category: category,
-                countInStock: req.body.countInStock,
-                rating: req.body.rating,
-                numReviews: req.body.numReviews,
-                isFeatured: req.body.isFeatured,
-                clientID: req.clientId,
-                sizes: processVariants(req.body.sizes),
-                colors: processVariants(req.body.colors),
-                materials: processVariants(req.body.materials),
-                styles: processVariants(req.body.styles),
-                titles: processVariants(req.body.titles)
+                brand: req.body.brand || '',
+                price: Number(req.body.price), // Convert price to Number
+                countInStock: Number(req.body.countInStock), // Convert countInStock to Number
+                category: category, // Store as ObjectId reference
+                rating: 0,
+                numReviews: 0,
+                isFeatured: false,
+                clientID: req.clientId, // Ensuring `clientID` is stored
+                variants,  // Store variants in the correct format
             });
+
             const savedProduct = await newProduct.save();
             res.json(savedProduct);
         } catch (error) {
@@ -160,6 +211,10 @@ router.post(
         }
     }
 );
+
+
+
+
 
 // PUT to update an existing product with images
 router.put(
@@ -186,6 +241,16 @@ router.put(
             const product = await Product.findById(req.params.id);
             if (!product) return res.status(404).json({ error: 'Product not found' });
 
+            // ✅ Parse dynamic variant fields
+            let variants = [];
+            try {
+                const receivedVariants = JSON.parse(req.body.variants); // Expecting an array of objects
+                if (!Array.isArray(receivedVariants)) throw new Error();
+                variants = receivedVariants;
+            } catch (err) {
+                return res.status(400).json({ error: 'Invalid variants format' });
+            }
+
             let updatedImages = product.images;
             if (files.length > 0) {
                 const imageUploadPromises = files.map(file => {
@@ -211,11 +276,7 @@ router.put(
                 rating: req.body.rating || product.rating,
                 numReviews: req.body.numReviews || product.numReviews,
                 isFeatured: req.body.isFeatured || product.isFeatured,
-                sizes: processVariants(req.body.sizes) || product.sizes,
-                colors: processVariants(req.body.colors) || product.colors,
-                materials: processVariants(req.body.materials) || product.materials,
-                styles: processVariants(req.body.styles) || product.styles,
-                titles: processVariants(req.body.titles) || product.titles
+                variants,  // ✅ Store dynamic variants
             };
 
             const updatedProductResult = await Product.findByIdAndUpdate(req.params.id, updatedProduct, { new: true });
@@ -261,6 +322,7 @@ router.get('/:id', validateClient, async (req, res) => {
         if (!product) {
             return res.status(404).json({ error: 'Product not found' });
         }
+        console.log(product);
         res.json(product);
     } catch (error) {
         console.error('Error:', error);
@@ -281,5 +343,8 @@ router.delete('/:id', validateClient, async (req, res) => {
         res.status(500).json({ error: 'Internal Server Error' });
     }
 });
+
+
+
 
 module.exports = router;
