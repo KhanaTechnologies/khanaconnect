@@ -28,6 +28,8 @@ var orderRoutes = require('./routes/orders');
 var emailSubscriptionsRoutes = require('./routes/emailSubscriptions');
 var wishListRouter = require('./routes/wishList');
 var categoriesRouter = require('./routes/categories');
+var productSalesRouter = require('./routes/productsale');
+var discountCodeRouter = require('./routes/discountCode');
 //Middleware
 app.use(express.json());
 app.use(morgan('tiny'));
@@ -65,7 +67,8 @@ app.options('*',cors());
  app.use(`${api}/customer`, customerRoutes);
  app.use(`${api}/client`, clientRoutes);
  app.use(`${api}/size`, sizeRoutes);
- mongoose.set('strictQuery', true);
+ app.use(`${api}/productsales`, productSalesRouter);
+ app.use(`${api}/discountcode`, discountCodeRouter);
 // mongoose.connect(process.env.CONNECTION_STRING,{ useNewUrlParser: true,useUnifiedTopology: true, dbName: 'KhanaConnect_DevDB',} )
  mongoose.connect(process.env.CONNECTION_STRING,{ useNewUrlParser: true,useUnifiedTopology: true, dbName: 'KhanaConnect_ProdDB'} )
 .then(()=>{
