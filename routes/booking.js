@@ -37,7 +37,7 @@ router.get('/', validateClient, async (req, res) => {
         const clientId = req.clientId;
         
         const bookings = await Booking.find({ clientID: clientId }).populate('assignedTo');
-        console.log(bookings)
+
         res.json(bookings);
     } catch (error) {
         console.error('Error fetching bookings:', error);

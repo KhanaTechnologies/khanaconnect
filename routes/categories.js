@@ -75,7 +75,6 @@ router.get('/', validateTokenAndExtractClientID, async (req, res) => {
     if (!categoryList) {
       res.status(500).json({ success: false, message: 'Failed to fetch categories' });
     }
-    console.log(categoryList);
     res.status(200).send(categoryList);
   } catch (error) {
     console.error('Error:', error);
@@ -101,7 +100,6 @@ router.get('/:id', validateTokenAndExtractClientID, async (req, res) => {
 router.put('/:id', upload.single('image'), validateTokenAndExtractClientID, async (req, res) => {
   try {
     const file = req.file; // ✅ Fix: req.file, not req.files
-    console.log(req.params.id);
 
     if (!file && !req.body.name && !req.body.icon && !req.body.color) {
       return res.status(400).json({ error: 'No image file or update fields provided' });
@@ -150,8 +148,6 @@ router.put('/:id', upload.single('image'), validateTokenAndExtractClientID, asyn
 // Create a new category
 router.post('/', upload.single('image'), validateTokenAndExtractClientID, async (req, res) => {
   try {
-    console.log(req.file)
-
     const file = req.file; // ✅ Fix: req.file, not req.files
 
     if (!file) {

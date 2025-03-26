@@ -35,7 +35,6 @@ router.get('/', validateClient, async (req, res) => {
         const clientId = req.clientId;
 
         const staffMembers = await Staff.find({ clientID: clientId });
-       //console.log(staffMembers);
         res.json(staffMembers);
     } catch (error) {
         console.error('Error fetching staff:', error);
