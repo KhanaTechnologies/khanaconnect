@@ -1,11 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const Booking = require('../models/booking'); // Import Booking model
-const { validateClient } = require('../middleware/validateClient'); // Import validateClient middleware
 
 // Middleware for client validation
 const validateClient = async (req, res, next) => {
-
     try {
         const token = req.headers.authorization;
         if (!token || !token.startsWith('Bearer ')) {
