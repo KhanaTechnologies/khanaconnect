@@ -1,44 +1,33 @@
 const mongoose = require('mongoose');
-const Schema = mongoose.Schema;
 
-// Variant Schema
-const variantSchema = new Schema({
-  value: { type: String, required: true },
-  price: { type: Number, required: true, default: 0 },
-  quantity: { type: Number, required: true, default: 0 }
+const variantSchema = new mongoose.Schema({
+    name: { type: String, required: true },  // e.g., "Size", "Color", "Material"
+    values: [
+        {
+            value: { type: String, required: true },  // e.g., "Red", "M", "Cotton"
+            price: { type: Number, required: true },  // Price difference for this variant
+            stock: { type: Number, required: true }   // Stock available for this option
+        }
+    ]
 });
 
-// Product Schema
-const productSchema = new Schema({
-  productName: { type: String, required: true },
-  description: { type: String, required: true },
-  price: { type: Number, required: true, default: 0 },
-  richDescription: { type: String, default: '' },
-  images: [{ type: String }], // Array to store multiple images
-  brand: { type: String, default: '' },
-  category: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true },
-  countInStock: { type: Number, required: true, min: 0, max: 255 },
-  rating: { type: Number, default: 0 },
-  numReviews: { type: Number, default: 0 },
-  isFeatured: { type: Boolean, default: false },
-  clientID: { type: String, required: true }, // Assuming client ID is stored as a string
-  dateCreated: { type: Date, default: Date.now },
-  sizes: [variantSchema], // Array of objects representing size variants
-  colors: [variantSchema], // Array of objects representing color variants
-  materials: [variantSchema], // Array of objects representing material variants
-  styles: [variantSchema], // Array of objects representing style variants
-  titles: [variantSchema] // Array of objects representing title variants
-});
+const productSchema = new mongoose.Schema({
+    productName: { type: String, required: true, trim: true },
+    description: { type: String, required: true },
+    richDescription: { type: String, default: "" },
+    price: { type: Number, required: true },
+    salePercentage: { type: Number, min: 0, max: 100, default: 0 }, // Sale percentage (0-100)
+    countInStock: { type: Number, required: true, min: 0 },
+    images: [{ type: String }], // Array of image URLs
+    brand: { type: String, default: "" },
+    category: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true },
+    rating: { type: Number, default: 0 },
+    numReviews: { type: Number, default: 0 },
+    isFeatured: { type: Boolean, default: false },
+    clientID: { type: String, required: true }, // Assuming client ID is stored as a string
+    variants: [variantSchema] // ✅ Store dynamic variants
+}, { timestamps: true });
 
-// Add a virtual 'id' field to make it compatible with JSON responses
-productSchema.virtual('id').get(function() {
-  return this._id.toHexString();
-});
-
-// Ensure virtual fields are included in JSON responses
-productSchema.set('toJSON', { virtuals: true });
-
-// Product Model
-const Product = mongoose.model('Product', productSchema);
-
-module.exports = Product;
+productSchema.virtual('id').get(function (){return this._id.toHexString();});
+productSchema.set('toJSON', {virtuals: true,});
+module.exports = mongoose.model('Product', productSchema);

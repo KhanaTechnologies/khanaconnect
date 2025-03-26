@@ -6,6 +6,24 @@ const bcrypt = require('bcryptjs');
 const { sendVerificationEmail } = require('../utils/email'); // Import the function to send a verification email
 const Client = require('../models/client'); // Import your client model
 
+
+// Middleware function to validate token and extract clientID
+const validateTokenAndExtractClientID = (req, res, next) => {
+  const token = req.headers.authorization;
+  if (!token || !token.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
+  }
+  const tokenValue = token.split(' ')[1];
+  jwt.verify(tokenValue, process.env.secret, (err, decoded) => {
+    if (err) {
+      return res.status(403).json({ error: 'Forbidden - Invalid token', err });
+    }
+    req.clientID = decoded.clientID;
+    next();
+  });
+};
+
+
 // Verification endpoint
 router.get('/verify', async (req, res) => {
   try {
@@ -100,13 +118,12 @@ router.post('/', async (req, res) => {
 
 
 
-// Online registration for a new customer
+//Oline registration a new customer
 router.post('/registration', async (req, res) => {
   try {
+
     const token = req.headers.authorization;
-    if (!token || !token.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
-    }
+    if (!token || !token.startsWith('Bearer ')) {return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });}
     const tokenValue = token.split(' ')[1];
 
     jwt.verify(tokenValue, process.env.secret, async (err, user) => {
@@ -116,40 +133,32 @@ router.post('/registration', async (req, res) => {
       const clientId = user.clientID;
       let client = '';
       const newCustomer = new Customer({
-        customerFirstName: req.body.customerFirstName,
-        customerLastName: req.body.customerLastName,
-        emailAddress: req.body.emailAddress.toLowerCase(),
-        passwordHash: bcrypt.hashSync(req.body.password, 10),
+        customerFirstName:req.body.customerFirstName,
+        customerLastName:req.body.customerLastName,
+        emailAddress:req.body.emailAddress.toLowerCase(),
+        passwordHash:bcrypt.hashSync(req.body.password,10),
         clientID: clientId,
       });
       try {
-        client = await Client.findOne({ clientID: clientId });
+         client = await Client.findOne({ clientID: clientId });
+
       } catch (error) {
-        console.error('Error finding client:', error);
+        console.error('Error finding clients:', error);
       }
 
       try {
         const savedCustomer = await newCustomer.save();
-        // Send verification email
-        const verificationToken = jwt.sign(
-          { customerId: savedCustomer._id, clientID: savedCustomer.clientID },
-          process.env.emailSecret,
-          { expiresIn: '1h' }
-        );
-        await sendVerificationEmail(
-          savedCustomer.emailAddress,
-          verificationToken,
-          client.businessEmail,
-          client.businessEmailPassword
-        );
-  var token = verificationToken;  
-        // Respond with the saved customer and verification token
-        res.status(201).json(savedCustomer);
+         // Send verification email
+      const verificationToken = jwt.sign({ customerId: savedCustomer._id }, process.env.emailSecret, { expiresIn: '1h' });
+      await sendVerificationEmail(savedCustomer.emailAddress, verificationToken, client.businessEmail, client.businessEmailPassword);
+
+        res.json(savedCustomer);
       } catch (saveError) {
         console.error('Error saving customer:', saveError);
         res.status(500).json({ error: 'Error saving customer' });
       }
-    });
+  });
+    
   } catch (error) {
     console.error('Error saving customer:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -211,32 +220,31 @@ router.put('/:customerId', async (req, res) => {
 
 
 // Login route
-router.post('/login', async (req, res) => {
+router.post('/login',validateTokenAndExtractClientID, async (req, res) => {
   try {
     // Extract email, password, and site's token from request body
     const { emailAddress, password } = req.body;
     const siteToken = req.headers.authorization;
-  console.log(req.headers.authorization);
+
     // Ensure siteToken starts with 'Bearer '
     if (!siteToken || !siteToken.startsWith('Bearer ')) {
       return res.status(401).json({ error: 'Unauthorized - Site token missing or invalid format' });
     }
-
-
 
     // Extract token value
     const tokenValue = siteToken.split(' ')[1];
 
     // Find the customer by email address
     const emailAddressLower = typeof emailAddress === 'string' ? emailAddress.toLowerCase() : '';
-
-const customer = await Customer.findOne({ emailAddress: emailAddressLower });
-
+const customer = await Customer.findOne({
+  emailAddress: emailAddressLower,
+  clientID: req.clientID
+});
     // If customer not found or password doesn't match, return error
     if (!customer || !bcrypt.compareSync(password, customer.passwordHash)) {
       return res.status(401).json({ error: 'Invalid email address or password' });
     }
-
+    console.log("here");
     // Verify site token and check if clientID matches customer's assigned clientID
 
     jwt.verify(tokenValue, process.env.secret, (err, decoded) => {
@@ -255,6 +263,7 @@ const customer = await Customer.findOne({ emailAddress: emailAddressLower });
 
       // Send token in response
       res.json({ token });
+
     });
   } catch (error) {
     console.error('Error logging in:', error);
@@ -266,21 +275,7 @@ const customer = await Customer.findOne({ emailAddress: emailAddressLower });
 
 
 
-// Middleware function to validate token and extract clientID
-const validateTokenAndExtractClientID = (req, res, next) => {
-  const token = req.headers.authorization;
-  if (!token || !token.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
-  }
-  const tokenValue = token.split(' ')[1];
-  jwt.verify(tokenValue, process.env.secret, (err, decoded) => {
-    if (err) {
-      return res.status(403).json({ error: 'Forbidden - Invalid token', err });
-    }
-    req.clientID = decoded.clientID;
-    next();
-  });
-};
+
 
 // Get customer by ID
 router.get('/:id', validateTokenAndExtractClientID, async (req, res) => {

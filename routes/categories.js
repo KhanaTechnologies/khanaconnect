@@ -2,6 +2,46 @@ const { Category } = require('../models/category');
 const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
+const multer = require('multer');
+const { Octokit } = require("@octokit/rest");
+require('dotenv').config();
+
+const octokit = new Octokit({
+    auth: process.env.GITHUB_TOKEN
+});
+
+const FILE_TYPE_MAP = {
+    'image/png': 'png',
+    'image/jpeg': 'jpeg',
+    'image/jpg': 'jpg'
+};
+
+const storage = multer.memoryStorage();
+const upload = multer({ 
+    storage: storage,
+    limits: { fileSize: 5 * 1024 * 1024 } // Limit file size to 5MB
+});
+
+const createFilePath = (fileName) => `public/uploads/${fileName}`;
+
+const uploadImageToGitHub = async (file, fileName) => {
+    try {
+        const filePath = createFilePath(fileName);
+        const content = file.buffer.toString('base64');
+        const { data } = await octokit.repos.createOrUpdateFileContents({
+            owner: process.env.GITHUB_REPO.split('/')[0],
+            repo: process.env.GITHUB_REPO.split('/')[1],
+            path: filePath,
+            message: `Upload ${fileName}`,
+            content: content,
+            branch: process.env.GITHUB_BRANCH
+        });
+        return data.content.download_url;
+    } catch (error) {
+        console.error('Error uploading image to GitHub:', error);
+        throw new Error('Failed to upload image to GitHub');
+    }
+};
 
 // Middleware to validate token and extract clientID
 const validateTokenAndExtractClientID = (req, res, next) => {
@@ -73,10 +113,22 @@ router.put('/:id', validateTokenAndExtractClientID, async (req, res) => {
 });
 
 // Create a new category
-router.post('/', validateTokenAndExtractClientID, async (req, res) => {
+router.post('/',upload.array('images', 1),validateTokenAndExtractClientID, async (req, res) => {
   try {
+    const files = req.files;
+    // ✅ Upload images and get URLs
+    const imageUploadPromises = files.map(file => {
+      if (!FILE_TYPE_MAP[file.mimetype]) {
+          throw new Error('Invalid file type');
+      }
+      const fileName = `${file.originalname.split(' ').join('-')}-${Date.now()}.${FILE_TYPE_MAP[file.mimetype]}`;
+      return uploadImageToGitHub(file, fileName);
+  });
+    const imagePath = await Promise.all(imageUploadPromises);
+
     let category = new Category({
       name: req.body.name,
+      image:imagePath,
       icon: req.body.icon,
       color: req.body.color,
       clientID: req.clientID,

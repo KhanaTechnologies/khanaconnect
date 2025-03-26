@@ -23,8 +23,7 @@ const authJwt = () => {
      `${api}/users/login`,
      `${api}/users/register`,
      `${api}/protected`,
-     `${api}/product`,
-     `${api}/orders/update-order-payment` // <-- This line excludes the route
+     `${api}/product`
       // { url: /(.*)/ } 
     ]
   })
