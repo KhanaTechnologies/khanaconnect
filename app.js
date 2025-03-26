@@ -30,6 +30,9 @@ var wishListRouter = require('./routes/wishList');
 var categoriesRouter = require('./routes/categories');
 var productSalesRouter = require('./routes/productsale');
 var discountCodeRouter = require('./routes/discountCode');
+var bookingsRouter = require('./routes/booking');
+var staffRouter = require('./routes/staff');
+var serviceRouter = require('./routes/services');
 //Middleware
 app.use(express.json());
 app.use(morgan('tiny'));
@@ -69,6 +72,10 @@ app.options('*',cors());
  app.use(`${api}/size`, sizeRoutes);
  app.use(`${api}/productsales`, productSalesRouter);
  app.use(`${api}/discountcode`, discountCodeRouter);
+ app.use(`${api}/bookings`, bookingsRouter);
+ app.use(`${api}/staff`, staffRouter);
+ app.use(`${api}/services`, serviceRouter);
+
 // mongoose.connect(process.env.CONNECTION_STRING,{ useNewUrlParser: true,useUnifiedTopology: true, dbName: 'KhanaConnect_DevDB',} )
  mongoose.connect(process.env.CONNECTION_STRING,{ useNewUrlParser: true,useUnifiedTopology: true, dbName: 'KhanaConnect_ProdDB'} )
 .then(()=>{

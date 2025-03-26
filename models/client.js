@@ -16,7 +16,12 @@ const clientSchema = new Schema({
   notify_url:{type: String, required: true},
   sessionToken: { type: String, default: null }, // Session token
   sessionExpires: { type: Date, default: null }, // Session expiration
-  isLoggedIn: { type: Boolean, default: false }  // Login status
+  isLoggedIn: { type: Boolean, default: false },  // Login status
+  permissions: {
+    bookings: { type: Boolean, default: false },
+    orders: { type: Boolean, default: false },
+    staff: { type: Boolean, default: false }
+  }
   // DiliveryOptions:[{type: String}],
   // Other client-related fields
 });

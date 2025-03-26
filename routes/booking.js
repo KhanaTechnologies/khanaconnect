@@ -1,9 +1,13 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
+const jwt = require('jsonwebtoken');
 const Booking = require('../models/booking'); // Import Booking model
+const stuff = require('../models/staff'); // Import Booking model
 
 // Middleware for client validation
 const validateClient = async (req, res, next) => {
+
     try {
         const token = req.headers.authorization;
         if (!token || !token.startsWith('Bearer ')) {
@@ -28,11 +32,12 @@ const validateClient = async (req, res, next) => {
 };
 
 // GET: Get all bookings for a specific client
-router.get('/bookings', validateClient, async (req, res) => {
+router.get('/', validateClient, async (req, res) => {
     try {
         const clientId = req.clientId;
-
-        const bookings = await Booking.find({ clientID: clientId });
+        
+        const bookings = await Booking.find({ clientID: clientId }).populate('assignedTo');
+        console.log(bookings)
         res.json(bookings);
     } catch (error) {
         console.error('Error fetching bookings:', error);
@@ -41,7 +46,7 @@ router.get('/bookings', validateClient, async (req, res) => {
 });
 
 // GET: Get a booking by ID for a specific client
-router.get('/bookings/:id', validateClient, async (req, res) => {
+router.get('/:id', validateClient, async (req, res) => {
     try {
         const { id } = req.params;
         const clientId = req.clientId;
@@ -60,19 +65,25 @@ router.get('/bookings/:id', validateClient, async (req, res) => {
 });
 
 // POST: Create a new booking
-router.post('/bookings', validateClient, async (req, res) => {
+router.post('/', validateClient, async (req, res) => {
     try {
-        const { bookingDetails, startDate, endDate } = req.body;
+        // const { bookingDetails, startDate, endDate } = req.body;
         const clientId = req.clientId;
-
-        if (!bookingDetails || !startDate || !endDate) {
+        
+        if (!req.body) {
             return res.status(400).json({ error: 'Missing required fields' });
         }
 
         const booking = new Booking({
-            bookingDetails,
-            startDate,
-            endDate,
+            customerName:req.body.customerName,
+            customerEmail:req.body.customerEmail,
+            customerPhone:req.body.customerPhone,
+            services:req.body.services,
+            date:req.body.date,
+            time:req.body.time,
+            duration:req.body.duration,
+            assignedTo:req.body.assignedTo,
+            notes:req.body.notes,
             clientID: clientId,
         });
 
@@ -85,7 +96,7 @@ router.post('/bookings', validateClient, async (req, res) => {
 });
 
 // PUT: Update a booking by ID
-router.put('/bookings/:id', validateClient, async (req, res) => {
+router.put('/:id', validateClient, async (req, res) => {
     try {
         const { id } = req.params;
         const clientId = req.clientId;
@@ -110,7 +121,7 @@ router.put('/bookings/:id', validateClient, async (req, res) => {
 });
 
 // DELETE: Delete a booking by ID
-router.delete('/bookings/:id', validateClient, async (req, res) => {
+router.delete('/:id', validateClient, async (req, res) => {
     try {
         const { id } = req.params;
         const clientId = req.clientId;

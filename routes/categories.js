@@ -19,7 +19,13 @@ const FILE_TYPE_MAP = {
 const storage = multer.memoryStorage();
 const upload = multer({ 
     storage: storage,
-    limits: { fileSize: 5 * 1024 * 1024 } // Limit file size to 5MB
+    limits: { fileSize: 5 * 1024 * 1024 }, // Limit file size to 5MB
+    fileFilter: (req, file, cb) => {
+      if (!FILE_TYPE_MAP[file.mimetype]) {
+        return cb(new Error('Invalid file type'), false);
+      }
+      cb(null, true);
+    },
 });
 
 const createFilePath = (fileName) => `public/uploads/${fileName}`;
@@ -69,6 +75,7 @@ router.get('/', validateTokenAndExtractClientID, async (req, res) => {
     if (!categoryList) {
       res.status(500).json({ success: false, message: 'Failed to fetch categories' });
     }
+    console.log(categoryList);
     res.status(200).send(categoryList);
   } catch (error) {
     console.error('Error:', error);
@@ -91,58 +98,97 @@ router.get('/:id', validateTokenAndExtractClientID, async (req, res) => {
 });
 
 // Update a category
-router.put('/:id', validateTokenAndExtractClientID, async (req, res) => {
+router.put('/:id', upload.single('image'), validateTokenAndExtractClientID, async (req, res) => {
   try {
+    const file = req.file; // ✅ Fix: req.file, not req.files
+    console.log(req.params.id);
+
+    if (!file && !req.body.name && !req.body.icon && !req.body.color) {
+      return res.status(400).json({ error: 'No image file or update fields provided' });
+    }
+
+    let imagePath = null;
+
+    // If a file is provided, validate and upload
+    if (file) {
+      if (!FILE_TYPE_MAP[file.mimetype]) {
+        return res.status(400).json({ error: 'Invalid file type' });
+      }
+
+      // ✅ Generate a unique file name
+      const fileName = `${file.originalname.split(' ').join('-')}-${Date.now()}.${FILE_TYPE_MAP[file.mimetype]}`;
+
+      // ✅ Upload image to GitHub
+      imagePath = await uploadImageToGitHub(file, fileName);
+    }
+
+    // Find and update the category
     const category = await Category.findOneAndUpdate(
-      { _id: req.params.id, clientId: req.clientID },
+      { _id: req.params.id, clientID: req.clientID }, // Ensure clientID matches
       {
-        name: req.body.name,
-        icon: req.body.icon,
-        color: req.body.color,
+        name: req.body.name || undefined, // Only update if provided
+        icon: req.body.icon || undefined, 
+        color: req.body.color || undefined,
+        image: imagePath || undefined, // Update only if a new image is provided
       },
-      { new: true }
+      { new: true } // Return the updated category
     );
+
     if (!category) {
       return res.status(400).send('The category could not be updated');
     }
-    res.send(category);
+
+    res.send(category); // Send the updated category
   } catch (error) {
     console.error('Error:', error);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
-// Create a new category
-router.post('/',upload.array('images', 1),validateTokenAndExtractClientID, async (req, res) => {
-  try {
-    const files = req.files;
-    // ✅ Upload images and get URLs
-    const imageUploadPromises = files.map(file => {
-      if (!FILE_TYPE_MAP[file.mimetype]) {
-          throw new Error('Invalid file type');
-      }
-      const fileName = `${file.originalname.split(' ').join('-')}-${Date.now()}.${FILE_TYPE_MAP[file.mimetype]}`;
-      return uploadImageToGitHub(file, fileName);
-  });
-    const imagePath = await Promise.all(imageUploadPromises);
 
+
+// Create a new category
+router.post('/', upload.single('image'), validateTokenAndExtractClientID, async (req, res) => {
+  try {
+    console.log(req.file)
+
+    const file = req.file; // ✅ Fix: req.file, not req.files
+
+    if (!file) {
+      return res.status(400).json({ error: 'No image file provided' });
+    }
+
+    if (!FILE_TYPE_MAP[file.mimetype]) {
+      return res.status(400).json({ error: 'Invalid file type' });
+    }
+
+    // ✅ Generate a unique file name
+    const fileName = `${file.originalname.split(' ').join('-')}-${Date.now()}.${FILE_TYPE_MAP[file.mimetype]}`;
+
+    // ✅ Upload image to GitHub
+    const imagePath = await uploadImageToGitHub(file, fileName);
+
+    // ✅ Save to database
     let category = new Category({
       name: req.body.name,
-      image:imagePath,
+      image: imagePath, // Fix: Use `imagePath`, not an array
       icon: req.body.icon,
       color: req.body.color,
       clientID: req.clientID,
     });
+
     category = await category.save();
     if (!category) {
-      return res.status(404).send('The category could not be created');
+      return res.status(500).json({ error: 'The category could not be created' });
     }
-    res.send(category);
+
+    res.status(201).json(category);
   } catch (error) {
     console.error('Error:', error);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
+
 
 // Delete a category
 router.delete('/:id', validateTokenAndExtractClientID, async (req, res) => {

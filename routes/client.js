@@ -193,7 +193,7 @@ router.post('/login', async (req, res) => {
       client.isLoggedIn = true; // Set logged-in status
       await client.save();
 
-      res.status(200).send({ ID: client.clientID, merchant_id: client.merchant_id, token: token });
+      res.status(200).send({ ID: client.clientID, merchant_id: client.merchant_id, token: token, permissions: client.permissions });
     } else {
       res.status(400).send('The user email and password are incorrect!');
     }

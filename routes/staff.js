@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const jwt = require('jsonwebtoken');
 const Staff = require('../models/staff'); // Import Staff model
 
 // Middleware for client validation
@@ -29,11 +30,12 @@ const validateClient = async (req, res, next) => {
 };
 
 // GET: Get all staff members for a specific client
-router.get('/staff', validateClient, async (req, res) => {
+router.get('/', validateClient, async (req, res) => {
     try {
         const clientId = req.clientId;
 
         const staffMembers = await Staff.find({ clientID: clientId });
+       //console.log(staffMembers);
         res.json(staffMembers);
     } catch (error) {
         console.error('Error fetching staff:', error);
@@ -42,7 +44,7 @@ router.get('/staff', validateClient, async (req, res) => {
 });
 
 // GET: Get a staff member by ID for a specific client
-router.get('/staff/:id', validateClient, async (req, res) => {
+router.get('/:id', validateClient, async (req, res) => {
     try {
         const { id } = req.params;
         const clientId = req.clientId;
@@ -61,12 +63,12 @@ router.get('/staff/:id', validateClient, async (req, res) => {
 });
 
 // POST: Create a new staff member
-router.post('/staff', validateClient, async (req, res) => {
+router.post('/', validateClient, async (req, res) => {
     try {
         const { name, role, email,phone,skills } = req.body;
         const clientId = req.clientId;
 
-        if (!name || !role || !contactDetails) {
+        if (!name || !role || !phone || !email) {
             return res.status(400).json({ error: 'Missing required fields' });
         }
 
@@ -88,7 +90,7 @@ router.post('/staff', validateClient, async (req, res) => {
 });
 
 // PUT: Update a staff member by ID
-router.put('/staff/:id', validateClient, async (req, res) => {
+router.put('/:id', validateClient, async (req, res) => {
     try {
         const { id } = req.params;
         const clientId = req.clientId;
@@ -114,7 +116,7 @@ router.put('/staff/:id', validateClient, async (req, res) => {
 });
 
 // DELETE: Delete a staff member by ID
-router.delete('/staff/:id', validateClient, async (req, res) => {
+router.delete('/:id', validateClient, async (req, res) => {
     try {
         const { id } = req.params;
         const clientId = req.clientId;
