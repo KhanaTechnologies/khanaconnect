@@ -41,6 +41,10 @@ const bookingSchema = new mongoose.Schema({
       type: String,
       trim: true,
     },
+    status: {
+      type: String,
+      trim: true,
+    },
     clientID: {
         type: String,
         required: true, // Ensures every staff member is linked to a client

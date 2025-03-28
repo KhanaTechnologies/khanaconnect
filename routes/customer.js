@@ -169,6 +169,7 @@ router.post('/registration', async (req, res) => {
 
 // Update an existing customer
 router.put('/:customerId', async (req, res) => {
+  console.log(req.body);
   try {
     const token = req.headers.authorization;
     if (!token || !token.startsWith('Bearer ')) {
@@ -199,9 +200,9 @@ router.put('/:customerId', async (req, res) => {
       if (req.body.password) {
         existingCustomer.passwordHash = bcrypt.hashSync(req.body.password, 10);
       }
-      existingCustomer.address = req.body.address || existingCustomer.address;
+      existingCustomer.address = req.body.street || existingCustomer.address;
+      existingCustomer.city = req.body.city || existingCustomer.city;
       existingCustomer.postalCode = req.body.postalCode || existingCustomer.postalCode;
-
       // Save the updated customer
       try {
         const updatedCustomer = await existingCustomer.save();
@@ -257,12 +258,12 @@ const customer = await Customer.findOne({
 
         return res.status(403).json({ error: 'Forbidden - Site token clientID does not match customer clientID' });
       }
-      
+      const customer_id = customer._id;
       // Generate JWT token
       const token = jwt.sign({ customerID: customer._id, clientID: customer.clientID }, process.env.secret);
 
       // Send token in response
-      res.json({ token });
+      res.json({ token, customer_id });
 
     });
   } catch (error) {
@@ -270,12 +271,6 @@ const customer = await Customer.findOne({
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
-
-
-
-
-
-
 
 // Get customer by ID
 router.get('/:id', validateTokenAndExtractClientID, async (req, res) => {

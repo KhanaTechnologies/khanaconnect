@@ -34,9 +34,15 @@ const authenticateToken = (req, res, next) => {
 // Get all orders for the authenticated client
 router.get('/', authenticateToken, async (req, res) => {
     try {
-        const orderList = await Order.find({ client: req.clientId })
+        const orderList = await Order.find({ clientID: req.clientId })
             .populate('customer', 'customerFirstName emailAddress phoneNumber')
-            .populate('orderItems')
+            .populate({
+                path: 'orderItems',
+                populate: {
+                    path: 'product', // Populate the product inside orderItems
+                    select: 'productName price images' // Adjust fields as needed
+                }
+            })
             .sort({ dateOrdered: -1 });
 
         if (!orderList) {
@@ -65,7 +71,6 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 });
 
 // Create a new order
-// Create a new order
 router.post(
     '/',
     authenticateToken,
@@ -83,8 +88,8 @@ router.post(
                 return res.status(400).json({ errors: errors.array() });
             }
 
-            const { orderItems, address, postalCode, phone, customer, deliveryType, deliveryPrice, discountCode } = req.body;
-
+            const { address, postalCode, phone, customer, deliveryType, deliveryPrice, discountCode } = req.body;
+            const orderItems = req.body.orderItems;
             // Validate discount code
             let discountAmount = 0;
             if (discountCode) {
@@ -115,44 +120,74 @@ router.post(
                 const newOrderItem = new OrderItem({
                     quantity: orderItem.quantity,
                     product: orderItem.product,
-                    size: orderItem.size,
-                    color: orderItem.color,
-                    material: orderItem.material,
-                    style: orderItem.style,
-                    title: orderItem.title,
+                    variant: orderItem.variant,
+                    variantPrice: orderItem.variantPrice
                 });
                 await newOrderItem.save();
                 return newOrderItem._id;
             }));
 
+            const orderItemsIdsResolved = await orderItemsIds;
+
             // Calculate total prices
+            // const totalPrices = await Promise.all(orderItemsIds.map(async (orderItemId) => {
+            //     const orderItem = await OrderItem.findById(orderItemId).populate('product', 'price');
+            //     if (!product) {
+            //         return res.status(400).json({ error: `Product with ID ${orderItem.product} not found` });
+            //     }
+            //     console.log(orderItem);
+
+            //     return orderItem.product.price * orderItem.quantity;
+            // }));
+            // let totalPrice = totalPrices.reduce((a, b) => a + b, 0);
+            // console.log(totalPrice);
+
             const totalPrices = await Promise.all(orderItemsIds.map(async (orderItemId) => {
                 const orderItem = await OrderItem.findById(orderItemId).populate('product', 'price');
-                return orderItem.product.price * orderItem.quantity;
+                let price = 0;
+            
+                // Check if the variantPrice exists; if it does, use it, otherwise use the product's base price
+                if (orderItem.variant && orderItem.variantPrice) {
+                    price = orderItem.variantPrice * orderItem.quantity;
+                } else {
+                    // Use the base price of the product if no variantPrice is specified
+                    price = orderItem.product.price * orderItem.quantity;
+                }
+            
+                return price;
             }));
+            
+            // Sum up all the prices to get the final total price
             let totalPrice = totalPrices.reduce((a, b) => a + b, 0);
 
+
             // Apply discount
-            totalPrice = Math.max(0, totalPrice - discountAmount) + deliveryPrice;
+            totalPrice_ = Math.max(0, totalPrice - discountAmount) + deliveryPrice;
 
             // Create and save the new Order
             const order = new Order({
-                orderItems: orderItemsIds,
-                address,
-                postalCode,
-                phone,
+                orderItems: orderItemsIdsResolved,
+                address: req.body.address,
+                postalCode :req.body.postalCode ,
+                phone :req.body.phone,
                 status: 'Pending',
                 totalPrice,
-                customer,
-                deliveryPrice,
-                deliveryType,
-                client: req.clientId,
+                discountAmount : discountAmount,
+                customer: req.body.customer,
+                deliveryPrice: req.body.deliveryPrice,
+                deliveryType : req.body.deliveryType,
+                clientID: req.clientId,
+                finalPrice: totalPrice_,
+                orderNotes: req.body.orderNotes,
+                orderTrackingLink: '',
+                orderTrackingCode:''
             });
 
             await order.save();
 
             // Deduct stock count for each product and variant
             for (const orderItem of orderItems) {
+
                 const product = await Product.findById(orderItem.product);
                 if (!product) {
                     console.error(`Product not found: ${orderItem.product}`);
@@ -161,38 +196,6 @@ router.post(
 
                 // Deduct countInStock for the product
                 product.countInStock -= orderItem.quantity;
-
-                // Deduct quantity for variants (size, color, etc.)
-                if (orderItem.size) {
-                    const sizeVariant = product.sizes.id(orderItem.size);
-                    if (sizeVariant) {
-                        sizeVariant.quantity -= orderItem.quantity;
-                    }
-                }
-                if (orderItem.color) {
-                    const colorVariant = product.colors.id(orderItem.color);
-                    if (colorVariant) {
-                        colorVariant.quantity -= orderItem.quantity;
-                    }
-                }
-                if (orderItem.material) {
-                    const materialVariant = product.materials.id(orderItem.material);
-                    if (materialVariant) {
-                        materialVariant.quantity -= orderItem.quantity;
-                    }
-                }
-                if (orderItem.style) {
-                    const styleVariant = product.styles.id(orderItem.style);
-                    if (styleVariant) {
-                        styleVariant.quantity -= orderItem.quantity;
-                    }
-                }
-                if (orderItem.title) {
-                    const titleVariant = product.titles.id(orderItem.title);
-                    if (titleVariant) {
-                        titleVariant.quantity -= orderItem.quantity;
-                    }
-                }
 
                 await product.save();
             }
@@ -221,14 +224,22 @@ router.post(
 // Update an order by ID
 router.put('/:id', authenticateToken, async (req, res) => {
     try {
-        const { status, orderTrackingLink, orderTrackingCode } = req.body;
+        console.log(req.body)
+        let setStatus;
+        if (req.body.orderTrackingLink && req.body.orderTrackingCode) {
+            setStatus = 'shipped';
+        } else if (req.body.status) {
+            setStatus = req.body.status;
+        }
+    
 
+        console.log(setStatus)
         const order = await Order.findOneAndUpdate(
-            { _id: req.params.id, client: req.clientId },
+            { _id: req.params.id, clientID: req.clientId },
             {
-                status,
-                orderLink: orderTrackingLink,
-                orderCode: orderTrackingCode,
+                status: setStatus || '',
+                orderTrackingLink: req.body.orderTrackingLink|| '',
+                orderTrackingCode: req.body.orderTrackingCode|| '',
             },
             { new: true }
         ).populate('customer')
@@ -239,16 +250,16 @@ router.put('/:id', authenticateToken, async (req, res) => {
         }
 
         // Send email notification if status is updated to "Processed"
-        if (status === 'Processed') {
-            const client = await Client.findOne({ clientID: req.clientId });
-            if (client) {
-                await orderItemProcessed(
-                    order.customer.emailAddress,
-                    client.businessEmail,
-                    client.businessEmailPassword
-                );
-            }
-        }
+        // if (status === 'Processed') {
+        //     const client = await Client.findOne({ clientID: req.clientId });
+        //     if (client) {
+        //         await orderItemProcessed(
+        //             order.customer.emailAddress,
+        //             client.businessEmail,
+        //             client.businessEmailPassword
+        //         );
+        //     }
+        // }
 
         res.json(order);
     } catch (error) {
@@ -260,11 +271,14 @@ router.put('/:id', authenticateToken, async (req, res) => {
 // Get an order by ID
 router.get('/:id', authenticateToken, async (req, res) => {
     try {
-        const order = await Order.findOne({ _id: req.params.id, client: req.clientId })
+        const order = await Order.findOne({ _id: req.params.id, clientID: req.clientId })
             .populate('customer', 'customerFirstName emailAddress phoneNumber')
             .populate({
                 path: 'orderItems',
-                populate: { path: 'product', populate: 'category' },
+                populate: {
+                    path: 'product', // Populate the product inside orderItems
+                    select: 'productName price images' // Adjust fields as needed
+                }
             });
 
         if (!order) {
@@ -281,7 +295,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
 // Update order payment status
 router.post('/update-order-payment', async (req, res) => {
     try {
-        const { item_name, payment_status, totalPrice } = req.body;
+        const { item_name, payment_status, totalPrice,m_payment_id } = req.body;
 
         if (!item_name || payment_status !== 'COMPLETE') {
             return res.status(400).json({ error: 'Invalid payment details' });
@@ -310,36 +324,36 @@ router.post('/update-order-payment', async (req, res) => {
             product.countInStock -= orderItem.quantity;
 
             // Deduct quantity for variants (size, color, etc.)
-            if (orderItem.size) {
-                const sizeVariant = product.sizes.id(orderItem.size);
-                if (sizeVariant) {
-                    sizeVariant.quantity -= orderItem.quantity;
-                }
-            }
-            if (orderItem.color) {
-                const colorVariant = product.colors.id(orderItem.color);
-                if (colorVariant) {
-                    colorVariant.quantity -= orderItem.quantity;
-                }
-            }
-            if (orderItem.material) {
-                const materialVariant = product.materials.id(orderItem.material);
-                if (materialVariant) {
-                    materialVariant.quantity -= orderItem.quantity;
-                }
-            }
-            if (orderItem.style) {
-                const styleVariant = product.styles.id(orderItem.style);
-                if (styleVariant) {
-                    styleVariant.quantity -= orderItem.quantity;
-                }
-            }
-            if (orderItem.title) {
-                const titleVariant = product.titles.id(orderItem.title);
-                if (titleVariant) {
-                    titleVariant.quantity -= orderItem.quantity;
-                }
-            }
+            // if (orderItem.size) {
+            //     const sizeVariant = product.sizes.id(orderItem.size);
+            //     if (sizeVariant) {
+            //         sizeVariant.quantity -= orderItem.quantity;
+            //     }
+            // }
+            // if (orderItem.color) {
+            //     const colorVariant = product.colors.id(orderItem.color);
+            //     if (colorVariant) {
+            //         colorVariant.quantity -= orderItem.quantity;
+            //     }
+            // }
+            // if (orderItem.material) {
+            //     const materialVariant = product.materials.id(orderItem.material);
+            //     if (materialVariant) {
+            //         materialVariant.quantity -= orderItem.quantity;
+            //     }
+            // }
+            // if (orderItem.style) {
+            //     const styleVariant = product.styles.id(orderItem.style);
+            //     if (styleVariant) {
+            //         styleVariant.quantity -= orderItem.quantity;
+            //     }
+            // }
+            // if (orderItem.title) {
+            //     const titleVariant = product.titles.id(orderItem.title);
+            //     if (titleVariant) {
+            //         titleVariant.quantity -= orderItem.quantity;
+            //     }
+            // }
 
             await product.save();
         }
@@ -356,10 +370,11 @@ router.post('/update-order-payment', async (req, res) => {
             );
         }
 
-        res.json({ success: true, order });
+        res.json({ success: true});
     } catch (error) {
-        console.error('Error updating order payment status:', error);
-        res.status(500).json({ error: 'Internal Server Error' });
+        res.json({ success: false});
+       // console.error('Error updating order payment status:', error);
+       // res.status(500).json({ error: 'Internal Server Error' });
     }
 });
 
@@ -396,10 +411,9 @@ router.get('/get/count', authenticateToken, async (req, res) => {
 // Get user orders by user ID for the authenticated client
 router.get('/get/userorders/:userid', authenticateToken, async (req, res) => {
     try {
-        const userOrderList = await Order.find({ user: req.params.userid, client: req.clientId })
+        const userOrderList = await Order.find({ customer: req.params.userid, clientID: req.clientId })
             .populate({ path: 'orderItems', populate: { path: 'product', populate: 'category' } })
             .sort({ dateOrdered: -1 });
-
         if (!userOrderList) {
             return res.status(500).json({ success: false });
         }

@@ -11,6 +11,7 @@ const customerSchema = new Schema({
   passwordHash: {type: String, required: true,},
   // Other customer-related fields
   address: {type: String, default: ''},
+  city: {type: String, default: ''},
   postalCode: {type: String, default: ''},
   isVerified: {type:Boolean, default: false},
 

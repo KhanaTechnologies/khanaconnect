@@ -11,7 +11,7 @@ const orderSchema = mongoose.Schema({
     postalCode: { type: String, required: true },
     deliveryType: { type: String, required: true },
     deliveryPrice: { type: Number, required: true },
-    status: { type: String, required: true, default: 'Pending' },
+    status: { type: String, required: true, default: 'pending' },
     totalPrice: { type: Number },
     customer: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer' },
     dateOrdered: {
@@ -27,6 +27,7 @@ const orderSchema = mongoose.Schema({
     checkoutCode: { type: mongoose.Schema.Types.ObjectId, ref: 'DiscountCode', required: false },  // Reference to DiscountCode
     discountAmount: { type: Number, default: 0 },  // Discount amount calculated from the checkout code
     finalPrice: { type: Number, required: true },  // Final price after applying the discount
+    orderNotes: { type: String, required: false },
 });
 
 // Virtual for calculating the final price after applying the discount

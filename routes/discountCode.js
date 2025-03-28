@@ -78,7 +78,7 @@ router.post('/verify-discount-code', authenticateToken, async (req, res) => {
             return res.status(400).json({ error: 'Discount code usage limit reached' });
         }
 
-        res.json({ success: true, discountPercentage: discount.discount, totalDiscount });
+        res.json({ success: true, discountPercentage: discount.discount, totalDiscount,eligibleProducts});
     } catch (error) {
         console.error('Error verifying discount code:', error);
         res.status(500).json({ error: 'Internal Server Error', message: error.message });

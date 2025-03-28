@@ -85,6 +85,8 @@ router.post('/', validateClient, async (req, res) => {
             assignedTo:req.body.assignedTo,
             notes:req.body.notes,
             clientID: clientId,
+            status: "scheduled",
+            notes: req.body.notes
         });
 
         await booking.save();
@@ -98,9 +100,10 @@ router.post('/', validateClient, async (req, res) => {
 // PUT: Update a booking by ID
 router.put('/:id', validateClient, async (req, res) => {
     try {
+        console.log(req.body);
+
         const { id } = req.params;
         const clientId = req.clientId;
-        const { bookingDetails, startDate, endDate } = req.body;
 
         const booking = await Booking.findOne({ _id: id, clientID: clientId });
 
@@ -108,10 +111,11 @@ router.put('/:id', validateClient, async (req, res) => {
             return res.status(404).json({ error: 'Booking not found or unauthorized' });
         }
 
-        booking.bookingDetails = bookingDetails || booking.bookingDetails;
-        booking.startDate = startDate || booking.startDate;
-        booking.endDate = endDate || booking.endDate;
-
+        booking.bookingDetails = req.body.bookingDetails || booking.bookingDetails;
+        booking.startDate = req.body.startDate || booking.startDate;
+        booking.endDate = req.bodyendDate || booking.endDate;
+        booking.assignedTo = req.body.assignedTo || booking.assignedTo
+        booking.status = req.body.status || booking.status;
         await booking.save();
         res.json(booking);
     } catch (error) {
