@@ -219,58 +219,63 @@ router.put('/:customerId', async (req, res) => {
 });
 
 
-
 // Login route
-router.post('/login',validateTokenAndExtractClientID, async (req, res) => {
+router.post('/login', validateTokenAndExtractClientID, async (req, res) => {
   try {
-    // Extract email, password, and site's token from request body
     const { emailAddress, password } = req.body;
     const siteToken = req.headers.authorization;
 
-    // Ensure siteToken starts with 'Bearer '
     if (!siteToken || !siteToken.startsWith('Bearer ')) {
       return res.status(401).json({ error: 'Unauthorized - Site token missing or invalid format' });
     }
 
-    // Extract token value
     const tokenValue = siteToken.split(' ')[1];
 
-    // Find the customer by email address
+    // Convert email to lowercase if it's a string
     const emailAddressLower = typeof emailAddress === 'string' ? emailAddress.toLowerCase() : '';
-const customer = await Customer.findOne({
-  emailAddress: emailAddressLower,
-  clientID: req.clientID
-});
-    // If customer not found or password doesn't match, return error
-    if (!customer || !bcrypt.compareSync(password, customer.passwordHash)) {
+
+    // Find customer by email and clientID
+    const customer = await Customer.findOne({
+      emailAddress: emailAddressLower,
+      clientID: req.clientID
+    });
+
+    // If customer is not found, return error **before accessing passwordHash**
+    if (!customer) {
       return res.status(401).json({ error: 'Invalid email address or password' });
     }
-    console.log("here");
-    // Verify site token and check if clientID matches customer's assigned clientID
 
+    // Check password match
+    const passwordMatch = bcrypt.compareSync(password, customer.passwordHash);
+    if (!passwordMatch) {
+      return res.status(401).json({ error: 'Invalid email address or password' });
+    }
+
+    // Verify site token
     jwt.verify(tokenValue, process.env.secret, (err, decoded) => {
       if (err) {
-
         return res.status(403).json({ error: 'Forbidden - Invalid site token', err });
       }
-  
-      if (decoded.clientID !== customer.clientID) {
 
+      if (decoded.clientID !== customer.clientID) {
         return res.status(403).json({ error: 'Forbidden - Site token clientID does not match customer clientID' });
       }
+
       const customer_id = customer._id;
+
       // Generate JWT token
       const token = jwt.sign({ customerID: customer._id, clientID: customer.clientID }, process.env.secret);
 
       // Send token in response
       res.json({ token, customer_id });
-
     });
+
   } catch (error) {
     console.error('Error logging in:', error);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
+
 
 // Get customer by ID
 router.get('/:id', validateTokenAndExtractClientID, async (req, res) => {
