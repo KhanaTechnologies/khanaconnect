@@ -39,7 +39,7 @@ const validateClient = async (req, res, next) => {
 
 
 // DELETE: Delete a sales item by ID
-router.delete('/sales-items/:id', validateClient, async (req, res) => {
+router.delete('/:id', validateClient, async (req, res) => {
     try {
         const { id } = req.params;
         const { clientId } = req;
@@ -74,7 +74,7 @@ router.delete('/sales-items/:id', validateClient, async (req, res) => {
 
 
 // GET: Get all sales items for a specific client
-router.get('/sales-items', validateClient, async (req, res) => {
+router.get('/', validateClient, async (req, res) => {
     try {
         const clientId = req.clientId; // Ensure it's a string
         console.log(req.clientId);
@@ -90,7 +90,7 @@ router.get('/sales-items', validateClient, async (req, res) => {
 
 
 // POST: Create a new sales item
-router.post('/sales-items', validateClient, async (req, res) => {
+router.post('/', validateClient, async (req, res) => {
     console.log(req.body);
     try {
         const { itemType, selectedProductIds, discountPercentage, startDate, endDate } = req.body;

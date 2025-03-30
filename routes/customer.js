@@ -219,6 +219,7 @@ router.put('/:customerId', async (req, res) => {
 });
 
 
+
 // Login route
 router.post('/login', validateTokenAndExtractClientID, async (req, res) => {
   try {

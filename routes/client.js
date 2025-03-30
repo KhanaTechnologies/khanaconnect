@@ -10,17 +10,10 @@ router.use(authJwt());
 // Create a new client
 router.post('/', async (req, res) => {
   try {
-    const { clientID, companyName,merchant_id,merchant_key, password, passphrase, return_url,cancel_url,notify_url,businessEmail,businessEmailPassword} = req.body;
-
-
+    const { clientID, companyName, merchant_id, merchant_key, password, passphrase, return_url, cancel_url, notify_url, businessEmail, businessEmailPassword, tier, role, permissions, deliveryOptions } = req.body;
     
-     
-    // Hash the password before saving it to the database
     const hashedPassword = await bcrypt.hashSync(password, 10);
-
-    // const hashedPassphrase = await bcrypt.hashSync(passphrase,10);
-
-    const token = generateToken({ clientID, companyName,merchant_id});
+    const token = generateToken({ clientID, companyName, merchant_id });
 
     const newClient = new Client({
       clientID,
@@ -29,20 +22,23 @@ router.post('/', async (req, res) => {
       merchant_id,
       merchant_key,
       passphrase,
-      token : token,
+      token,
       return_url,
       cancel_url,
       notify_url,
       businessEmail,
       businessEmailPassword,
-      // Other client-related data
+      tier,
+      role,
+      permissions,
+      deliveryOptions
     });
 
     const savedClient = await newClient.save();
-
-
     res.json({ client: savedClient, token });
-  } catch (error) {console.error('Error saving client:', error);res.status(500).json({ error: 'Internal Server Error' });
+  } catch (error) {
+    console.error('Error saving client:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
@@ -66,18 +62,11 @@ function generateToken(client) {
     merchant_id: client.merchant_id,
     merchant_key: client.merchant_key,
     passphrase: client.passphrase,
-    // Add any other relevant data you want in the token
   };
-
-  // Replace 'your-secret-key' with a strong, secret key for signing the token
-  const token = jwt.sign(payload, secret, { expiresIn: '1y' });
-
-  return token;
+  return jwt.sign(payload, secret, { expiresIn: '1y' });
 }
 
-
-
-// Protected route that requires a valid token - this was just a test
+// Protected route that requires a valid token
 router.get('/protected', authenticateToken, (req, res) => {
   res.json({ message: 'This is a protected route.', user: req.user });
 });
@@ -89,33 +78,22 @@ function authenticateToken(req, res, next) {
   if (!token) {
     return res.status(401).json({ error: 'Unauthorized - Token missing' });
   }
-
-
-
   const tokenValue = token.split(' ')[1];
   jwt.verify(tokenValue, secret, (err, user) => {
     if (err) {
       return res.status(403).json({ error: 'Forbidden - Invalid token' });
     }
-
-    // Additional verification logic if needed
-    // For example, check if the user has certain roles or permissions
-
     req.user = user;
     next();
   });
 }
 
-
-
 // Get client by ID
 router.get('/:clientId', async (req, res) => {
   try {
     const clientId = req.params.clientId;
-    
-    var client = await Client.findOne({ clientID: clientId });
-
-    if (!client || Object.keys(client).length === 0) {
+    const client = await Client.findOne({ clientID: clientId });
+    if (!client) {
       return res.status(404).json({ error: 'Client not found' });
     }
     res.json(client);
@@ -125,30 +103,23 @@ router.get('/:clientId', async (req, res) => {
   }
 });
 
-
-
 // Edit client details
 router.put('/:clientId', async (req, res) => {
   try {
     const clientId = req.params.clientId;
     const updates = req.body;
-    const options = { new: true }; // Return the modified document rather than the original
-
-    // Hash the password if it's being updated
+    const options = { new: true };
     if (updates.password) {
       updates.password = await bcrypt.hashSync(updates.password, 10);
     }
-
     const updatedClient = await Client.findOneAndUpdate(
       { clientID: clientId },
       updates,
       options
     );
-
     if (!updatedClient) {
       return res.status(404).json({ error: 'Client not found' });
     }
-
     res.json(updatedClient);
   } catch (error) {
     console.error('Error updating client:', error);
@@ -156,44 +127,34 @@ router.put('/:clientId', async (req, res) => {
   }
 });
 
-
-
-
-
-// This is where they can login and get a session ID
+// Client login
 router.post('/login', async (req, res) => {
   try {
     const client = await Client.findOne({ clientID: req.body.clientID });
-    const secret = process.env.secret;
-
-
     if (!client) {
       return res.status(400).send('The client could not be found');
     }
-
     if (client && bcrypt.compareSync(req.body.password, client.password)) {
       const token = jwt.sign(
-        {
-          clientID: client.clientID,
-          merchant_id: client.merchant_id
-        },
-        secret,
+        { clientID: client.clientID, merchant_id: client.merchant_id },
+        process.env.secret,
         { expiresIn: '1d' }
       );
-
-      // Terminate previous session if client is already logged in
       if (client.isLoggedIn) {
         client.sessionToken = null;
         client.sessionExpires = null;
       }
-
-      // Update the client session info
       client.sessionToken = token;
-      client.sessionExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 1 day
-      client.isLoggedIn = true; // Set logged-in status
+      client.sessionExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      client.isLoggedIn = true;
       await client.save();
-
-      res.status(200).send({ ID: client.clientID, merchant_id: client.merchant_id, token: token, permissions: client.permissions });
+      res.status(200).send({
+        ID: client.clientID,
+        merchant_id: client.merchant_id,
+        token,
+        permissions: client.permissions,
+        role: client.role
+      });
     } else {
       res.status(400).send('The user email and password are incorrect!');
     }
@@ -203,24 +164,19 @@ router.post('/login', async (req, res) => {
   }
 });
 
-
-
+// Client logout
 router.post('/logout', async (req, res) => {
   try {
     const token = req.headers.authorization.split(' ')[1];
     const decoded = jwt.verify(token, process.env.secret);
-
     const client = await Client.findOne({ clientID: decoded.clientID });
-
     if (!client) {
       return res.status(400).send('Client not found');
     }
-
     client.sessionToken = null;
     client.sessionExpires = null;
-    client.isLoggedIn = false; // Set logged-in status to false
+    client.isLoggedIn = false;
     await client.save();
-
     res.status(200).send('Logout successful');
   } catch (error) {
     console.error('Error during logout:', error);

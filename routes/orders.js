@@ -6,7 +6,7 @@ const jwt = require('jsonwebtoken');
 const { Customer } = require('../models/customer');
 const DiscountCode = require('../models/discountCode');
 
-const { Product } = require('../models/product');
+const Product = require('../models/product');
 const { Size } = require('../models/size');
 const { sendOrderConfirmationEmail, orderItemProcessed } = require('../utils/email');
 const Client = require('../models/client');
@@ -90,8 +90,10 @@ router.post(
 
             const { address, postalCode, phone, customer, deliveryType, deliveryPrice, discountCode } = req.body;
             const orderItems = req.body.orderItems;
+
             // Validate discount code
             let discountAmount = 0;
+            let isUsed = false;
             if (discountCode) {
                 const code = await DiscountCode.findOne({ code: discountCode, clientID: req.clientId });
 
@@ -100,19 +102,25 @@ router.post(
                 }
 
                 // Loop through cart products and check eligibility
-                for (const productId of orderItems) {
-                    const product = await Product.findById(productId);
-                    if (product && discount.appliesTo.some(id => id.toString() === product._id.toString())) {
-                        eligibleProducts.push(product);
-                        discountAmount += (product.price * discount.discount) / 100;
+                for (const orderItem of orderItems) {
+                    const product = await Product.findOne({_id: orderItem.product});
+                    for (const item of code.appliesTo){
+                        if (product.id.toString() ===  item.toString() ) {
+                            if (product.salePercentage > 0){
+                                productCurrentPrice = (product.price * product.salePercentage) / 100;
+                                discountAmount += ( productCurrentPrice * code.discount) / 100;
+                            }else{discountAmount += (product.price * code.discount) / 100;}
+                            isUsed = true;
+                        }
                     }
+                    
                 }
-
                 // Increase the usage count
-                code.usageCount += 1;
-                await code.save();
-
-                discountAmount = code.discountAmount || 0;
+                if (isUsed)
+                {
+                    code.usageCount += 1;
+                    await code.save();
+                }
             }
 
             // Create OrderItem documents and save them
@@ -128,19 +136,6 @@ router.post(
             }));
 
             const orderItemsIdsResolved = await orderItemsIds;
-
-            // Calculate total prices
-            // const totalPrices = await Promise.all(orderItemsIds.map(async (orderItemId) => {
-            //     const orderItem = await OrderItem.findById(orderItemId).populate('product', 'price');
-            //     if (!product) {
-            //         return res.status(400).json({ error: `Product with ID ${orderItem.product} not found` });
-            //     }
-            //     console.log(orderItem);
-
-            //     return orderItem.product.price * orderItem.quantity;
-            // }));
-            // let totalPrice = totalPrices.reduce((a, b) => a + b, 0);
-            // console.log(totalPrice);
 
             const totalPrices = await Promise.all(orderItemsIds.map(async (orderItemId) => {
                 const orderItem = await OrderItem.findById(orderItemId).populate('product', 'price');
@@ -173,6 +168,7 @@ router.post(
                 status: 'Pending',
                 totalPrice,
                 discountAmount : discountAmount,
+                checkoutCode : req.body.discountCode,
                 customer: req.body.customer,
                 deliveryPrice: req.body.deliveryPrice,
                 deliveryType : req.body.deliveryType,
@@ -186,31 +182,28 @@ router.post(
             await order.save();
 
             // Deduct stock count for each product and variant
-            for (const orderItem of orderItems) {
-
-                const product = await Product.findById(orderItem.product);
+            for (const product_ of orderItems) {
+                const product = await Product.findOne({_id: product_.product});
                 if (!product) {
-                    console.error(`Product not found: ${orderItem.product}`);
+                    console.error(`Product not found: ${product_.product}`);
                     continue;
                 }
-
                 // Deduct countInStock for the product
-                product.countInStock -= orderItem.quantity;
-
+                product.countInStock -= product_.quantity;
                 await product.save();
             }
 
             // Send order confirmation email
-            const client = await Client.findOne({ clientID: req.clientId });
-            if (client) {
-                await sendOrderConfirmationEmail(
-                    order.customer.emailAddress,
-                    order.orderItems,
-                    client.businessEmail,
-                    client.businessEmailPassword,
-                    order.deliveryPrice
-                );
-            }
+            // const client = await Client.findOne({ clientID: req.clientId });
+            // if (client) {
+            //     await sendOrderConfirmationEmail(
+            //         order.customer.emailAddress,
+            //         order.orderItems,
+            //         client.businessEmail,
+            //         client.businessEmailPassword,
+            //         order.deliveryPrice
+            //     );
+            // }
 
             res.status(201).json(order);
         } catch (error) {

@@ -33,6 +33,7 @@ var discountCodeRouter = require('./routes/discountCode');
 var bookingsRouter = require('./routes/booking');
 var staffRouter = require('./routes/staff');
 var serviceRouter = require('./routes/services');
+var adminRouter = require('./routes/admin');
 //Middleware
 app.use(express.json());
 app.use(morgan('tiny'));
@@ -75,7 +76,8 @@ app.options('*',cors());
  app.use(`${api}/bookings`, bookingsRouter);
  app.use(`${api}/staff`, staffRouter);
  app.use(`${api}/services`, serviceRouter);
-
+ app.use(`${api}/admin`, adminRouter);
+ 
 // mongoose.connect(process.env.CONNECTION_STRING,{ useNewUrlParser: true,useUnifiedTopology: true, dbName: 'KhanaConnect_DevDB',} )
  mongoose.connect(process.env.CONNECTION_STRING,{ useNewUrlParser: true,useUnifiedTopology: true, dbName: 'KhanaConnect_ProdDB'} )
 .then(()=>{

@@ -24,7 +24,7 @@ const orderSchema = mongoose.Schema({
     paid: { type: Boolean, default: false },
 
     // Fields for checkout code functionality
-    checkoutCode: { type: mongoose.Schema.Types.ObjectId, ref: 'DiscountCode', required: false },  // Reference to DiscountCode
+    checkoutCode: {  type: String, required: false },  // Reference to DiscountCode
     discountAmount: { type: Number, default: 0 },  // Discount amount calculated from the checkout code
     finalPrice: { type: Number, required: true },  // Final price after applying the discount
     orderNotes: { type: String, required: false },

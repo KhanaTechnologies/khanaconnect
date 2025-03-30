@@ -36,6 +36,7 @@ router.post('/', validateClient, async (req, res) => {
             name:req.body.name,
             description:req.body.description,
             price:req.body.price,
+            isActive: req.body.isActive,
             clientID:clientID });
         await newService.save();
 
@@ -77,7 +78,7 @@ router.put('/:id', validateClient, async (req, res) => {
         const { name, description, price } = req.body;
         const updatedService = await Service.findOneAndUpdate(
             { _id: req.params.id, clientID: req.clientId },
-            { name, description, price },
+            { name: req.body.name, description: req.body.description, price: req.body.price, isActive: req.body.isActive },
             { new: true }
         );
 

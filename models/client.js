@@ -17,12 +17,30 @@ const clientSchema = new Schema({
   sessionToken: { type: String, default: null }, // Session token
   sessionExpires: { type: Date, default: null }, // Session expiration
   isLoggedIn: { type: Boolean, default: false },  // Login status
+  tier:  {type: String, 
+    enum: ["bronze", "silver" , "gold"],  // ✅ Ensures only "Client" or "Admin" are allowed
+    required: true, 
+    default: "bronze"  // (Optional) Default role is "Client"
+    },
+  role: { 
+    type: String, 
+    enum: ["client", "admin"],  // ✅ Ensures only "Client" or "Admin" are allowed
+    required: true, 
+    default: "Client"  // (Optional) Default role is "Client"
+  },
   permissions: {
     bookings: { type: Boolean, default: false },
     orders: { type: Boolean, default: false },
     staff: { type: Boolean, default: false }
-  }
-  // DiliveryOptions:[{type: String}],
+  },
+     // ✅ Delivery Options - Array of objects
+     deliveryOptions: [
+      {
+        type: { type: String }, // e.g., "Standard", "Express"
+        price: { type: Number } // e.g., 75, 120
+      }
+    ]
+
   // Other client-related fields
 });
 

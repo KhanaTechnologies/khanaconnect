@@ -9,7 +9,7 @@ const authJwt = () => {
     isRevoked: isRevoked
   }).unless({
     path: [
-     { url: /\/public\/uploads(.*)/, methods: ['GET', 'OPTIONS',,'POST', 'PUT'] },
+     { url: /\/public\/uploads(.*)/, methods: ['GET', 'OPTIONS','POST', 'PUT'] },
      { url: /\/api\/v1\/customer(.*)/, methods: ['GET', 'OPTIONS', 'POST', 'DELETE'] },
     //  { url: /\/api\/v1\/notifications(.*)/, methods: ['GET', 'OPTIONS'] }, 
      { url: /\/api\/v1\/client(.*)/, methods: ['GET', 'OPTIONS','POST', 'PUT', 'DELETE'] },
@@ -21,6 +21,7 @@ const authJwt = () => {
      { url: /\/api\/v1\/bookings(.*)/, methods: ['GET', 'OPTIONS', 'POST', 'PUT', 'DELETE'] },
      { url: /\/api\/v1\/services(.*)/, methods: ['GET', 'OPTIONS', 'POST', 'PUT', 'DELETE'] },
      { url: /\/api\/v1\/staff(.*)/, methods: ['GET', 'OPTIONS', 'POST', 'PUT', 'DELETE'] },
+     { url: /\/api\/v1\/admin(.*)/, methods: ['GET', 'OPTIONS', 'POST', 'PUT', 'DELETE'] },
      { url: /\/api\/v1\/users(.*)/, methods:['GET','OPTIONS','POST', 'PUT']},
      { url: /\/api\/v1\/email(.*)/, methods:['GET','OPTIONS','POST', 'PUT']},
      `${api}/users/login`,

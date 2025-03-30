@@ -56,6 +56,11 @@ router.post('/verify-discount-code', authenticateToken, async (req, res) => {
             return res.status(404).json({ error: 'Discount code not found or not applicable to this client' });
         }
 
+
+        if (discount.usageCount >= discount.usageLimit){
+            return res.status(404).json({ error: 'Discount code has been over used' });
+        }
+
         let eligibleProducts = [];
         let totalDiscount = 0;
 
@@ -142,11 +147,10 @@ router.get('/checkout-codes', authenticateToken, async (req, res) => {
     try {
         // Assuming clientId is part of the authenticated user
         const clientId = req.clientId;
-        console.log(clientId);
+
         // Validate clientId if needed
         if (!clientId) {
             return res.status(400).json({ error: 'Client ID is required' }
-              
             );
         }
 
@@ -172,14 +176,14 @@ router.get('/checkout-codes', authenticateToken, async (req, res) => {
 // Update a checkout code by ID
 router.put('/checkout-codes/:id', authenticateToken, async (req, res) => {
     try {
-        const {isActive, } = req.body; // Assuming these are the fields you want to update
-
         // Update the checkout code with the provided data
         const updatedCheckoutCode = await DiscountCode.findOneAndUpdate(
             { _id: req.params.id, clientID: req.clientId }, // Ensure the client is the owner of the checkout code
-            { isActive}, // Fields to update
+            { isActive: req.body.isActive}, // Fields to update
             { new: true } // Return the updated document
         );
+
+        console.log(updatedCheckoutCode);
 
         if (!updatedCheckoutCode) {
             return res.status(404).json({ error: 'Checkout code not found or does not belong to the client' });
