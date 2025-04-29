@@ -4,8 +4,19 @@ const jwt = require('jsonwebtoken');
 const Client = require('../models/client');
 const router = express.Router();
 const authJwt = require('../helpers/jwt'); // Import the authJwt middleware
+const rateLimit = require('express-rate-limit');
 
 router.use(authJwt());
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: {
+    error: 'Too many login attempts, please try again later.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // Create a new client
 router.post('/', async (req, res) => {
@@ -128,7 +139,8 @@ router.put('/:clientId', async (req, res) => {
 });
 
 // Client login
-router.post('/login', async (req, res) => {
+router.post('/login',loginLimiter, async (req, res) => {
+  console.log(req.body);
   try {
     const client = await Client.findOne({ clientID: req.body.clientID });
     if (!client) {

@@ -15,6 +15,8 @@ const errorHandler = require('./helpers/error-handler');
 
 app.use(cors());
 app.options('*',cors());
+app.disable('x-powered-by');
+
 
 
 

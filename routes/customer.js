@@ -5,7 +5,19 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { sendVerificationEmail } = require('../utils/email'); // Import the function to send a verification email
 const Client = require('../models/client'); // Import your client model
+const rateLimit = require('express-rate-limit');
 
+
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: {
+    error: 'Too many login attempts, please try again later.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // Middleware function to validate token and extract clientID
 const validateTokenAndExtractClientID = (req, res, next) => {
@@ -221,7 +233,7 @@ router.put('/:customerId', async (req, res) => {
 
 
 // Login route
-router.post('/login', validateTokenAndExtractClientID, async (req, res) => {
+router.post('/login', loginLimiter, validateTokenAndExtractClientID, async (req, res) => {
   try {
     const { emailAddress, password } = req.body;
     const siteToken = req.headers.authorization;
