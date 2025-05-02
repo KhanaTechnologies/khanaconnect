@@ -148,7 +148,7 @@ router.post('/login',loginLimiter, async (req, res) => {
     }
     if (client && bcrypt.compareSync(req.body.password, client.password)) {
       const token = jwt.sign(
-        { clientID: client.clientID, merchant_id: client.merchant_id },
+        { clientID: client.clientID, merchant_id: client.merchant_id, isActive: true },
         process.env.secret,
         { expiresIn: '1d' }
       );

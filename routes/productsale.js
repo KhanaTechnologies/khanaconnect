@@ -2,11 +2,11 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const Product = require('../models/product');
-const { Category } = require('../models/category');
+const  Category  = require('../models/category');
 const multer = require('multer');
 const { Octokit } = require("@octokit/rest");
 const { body, validationResult } = require('express-validator');
-const { SalesItem } = require('../models/salesItem')
+const  { SalesItem }  = require('../models/salesItem')
 require('dotenv').config();
 
 
