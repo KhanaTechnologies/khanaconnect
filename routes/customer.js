@@ -234,6 +234,9 @@ router.put('/:customerId', async (req, res) => {
 
 // Login route
 router.post('/login', loginLimiter, validateTokenAndExtractClientID, async (req, res) => {
+  console.log(req.body);
+
+  console.log("ttset");
   try {
     const { emailAddress, password } = req.body;
     const siteToken = req.headers.authorization;
@@ -276,8 +279,12 @@ router.post('/login', loginLimiter, validateTokenAndExtractClientID, async (req,
 
       const customer_id = customer._id;
 
-      // Generate JWT token
-      const token = jwt.sign({ customerID: customer._id, clientID: customer.clientID }, process.env.secret);
+      // Generate JWT token for customer
+      const token = jwt.sign(
+        { customerID: customer._id, clientID: customer.clientID },
+        process.env.secret,
+        { expiresIn: '1d' } // Optional expiration
+      );
 
       // Send token in response
       res.json({ token, customer_id });

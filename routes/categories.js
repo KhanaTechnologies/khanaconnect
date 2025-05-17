@@ -145,29 +145,25 @@ router.put('/:id', upload.single('image'), validateTokenAndExtractClientID, asyn
 
 
 
-// Create a new category
 router.post('/', upload.single('image'), validateTokenAndExtractClientID, async (req, res) => {
   try {
-    const file = req.file; // ✅ Fix: req.file, not req.files
+    const file = req.file;
+    let imagePath = '';
 
-    if (!file) {
-      return res.status(400).json({ error: 'No image file provided' });
+    // ✅ If image is provided, validate and upload it
+    if (file) {
+      if (!FILE_TYPE_MAP[file.mimetype]) {
+        return res.status(400).json({ error: 'Invalid file type' });
+      }
+
+      const fileName = `${file.originalname.split(' ').join('-')}-${Date.now()}.${FILE_TYPE_MAP[file.mimetype]}`;
+      imagePath = await uploadImageToGitHub(file, fileName);
     }
-
-    if (!FILE_TYPE_MAP[file.mimetype]) {
-      return res.status(400).json({ error: 'Invalid file type' });
-    }
-
-    // ✅ Generate a unique file name
-    const fileName = `${file.originalname.split(' ').join('-')}-${Date.now()}.${FILE_TYPE_MAP[file.mimetype]}`;
-
-    // ✅ Upload image to GitHub
-    const imagePath = await uploadImageToGitHub(file, fileName);
 
     // ✅ Save to database
     let category = new Category({
       name: req.body.name,
-      image: imagePath, // Fix: Use `imagePath`, not an array
+      image: imagePath || '', // Set empty string if no image
       icon: req.body.icon,
       color: req.body.color,
       clientID: req.clientID,
@@ -184,6 +180,7 @@ router.post('/', upload.single('image'), validateTokenAndExtractClientID, async 
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
+
 
 
 // Delete a category

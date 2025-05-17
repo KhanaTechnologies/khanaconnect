@@ -31,11 +31,7 @@ const clientSchema = new Schema({
   permissions: {
     bookings: { type: Boolean, default: false },
     orders: { type: Boolean, default: false },
-    staff: { type: Boolean, default: false },
-    services: { type: Boolean, default: false },
-    categories : { type: Boolean, default: false },
-    products: { type: Boolean, default: false },
-    sales_promotions: { type: Boolean, default: false }
+    staff: { type: Boolean, default: false }
   },
      // ✅ Delivery Options - Array of objects
      deliveryOptions: [

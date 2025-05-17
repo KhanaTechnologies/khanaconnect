@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const Product = require('../models/product');
-const Category  = require('../models/category');
+const {Category}  = require('../models/category');
 const multer = require('multer');
 const { Octokit } = require("@octokit/rest");
 const { body, validationResult } = require('express-validator');
@@ -98,7 +98,7 @@ router.use((err, req, res, next) => {
     res.status(500).json({ error: 'Internal Server Error' });
 });
 
-//Create new product
+// Create new product
 router.post(
     '/',
     upload.array('images', 5),
@@ -110,7 +110,8 @@ router.post(
     ],
     validateClient,
     async (req, res) => {
-  
+        console.log('Incoming Body:', req.body);
+
         try {
             const errors = validationResult(req);
             if (!errors.isEmpty()) {
@@ -118,99 +119,90 @@ router.post(
             }
 
             const files = req.files;
-            if (!files || files.length < 1) return res.status(400).send('No images in the request');
+            if (!files || files.length < 1) {
+                return res.status(400).send('No images in the request');
+            }
 
             const category = await Category.findById(req.body.category);
-            if (!category) return res.status(400).json({ error: 'Invalid category ID' });
+            if (!category) {
+                return res.status(400).json({ error: 'Invalid category ID' });
+            }
 
-            // ✅ Parse the variants JSON string into the desired format
+            // ✅ Parse and transform variants
             let variants = [];
-            console.log('hit here3');
             try {
-                // Ensure the variants are in string format
                 if (!req.body.variants || typeof req.body.variants !== 'string') {
-                    throw new Error('Variants data is required and should be a string');
+                    throw new Error('Variants data is required and must be a string');
                 }
-            
-                // Parse the JSON string into an array
-                variants = JSON.parse(req.body.variants);
-                
-                // Check if the parsed data is actually an array
-                if (!Array.isArray(variants)) {
-                    throw new Error('Parsed variants are not an array');
+
+                const parsedVariants = JSON.parse(req.body.variants);
+
+                if (!Array.isArray(parsedVariants)) {
+                    throw new Error('Parsed variants should be an array');
                 }
-            
-                console.log('hit here');
-            
-                // Modify the structure of the variants
-                variants = variants.map(variant => {
-                    if (!variant.attributes || !Array.isArray(variant.attributes)) {
-                        throw new Error('Attributes is missing or not an array');
+
+                variants = parsedVariants.map(variant => {
+                    const attribute = variant.attributes?.[0];
+
+                    if (!attribute || !attribute.name || !Array.isArray(attribute.values)) {
+                        throw new Error('Invalid variant attribute structure');
                     }
-            
-                    // Log the variant's attribute structure for debugging
-                    console.log('Attribute name:', variant.attributes[0].name);
-                    console.log('Values:', variant.attributes[0].values);
-            
+
                     return {
-                        name: variant.attributes[0].name,  // Extract name from attributes
-                        values: variant.attributes[0].values.map(value => {
-                            console.log('Value object:', value); // Log each value object to check its structure
-                            return {
-                                value: value.value,
-                                price: value.price,
-                                stock: value.stock
-                            };
-                        })
+                        name: attribute.name,
+                        values: attribute.values.map(value => ({
+                            value: value.value,
+                            price: Number(value.price),
+                            stock: Number(value.stock)
+                        }))
                     };
                 });
-            
-                // Log the final transformed variants with stringified objects to view the full data
-                console.log('Modified variants:', JSON.stringify(variants, null, 2));  // Pretty-print the JSON
-            
+
+                console.log('✅ Transformed Variants:', JSON.stringify(variants, null, 2));
             } catch (err) {
-                console.log('Error in parsing or transforming variants:', err.message);
+                console.error('❌ Error parsing variants:', err.message);
                 return res.status(400).json({ error: 'Invalid variants format', details: err.message });
             }
-            
 
-
-            // ✅ Upload images and get URLs
+            // ✅ Upload images
             const imageUploadPromises = files.map(file => {
                 if (!FILE_TYPE_MAP[file.mimetype]) {
                     throw new Error('Invalid file type');
                 }
+
                 const fileName = `${file.originalname.split(' ').join('-')}-${Date.now()}.${FILE_TYPE_MAP[file.mimetype]}`;
                 return uploadImageToGitHub(file, fileName);
             });
 
             const imagePaths = await Promise.all(imageUploadPromises);
 
-            // ✅ Create and save the product
+            // ✅ Create product document
             const newProduct = new Product({
                 productName: req.body.productName,
                 description: req.body.description,
                 richDescription: req.body.richDescription || '',
                 images: imagePaths,
                 brand: req.body.brand || '',
-                price: Number(req.body.price), // Convert price to Number
-                countInStock: Number(req.body.countInStock), // Convert countInStock to Number
-                category: category, // Store as ObjectId reference
+                price: Number(req.body.price),
+                countInStock: Number(req.body.countInStock),
+                category: category._id,
                 rating: 0,
                 numReviews: 0,
                 isFeatured: false,
-                clientID: req.clientId, // Ensuring `clientID` is stored
-                variants,  // Store variants in the correct format
+                clientID: req.clientId, // double-check your middleware attaches this as `req.clientId`
+                variants: variants
             });
 
             const savedProduct = await newProduct.save();
+            console.log('✅ Product saved:', savedProduct);
             res.json(savedProduct);
         } catch (error) {
-            console.error('Error:', error);
+            console.error('❌ Internal Error:', error);
             res.status(500).json({ error: error.message || 'Internal Server Error' });
         }
     }
 );
+
 
 
 
@@ -235,6 +227,7 @@ router.put(
             }
 
             const files = req.files;
+            console.log(req.body)
             const category = await Category.findById(req.body.category);
             if (!category) return res.status(400).json({ error: 'Invalid category ID' });
 
