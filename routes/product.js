@@ -190,6 +190,8 @@ router.post(
                 numReviews: 0,
                 isFeatured: false,
                 clientID: req.clientId, // double-check your middleware attaches this as `req.clientId`
+                ingredients: req.body.ingredients,
+                usage: req.body.usage,
                 variants: variants
             });
 
@@ -244,7 +246,20 @@ router.put(
                 return res.status(400).json({ error: 'Invalid variants format' });
             }
 
-            let updatedImages = product.images;
+            // ✅ Handle deleted images
+            let updatedImages = [...product.images];
+            if (req.body.deletedImages) {
+                try {
+                    const deletedImages = JSON.parse(req.body.deletedImages);
+                    if (Array.isArray(deletedImages)) {
+                        updatedImages = updatedImages.filter(img => !deletedImages.includes(img));
+                    }
+                } catch (err) {
+                    return res.status(400).json({ error: 'Invalid deletedImages format' });
+                }
+            }
+            
+            // ✅ Upload new images
             if (files.length > 0) {
                 const imageUploadPromises = files.map(file => {
                     if (!FILE_TYPE_MAP[file.mimetype]) {
@@ -269,6 +284,8 @@ router.put(
                 rating: req.body.rating || product.rating,
                 numReviews: req.body.numReviews || product.numReviews,
                 isFeatured: req.body.isFeatured || product.isFeatured,
+                ingredients: req.body.ingredients || product.ingredients,
+                usage: req.body.usage || product.usage,
                 variants,  // ✅ Store dynamic variants
             };
 

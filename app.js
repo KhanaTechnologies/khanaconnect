@@ -8,16 +8,34 @@ const bodyParser = require("body-parser");
 const morgan = require('morgan');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const compression = require('compression');
 require('dotenv/config');
 const authJwt = require('./helpers/jwt');
 const errorHandler = require('./helpers/error-handler');
 
 
+// Security & Performance Middleware
+app.use(helmet());
 app.use(cors());
-app.options('*',cors());
+app.options('*', cors());
+app.use(compression());
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
 app.disable('x-powered-by');
 
+// Request Parsing
+app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
+app.use(cookieParser());
+app.use(logger('dev'));
+app.use(morgan('tiny'));
 
+// Static Files
+app.use("/public/uploads", express.static(__dirname + "/public/uploads"));
+
+// JWT Auth (only for /api/v1)
+app.use('/api/v1', authJwt());
 
 
 //Routers
@@ -36,21 +54,6 @@ var bookingsRouter = require('./routes/booking');
 var staffRouter = require('./routes/staff');
 var serviceRouter = require('./routes/services');
 var adminRouter = require('./routes/admin');
-//Middleware
-app.use(express.json());
-app.use(morgan('tiny'));
-app.use('/api/v1', authJwt());
-app.use(authJwt());
-app.use("/public/uploads", express.static(__dirname + "/public/uploads"));
-app.use(errorHandler);
-//----
-app.use(logger('dev'));
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
-app.use(cookieParser());
-//app.use(express.static(path.join(__dirname, 'public')));
-
-// adding whats app
 
 
 
@@ -81,16 +84,25 @@ app.options('*',cors());
  app.use(`${api}/admin`, adminRouter);
  
 // mongoose.connect(process.env.CONNECTION_STRING,{ useNewUrlParser: true,useUnifiedTopology: true, dbName: 'KhanaConnect_DevDB',} )
- mongoose.connect(process.env.CONNECTION_STRING,{ useNewUrlParser: true,useUnifiedTopology: true, dbName: 'KhanaConnect_ProdDB'} )
-.then(()=>{
-    console.log('Database Connection is ready...')
+// DB Connection with Pooling
+// Replace your current mongoose.connect() with this:
+mongoose.connect(process.env.CONNECTION_STRING, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+    dbName: 'KhanaConnect_ProdDB',
+    maxPoolSize: 10, // Changed from poolSize to maxPoolSize
+    serverSelectionTimeoutMS: 5000, // Optional but recommended
+    socketTimeoutMS: 45000, // Optional but recommended
 })
-.catch((err)=>{
-    console.log(err);
-})
+.then(() => console.log('DB Connected!'))
+.catch(err => console.log('DB Connection Error:', err));
 
+
+  // Uncaught Error Handling
+process.on('uncaughtException', (err) => console.error('💥 UNCAUGHT ERROR:', err));
+process.on('unhandledRejection', (err) => console.error('💥 UNHANDLED REJECTION:', err));
+
+
+// Start Server
 const PORT = process.env.PORT || 3000;
-//Server
-app.listen(PORT, ()=>{
-    console.log('server is running http://localhost:3000');
-})
+app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));

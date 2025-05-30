@@ -22,6 +22,8 @@ const productSchema = new mongoose.Schema({
     brand: { type: String, default: "" },
     category: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true },
     rating: { type: Number, default: 0 },
+    ingredients : {type: String,default: "Ingredients information not available."},
+    usage:{type: String, default: "Usage information not available"},
     numReviews: { type: Number, default: 0 },
     isFeatured: { type: Boolean, default: false },
     clientID: { type: String, required: true }, // Assuming client ID is stored as a string
