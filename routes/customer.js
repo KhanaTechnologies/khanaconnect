@@ -281,7 +281,7 @@ router.post('/login', loginLimiter, validateTokenAndExtractClientID, async (req,
 
       // Generate JWT token for customer
       const token = jwt.sign(
-        { customerID: customer._id, clientID: customer.clientID },
+        { customerID: customer._id, clientID: customer.clientID, isActive: true},
         process.env.secret,
         { expiresIn: '1d' } // Optional expiration
       );
