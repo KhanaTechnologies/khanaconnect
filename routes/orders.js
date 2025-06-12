@@ -294,16 +294,16 @@ router.post('/update-order-payment', async (req, res) => {
             return res.status(400).json({ error: 'Invalid payment details' });
         }
 
-        if (order.paid) {
-            console.log('Order already marked as paid. Skipping email and stock deduction.');
-            return res.json({ success: true, message: 'Order already processed.' });
-        }
-
         const orderId = item_name.split('#')[1]; // Extract order ID from item_name
         const order = await Order.findOne({ _id: orderId }).populate('orderItems').populate('customer');
 
         if (!order) {
             return res.status(404).json({ error: 'Order not found' });
+        }
+
+        if (order.paid) {
+            console.log('Order already marked as paid. Skipping email and stock deduction.');
+            return res.json({ success: true, message: 'Order already processed.' });
         }
 
         order.paid = true;
