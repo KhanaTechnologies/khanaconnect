@@ -316,50 +316,21 @@ router.post('/update-order-payment', async (req, res) => {
             // Deduct countInStock for the product
             product.countInStock -= orderItem.quantity;
 
-            // Deduct quantity for variants (size, color, etc.)
-            // if (orderItem.size) {
-            //     const sizeVariant = product.sizes.id(orderItem.size);
-            //     if (sizeVariant) {
-            //         sizeVariant.quantity -= orderItem.quantity;
-            //     }
-            // }
-            // if (orderItem.color) {
-            //     const colorVariant = product.colors.id(orderItem.color);
-            //     if (colorVariant) {
-            //         colorVariant.quantity -= orderItem.quantity;
-            //     }
-            // }
-            // if (orderItem.material) {
-            //     const materialVariant = product.materials.id(orderItem.material);
-            //     if (materialVariant) {
-            //         materialVariant.quantity -= orderItem.quantity;
-            //     }
-            // }
-            // if (orderItem.style) {
-            //     const styleVariant = product.styles.id(orderItem.style);
-            //     if (styleVariant) {
-            //         styleVariant.quantity -= orderItem.quantity;
-            //     }
-            // }
-            // if (orderItem.title) {
-            //     const titleVariant = product.titles.id(orderItem.title);
-            //     if (titleVariant) {
-            //         titleVariant.quantity -= orderItem.quantity;
-            //     }
-            // }
-
             await product.save();
         }
 
         // Send order confirmation email
-        const client = await Client.findOne({ clientID: order.client });
+        const client = await Client.findOne({ clientID: order.clientID });
         if (client) {
+            console.log('sending mail')
             await sendOrderConfirmationEmail(
                 order.customer.emailAddress,
                 order.orderItems,
                 client.businessEmail,
                 client.businessEmailPassword,
-                order.deliveryPrice
+                order.deliveryPrice,
+                order.clientID,
+                orderId
             );
         }
 

@@ -131,14 +131,14 @@ router.post(
             // ✅ Parse and transform variants
             let variants = [];
             try {
-                if (!req.body.variants || typeof req.body.variants !== 'string') {
-                    throw new Error('Variants data is required and must be a string');
-                }
+                let parsedVariants;
 
-                const parsedVariants = JSON.parse(req.body.variants);
-
-                if (!Array.isArray(parsedVariants)) {
-                    throw new Error('Parsed variants should be an array');
+                if (typeof req.body.variants === 'string') {
+                    parsedVariants = JSON.parse(req.body.variants);
+                } else if (Array.isArray(req.body.variants)) {
+                    parsedVariants = req.body.variants;
+                } else {
+                    throw new Error('Invalid variants format: must be string or array');
                 }
 
                 variants = parsedVariants.map(variant => {
@@ -163,6 +163,7 @@ router.post(
                 console.error('❌ Error parsing variants:', err.message);
                 return res.status(400).json({ error: 'Invalid variants format', details: err.message });
             }
+
 
             // ✅ Upload images
             const imageUploadPromises = files.map(file => {
@@ -227,6 +228,16 @@ router.put(
             if (!errors.isEmpty()) {
                 return res.status(400).json({ errors: errors.array() });
             }
+            
+            // Make sure variants is always an object/array
+            if (typeof req.body.variants === 'string') {
+            try {
+                req.body.variants = JSON.parse(req.body.variants);
+            } catch (err) {
+                return res.status(400).json({ message: 'Invalid variants JSON format' });
+            }
+            }
+
 
             const files = req.files;
             console.log(req.body)

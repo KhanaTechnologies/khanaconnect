@@ -28,6 +28,7 @@ const authJwt = () => {
      { url: /\/api\/v1\/product(.*)/, methods: ['GET'] },
      { url: /\/api\/v1\/productsales(.*)/, methods: ['GET'] },
      `${api}/emailsub/subscribe`,
+     `${api}/orders/update-order-payment`,
      `${api}/users/login`,
      `${api}/users/register`,
     `${api}/customer/login`,
