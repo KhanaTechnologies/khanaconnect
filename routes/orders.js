@@ -8,7 +8,8 @@ const DiscountCode = require('../models/discountCode');
 
 const Product = require('../models/product');
 const { Size } = require('../models/size');
-const { sendOrderConfirmationEmail, orderItemProcessed } = require('../utils/email');
+const { sendOrderConfirmationEmail } = require('../utils/email');
+const { sendOrderStatusUpdateEmail } = require('../utils/email');
 const Client = require('../models/client');
 const { body, validationResult } = require('express-validator');
 
@@ -242,17 +243,54 @@ router.put('/:id', authenticateToken, async (req, res) => {
             return res.status(404).json({ error: 'Order not found or does not belong to client' });
         }
 
-        // Send email notification if status is updated to "Processed"
-        // if (status === 'Processed') {
-        //     const client = await Client.findOne({ clientID: req.clientId });
-        //     if (client) {
-        //         await orderItemProcessed(
-        //             order.customer.emailAddress,
-        //             client.businessEmail,
-        //             client.businessEmailPassword
-        //         );
-        //     }
-        // }
+        const client = await Client.findOne({ clientID: req.clientId });
+        if (client) {
+            if (setStatus === 'processed') {
+                await sendOrderStatusUpdateEmail(
+                    order.customer.emailAddress,
+                    order.customer.customerFirstName + ' ' + order.customer.customerLastName,
+                    setStatus,
+                    req.params.id,
+                    client.return_url,
+                    client.businessEmail,
+                    client.businessEmailPassword,
+                    client.companyName,
+                    'nothing',
+                    'nothing',
+                );
+            }
+
+            if (setStatus === 'delivered') {
+                await sendOrderStatusUpdateEmail(
+                    order.customer.emailAddress,
+                    order.customer.customerFirstName + ' ' + order.customer.customerLastName,
+                    setStatus,
+                    req.params.id,
+                    client.return_url,
+                    client.businessEmail,
+                    client.businessEmailPassword,
+                    client.companyName,
+                    'nothing',
+                    'nothing',
+                );
+            }
+
+            if (setStatus === 'shipped') {
+                await sendOrderStatusUpdateEmail(
+                     order.customer.emailAddress,
+                    order.customer.customerFirstName + ' ' + order.customer.customerLastName,
+                    setStatus,
+                    req.params.id,
+                    client.return_url,
+                    client.businessEmail,
+                    client.businessEmailPassword,
+                    client.companyName,
+                    order._id, // for link to view order
+                    order.orderTrackingLink // tracking link
+                );
+            }
+        }
+
 
         res.json(order);
     } catch (error) {
@@ -294,6 +332,7 @@ router.post('/update-order-payment', async (req, res) => {
             return res.status(400).json({ error: 'Invalid payment details' });
         }
 
+
         const orderId = item_name.split('#')[1]; // Extract order ID from item_name
         const order = await Order.findOne({ _id: orderId }).populate('orderItems').populate('customer');
 
@@ -305,6 +344,7 @@ router.post('/update-order-payment', async (req, res) => {
             console.log('Order already marked as paid. Skipping email and stock deduction.');
             return res.json({ success: true, message: 'Order already processed.' });
         }
+
 
         order.paid = true;
         order.totalPrice = totalPrice;

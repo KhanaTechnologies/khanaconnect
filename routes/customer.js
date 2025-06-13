@@ -3,9 +3,12 @@ const Customer = require('../models/customer');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const { sendVerificationEmail } = require('../utils/email'); // Import the function to send a verification email
+// const { sendVerificationEmail } = require('../utils/sendVerificationEmail'); // Import the function to send a verification email
 const Client = require('../models/client'); // Import your client model
 const rateLimit = require('express-rate-limit');
+const crypto = require('crypto');
+const nodemailer = require('nodemailer');
+const { sendResetPasswordEmail } = require('../utils/email');
 
 
 
@@ -235,8 +238,6 @@ router.put('/:customerId', async (req, res) => {
 // Login route
 router.post('/login', loginLimiter, validateTokenAndExtractClientID, async (req, res) => {
   console.log(req.body);
-
-  console.log("ttset");
   try {
     const { emailAddress, password } = req.body;
     const siteToken = req.headers.authorization;
@@ -295,6 +296,70 @@ router.post('/login', loginLimiter, validateTokenAndExtractClientID, async (req,
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
+
+//Route to Request a Reset Link
+
+router.post('/reset-password',validateTokenAndExtractClientID, async (req, res) => {
+  const { emailAddress } = req.body;
+  try {
+    const emailAddressLower = typeof emailAddress === 'string' ? emailAddress.toLowerCase() : '';
+    // Find customer by email and clientID
+    const customer = await Customer.findOne({
+      emailAddress: emailAddressLower,
+      clientID: req.clientID
+    });
+    if (!customer) return res.status(404).json({ message: 'User not found' });
+
+    const client = await Client.findOne({ clientID: req.clientID });
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiry = Date.now() + 3600000; // 1 hour
+
+    customer.resetPasswordToken = token;
+    customer.resetPasswordExpires = expiry;
+    await customer.save();
+
+    const resetUrl = `${client.return_url}/reset-password/${token}`;
+
+    await sendResetPasswordEmail(
+      customer.emailAddress,
+      customer.customerFirstName + ' ' + customer.customerLastName,
+      client.return_url,
+      resetUrl,
+      client.businessEmail,
+      client.businessEmailPassword,
+      client.companyName
+    )
+
+    res.json({ message: 'Reset link sent to email' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error sending reset email' });
+  }
+});
+
+//Verify Token and Allow Password Reset
+router.post('/reset-password/:token', async (req, res) => {
+  const { token } = req.params;
+  const { password } = req.body;
+  try {
+    const customer = await Customer.findOne({
+      resetPasswordToken: token,
+      resetPasswordExpires: { $gt: Date.now() }, // Check expiry
+    });
+
+    if (!customer) return res.status(400).json({ message: 'Invalid or expired token' });
+
+    customer.passwordHash = bcrypt.hashSync(password,10); // Hash it if using plain-text
+    customer.resetPasswordToken = undefined;
+    customer.resetPasswordExpires = undefined;
+
+    await customer.save();
+    res.json({ message: 'Password successfully updated' });
+  } catch (err) {
+    res.status(500).json({ message: 'Error resetting password' });
+  }
+});
+
 
 
 // Get customer by ID

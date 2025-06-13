@@ -14,7 +14,8 @@ const customerSchema = new Schema({
   city: {type: String, default: ''},
   postalCode: {type: String, default: ''},
   isVerified: {type:Boolean, default: false},
-
+  resetPasswordToken: {type:String, default: ''},
+  resetPasswordExpires: {type:Date, default: ''}
 });
 
 customerSchema.virtual('id').get(function (){return this._id.toHexString();});

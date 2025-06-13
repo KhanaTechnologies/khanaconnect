@@ -148,6 +148,177 @@ console.log(clientEmail,bEmail)
         throw error; // Throw error to handle it in the calling function
     }
 }
+
+
+
+
+async function sendOrderStatusUpdateEmail(
+    clientEmail,
+    customerName,
+    status,
+    orderID,
+    websiteURL,
+    bEmail,
+    BEPass,
+    clientName,
+    trackingID,
+    trackingLink
+) {
+    const formattedClientName = clientName
+        ? 'The ' + clientName
+            .replace(/([A-Z])/g, ' $1')
+            .replace(/^./, str => str.toUpperCase())
+            .trim() + ' Team'
+        : 'The Khana Technologies Team';
+
+    const statusMessages = {
+        processed: {
+            subject: 'Your Order Has Been Processed',
+            message: 'We’ve finished preparing your order and it’s now processed. It will be shipped soon.'
+        },
+        shipped: {
+            subject: 'Your Order Has Been Shipped',
+            message: `Good news! Your order has been shipped. You can track its journey below.`
+        },
+        delivered: {
+            subject: 'Your Order Has Been Delivered',
+            message: 'Your order has been marked as delivered. We hope you enjoy your purchase!'
+        }
+    };
+    console.log('here is the input : ' + clientEmail,
+    customerName,
+    status,
+    orderID,
+    websiteURL,
+    bEmail,
+    BEPass,
+    clientName)
+    const { subject, message } = statusMessages[status.toLowerCase()] || {
+        subject: 'Order Update',
+        message: 'There’s an update regarding your order.'
+    };
+
+    const viewOrderLink = `${websiteURL}/login`; // Adjust path if needed
+    const trackOrderLink = `${websiteURL}/login`;
+
+    const transporter = nodemailer.createTransport({
+        host: 'smtpout.secureserver.net',
+        port: 465,
+        secure: true,
+        auth: {
+            user: bEmail,
+            pass: BEPass
+        }
+    });
+
+    const emailContent = `
+        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
+            <h2 style="text-align: center; color: #444;">Order Update: ${status.toUpperCase()}</h2>
+            <p>Hi ${customerName},</p>
+            <p>${message}</p>
+            <div style="margin: 20px 0; padding: 10px; background-color: #eef6fc; border-left: 4px solid #2196F3;">
+                <h4 style="margin-bottom: 10px;">Order ID</h4>
+                <p>${orderID}</p>
+            </div>
+            <p><a href="${viewOrderLink}" style="background-color: #2196F3; color: white; padding: 10px 15px; text-decoration: none; border-radius: 5px;">View My Order</a></p>
+            ${status === 'shipped' ? `
+            <p style="margin-top: 20px;"><a href="${trackOrderLink}" style="background-color: #4CAF50; color: white; padding: 10px 15px; text-decoration: none; border-radius: 5px;">Track My Order</a></p>
+            ` : ''}
+            <p style="margin-top: 30px;">If you have any questions, feel free to reply to this email.</p>
+            <p>Warm regards,<br>${formattedClientName}</p>
+
+            <hr style="margin-top: 40px;">
+            <p style="font-size: 12px; color: #888;">This email is a notification from ${formattedClientName.replace('The ', '').replace(' Team', '')}.</p>
+        </div>
+    `;
+
+    try {
+        // Send email to client
+        await transporter.sendMail({
+            from: bEmail,
+            to: clientEmail,
+            subject,
+            html: emailContent
+        });
+
+        // Send email to business (yourself)
+        await transporter.sendMail({
+            from: bEmail, // Your GoDaddy email address
+            to: bEmail, // Business email (your email address)
+            subject,
+            html: emailContent // Reuse the same content
+        });
+        console.log(`Order status email (${status}) sent to client successfully`);
+    } catch (error) {
+        console.error(`Error sending order status (${status}) email:`, error);
+        throw error;
+    }
+}
+
+async function sendResetPasswordEmail(
+    clientEmail,
+    customerName,
+    websiteURL,
+    resetLink,
+    bEmail,
+    BEPass,
+    clientName,
+) {
+    const formattedClientName = clientName
+        ? 'The ' + clientName
+            .replace(/([A-Z])/g, ' $1')
+            .replace(/^./, str => str.toUpperCase())
+            .trim() + ' Team'
+        : 'The Khana Technologies Team';
+
+    const transporter = nodemailer.createTransport({
+        host: 'smtpout.secureserver.net',
+        port: 465,
+        secure: true,
+        auth: {
+            user: bEmail,
+            pass: BEPass
+        }
+    });
+
+const emailContent = `
+  <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
+    <h2 style="text-align: center; color: #444;">Reset Your Password</h2>
+    <p>Hi ${customerName},</p>
+    <p>We received a request to reset your password for your account at <strong>${websiteURL}</strong>.</p>
+    <p>If you made this request, click the button below to reset your password:</p>
+
+    <div style="text-align: center; margin: 30px 0;">
+      <a href="${resetLink}" style="background-color: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px;">
+        Reset My Password
+      </a>
+    </div>
+
+    <p>This link will expire shortly. If you did not request this, please ignore this email.</p>
+
+    <p style="margin-top: 30px;">If you have any questions, feel free to reply to this email.</p>
+    <p>Warm regards,<br>${formattedClientName}</p>
+
+    <hr style="margin-top: 40px;">
+    <p style="font-size: 12px; color: #888;">This email is a password reset notification from ${formattedClientName.replace('The ', '').replace(' Team', '')}.</p>
+  </div>
+`;
+
+
+    try {
+        // Send email to client
+        await transporter.sendMail({
+            from: bEmail,
+            to: clientEmail,
+            subject: 'Reset Password',
+            html: emailContent
+        });
+        console.log(`Email sent to client successfully`);
+    } catch (error) {
+        console.error(`Error sending email:`, error);
+        throw error;
+    }
+}
  
 
-module.exports = { sendOrderConfirmationEmail };
+module.exports = { sendOrderConfirmationEmail,sendOrderStatusUpdateEmail,sendResetPasswordEmail };
