@@ -126,12 +126,18 @@ router.post('/registration', async (req, res) => {
       const clientId = user.clientID;
       let client = '';
 
+      // Sanitize and clean input
+      const firstName = req.body.customerFirstName?.trim() || '';
+      const lastName = req.body.customerLastName?.trim() || '';
+      const phoneRaw = req.body.phoneNumber?.trim() || '';
+      const phoneNumber = phoneRaw.startsWith('0') ? phoneRaw : '0' + phoneRaw;
+
       const newCustomer = new Customer({
         clientID: clientId,
-        customerFirstName: req.body.customerFirstName,
-        customerLastName: req.body.customerLastName,
+        customerFirstName: firstName,
+        customerLastName: lastName,
         emailAddress: req.body.emailAddress.toLowerCase(),
-        phoneNumber: req.body.phoneNumber,
+        phoneNumber: phoneNumber,
         passwordHash: bcrypt.hashSync(req.body.password, 10),
         address: `${req.body.street}, ${req.body.apartment}`,
         city: req.body.city,
