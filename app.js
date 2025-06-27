@@ -23,6 +23,8 @@ app.options('*', cors());
 app.use(compression());
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
 app.disable('x-powered-by');
+app.set('trust proxy', 1); // or 'trust proxy', true
+
 
 // Request Parsing
 app.use(express.json());
