@@ -31,6 +31,8 @@ const authJwt = () => {
      `${api}/orders/update-order-payment`,
      `${api}/customer/reset-password`,
      `${api}/customer/reset-password/:token`,
+     `${api}/customer/verify`,
+     `${api}/customer/verify/:token`,
      `${api}/users/login`,
      `${api}/users/register`,
     `${api}/customer/login`,
@@ -47,6 +49,10 @@ async function isRevoked(req, token) {
 
   // Skip revocation check for password reset routes
   if (req.originalUrl.includes('/customer/reset-password/')) {
+    return false;
+  }
+  // Skip revocation check for verify routes
+  if (req.originalUrl.includes('/customer/verify/')) {
     return false;
   }
 

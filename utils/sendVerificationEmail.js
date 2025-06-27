@@ -1,38 +1,58 @@
 const nodemailer = require('nodemailer');
 
 // Function to send user verification email
-async function sendVerificationEmail(userEmail, verificationToken, bEmail, BEPass) {
-    // Create a nodemailer transporter
+async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass, websiteURL, clientName) {
+    const formattedClientName = clientName
+        ? 'The ' + clientName.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase()).trim() + ' Team'
+        : 'The Khana Connect Team';
+
     const transporter = nodemailer.createTransport({
-        host: 'smtpout.secureserver.net', // GoDaddy SMTP server
-        port: 465, // GoDaddy SMTP port (465 or 587)
-        secure: true, // true for 465, false for other ports
+        host: 'smtpout.secureserver.net',
+        port: 465,
+        secure: true,
         auth: {
-            user: bEmail, // Your GoDaddy email address
-            pass: BEPass // Your GoDaddy email password
+            user: bEmail,
+            pass: BEPass
         }
     });
 
+    const emailContent = `
+    <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
+        <h2 style="text-align: center; color: #444;">Verify Your Email Address</h2>
+        <p>Hi there,</p>
+        <p>Thank you for registering. Please verify your email address by clicking the button below:</p>
+
+        <div style="text-align: center; margin: 30px 0;">
+            <a href="${verificationURL}" style="background-color: #28a745; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px;">
+                Verify My Account
+            </a>
+        </div>
+
+        <p>If the button above doesn’t work, copy and paste this link into your browser:</p>
+        <p style="word-break: break-all;"><a href="${verificationURL}">${verificationURL}</a></p>
+
+        <p>This link will expire in 1 hour.</p>
+        <p>If you didn’t sign up for an account, please ignore this email.</p>
+
+        <p style="margin-top: 30px;">Warm regards,<br>${formattedClientName}</p>
+
+        <hr style="margin-top: 40px;">
+        <p style="font-size: 12px; color: #888;">This email was sent by ${formattedClientName.replace('The ', '').replace(' Team', '')} for account verification purposes.</p>
+    </div>
+    `;
+
     try {
-        // Send the verification email
         await transporter.sendMail({
-            from: bEmail, // Your GoDaddy email address
+            from: bEmail,
             to: userEmail,
-            subject: 'Verify Your Account',
-            html: `
-                <p>Hello,</p>
-                <p>Please verify your account by clicking the link below:</p>
-                <a href="https://khanaconnect.onrender.com/api/v1/customer/verify-email?token=${verificationToken}">
-                    Verify Your Account
-                </a>
-                <p>This link will expire in 1 hour.</p>
-            `
+            subject: 'Verify Your Email Address',
+            html: emailContent
         });
 
         console.log('Verification email sent successfully');
     } catch (error) {
         console.error('Error sending verification email:', error);
-        throw error; // Throw error to handle it in the calling function
+        throw error;
     }
 }
 

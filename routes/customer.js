@@ -3,7 +3,7 @@ const Customer = require('../models/customer');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-// const { sendVerificationEmail } = require('../utils/sendVerificationEmail'); // Import the function to send a verification email
+const { sendVerificationEmail } = require('../utils/sendVerificationEmail'); // Import the function to send a verification email
 const Client = require('../models/client'); // Import your client model
 const rateLimit = require('express-rate-limit');
 const crypto = require('crypto');
@@ -39,31 +39,7 @@ const validateTokenAndExtractClientID = (req, res, next) => {
 };
 
 
-// Verification endpoint
-router.get('/verify', async (req, res) => {
-  try {
-    const verificationToken = req.query.token;
-    const decoded = jwt.verify(verificationToken, process.env.emailSecret);
-    const { customerId } = decoded;
-    
-    // Fetch customer details including isVerified field
-    const customer = await Customer.findById(customerId);
 
-    // If customer not found or already verified, return error
-    if (!customer || customer.isVerified) {
-      return res.status(400).json({ error: 'Invalid or expired token' });
-    }
-
-    // Update the isVerified field to true
-    await Customer.findByIdAndUpdate(customerId, { isVerified: true });
-
-    // Send response indicating successful verification
-    res.json({ message: 'Email verification successful' });
-  } catch (error) {
-    console.error('Error verifying token:', error);
-    res.status(400).json({ error: 'Invalid or expired token' });
-  }
-});
 
 
 
@@ -133,7 +109,6 @@ router.post('/', async (req, res) => {
 
 
 
-//Oline registration a new customer
 router.post('/registration', async (req, res) => {
   try {
     console.log(req.body);
@@ -173,8 +148,14 @@ router.post('/registration', async (req, res) => {
         const savedCustomer = await newCustomer.save();
 
         // Optional: Send verification email
-        // const verificationToken = jwt.sign({ customerId: savedCustomer._id }, process.env.emailSecret, { expiresIn: '1h' });
-        // await sendVerificationEmail(savedCustomer.emailAddress, verificationToken, client.businessEmail, client.businessEmailPassword);
+         const verificationToken = crypto.randomBytes(32).toString('hex');
+          savedCustomer.emailVerificationToken = verificationToken;
+          savedCustomer.emailVerificationExpires = Date.now() + 3600000; // 1 hour
+          await savedCustomer.save();
+
+          const verifyUrl = `${client.return_url}/verify-email/${verificationToken}`;
+
+         	await sendVerificationEmail(savedCustomer.emailAddress, verifyUrl, client.businessEmail, client.businessEmailPassword,client.return_url,client.companyName);
 
         res.json(savedCustomer);
       } catch (saveError) {
@@ -332,8 +313,8 @@ router.post('/reset-password',validateTokenAndExtractClientID, async (req, res) 
 
     await sendResetPasswordEmail(
       customer.emailAddress,
-      customer.customerFirstName + ' ' + customer.customerLastName,
-      client.return_url,
+			customer.customerFirstName + ' ' + customer.customerLastName,
+			client.return_url,
       resetUrl,
       client.businessEmail,
       client.businessEmailPassword,
@@ -346,6 +327,31 @@ router.post('/reset-password',validateTokenAndExtractClientID, async (req, res) 
     res.status(500).json({ message: 'Error sending reset email' });
   }
 });
+
+// Verify Token and Activate Customer Account
+router.post('/verify/:token', async (req, res) => {
+  const { token } = req.params;
+  console.log(token);
+  try {
+    const customer = await Customer.findOne({
+      emailVerificationToken: token,
+      emailVerificationExpires: { $gt: Date.now() } // Check if token is still valid
+    });
+
+    if (!customer) return res.status(400).json({ message: 'Invalid or expired token' });
+
+    customer.isVerified = true;
+    customer.emailVerificationToken = undefined;
+    customer.emailVerificationExpires = undefined;
+
+    await customer.save();
+    res.json({ message: 'Email verification successful' });
+  } catch (err) {
+    console.error('Error verifying email:', err);
+    res.status(500).json({ message: 'Error verifying email' });
+  }
+});
+
 
 //Verify Token and Allow Password Reset
 router.post('/reset-password/:token', async (req, res) => {
