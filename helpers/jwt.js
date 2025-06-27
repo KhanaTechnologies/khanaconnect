@@ -35,6 +35,7 @@ const authJwt = () => {
      `${api}/users/register`,
     `${api}/customer/login`,
      `${api}/customer/register`,
+     `${api}/customer/registration`
      `${api}/client/login`,
      `${api}/client/register`,
       // { url: /(.*)/ } 
