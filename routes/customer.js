@@ -234,16 +234,13 @@ router.put('/:customerId', async (req, res) => {
 
 // Login route
 router.post('/login', loginLimiter, validateTokenAndExtractClientID, async (req, res) => {
-  console.log(req.body);
+    //console.log('Incoming login request:', req.body);
+  //console.log('ClientID from middleware:', req.clientID);
   try {
     const { emailAddress, password } = req.body;
-    const siteToken = req.headers.authorization;
+    const client = await Client.findOne({ clientID: req.clientID });
 
-    if (!siteToken || !siteToken.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Unauthorized - Site token missing or invalid format' });
-    }
-
-    const tokenValue = siteToken.split(' ')[1];
+    const tokenValue = client.token;
 
     // Convert email to lowercase if it's a string
     const emailAddressLower = typeof emailAddress === 'string' ? emailAddress.toLowerCase() : '';
@@ -284,8 +281,8 @@ router.post('/login', loginLimiter, validateTokenAndExtractClientID, async (req,
         { expiresIn: '1d' } // Optional expiration
       );
 
-      // Send token in response
-      res.json({ token, customer_id });
+      // Send token and customer details in response
+      res.json({ token, customer });
     });
 
   } catch (error) {
