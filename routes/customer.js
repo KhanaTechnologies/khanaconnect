@@ -136,49 +136,59 @@ router.post('/', async (req, res) => {
 //Oline registration a new customer
 router.post('/registration', async (req, res) => {
   try {
-
+    console.log(req.body);
     const token = req.headers.authorization;
-    if (!token || !token.startsWith('Bearer ')) {return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });}
+    if (!token || !token.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
+    }
     const tokenValue = token.split(' ')[1];
 
     jwt.verify(tokenValue, process.env.secret, async (err, user) => {
       if (err) {
         return res.status(403).json({ error: 'Forbidden - Invalid token', err });
       }
+
       const clientId = user.clientID;
       let client = '';
-      const newCustomer = new Customer({
-        customerFirstName:req.body.customerFirstName,
-        customerLastName:req.body.customerLastName,
-        emailAddress:req.body.emailAddress.toLowerCase(),
-        passwordHash:bcrypt.hashSync(req.body.password,10),
-        clientID: clientId,
-      });
-      try {
-         client = await Client.findOne({ clientID: clientId });
 
+      const newCustomer = new Customer({
+        clientID: clientId,
+        customerFirstName: req.body.customerFirstName,
+        customerLastName: req.body.customerLastName,
+        emailAddress: req.body.emailAddress.toLowerCase(),
+        phoneNumber: req.body.phoneNumber,
+        passwordHash: bcrypt.hashSync(req.body.password, 10),
+        address: `${req.body.street}, ${req.body.apartment}`,
+        city: req.body.city,
+        postalCode: req.body.postalCode
+      });
+
+      try {
+        client = await Client.findOne({ clientID: clientId });
       } catch (error) {
-        console.error('Error finding clients:', error);
+        console.error('Error finding client:', error);
       }
 
       try {
         const savedCustomer = await newCustomer.save();
-         // Send verification email
-      const verificationToken = jwt.sign({ customerId: savedCustomer._id }, process.env.emailSecret, { expiresIn: '1h' });
-      await sendVerificationEmail(savedCustomer.emailAddress, verificationToken, client.businessEmail, client.businessEmailPassword);
+
+        // Optional: Send verification email
+        // const verificationToken = jwt.sign({ customerId: savedCustomer._id }, process.env.emailSecret, { expiresIn: '1h' });
+        // await sendVerificationEmail(savedCustomer.emailAddress, verificationToken, client.businessEmail, client.businessEmailPassword);
 
         res.json(savedCustomer);
       } catch (saveError) {
         console.error('Error saving customer:', saveError);
         res.status(500).json({ error: 'Error saving customer' });
       }
-  });
-    
+    });
+
   } catch (error) {
-    console.error('Error saving customer:', error);
+    console.error('Error registering customer:', error);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
+
 
 
 
