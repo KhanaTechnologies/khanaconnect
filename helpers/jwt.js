@@ -55,6 +55,10 @@ async function isRevoked(req, token) {
   if (req.originalUrl.includes('/customer/verify/')) {
     return false;
   }
+  // Skip revocation check for verify routes
+  if (req.originalUrl.includes('/customer/login')) {
+    return false;
+  }
 
   if (!token.payload.isActive) {
     return true;
