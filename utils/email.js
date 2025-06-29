@@ -3,7 +3,7 @@ const { OrderItem } = require('../models/orderItem');
 const Product = require('../models/product');
 
 // Reusable retry logic for sending emails
-async function sendWithRetry(transporter, mailOptions, retries = 3, delayMs = 1500) {
+async function sendWithRetry(transporter, mailOptions, retries = 1, delayMs = 1500) {
     for (let attempt = 1; attempt <= retries; attempt++) {
         try {
             await transporter.sendMail(mailOptions);

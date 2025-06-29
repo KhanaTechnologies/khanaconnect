@@ -1,7 +1,7 @@
 const nodemailer = require('nodemailer');
 
 const failedAttempts = new Map(); // Tracks failed attempts per email
-const MAX_ATTEMPTS = 3;
+const MAX_ATTEMPTS = 1;
 const COOLDOWN_MINUTES = 30;
 
 function isLockedOut(email) {
