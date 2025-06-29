@@ -161,8 +161,12 @@ router.post('/registration', async (req, res) => {
 
           const verifyUrl = `${client.return_url}/verify-email/${verificationToken}`;
 
-         	await sendVerificationEmail(savedCustomer.emailAddress, verifyUrl, client.businessEmail, client.businessEmailPassword,client.return_url,client.companyName);
-
+         	// Try sending email (but don't crash if it fails)
+          try {
+            await sendVerificationEmail(savedCustomer.emailAddress, verifyUrl, client.businessEmail, client.businessEmailPassword, client.return_url, client.companyName);
+          } catch (emailError) {
+            console.error('Email failed to send:', emailError.message);
+          }
         res.json(savedCustomer);
       } catch (saveError) {
         console.error('Error saving customer:', saveError);

@@ -2,6 +2,20 @@ const nodemailer = require('nodemailer');
 const { OrderItem } = require('../models/orderItem');
 const Product = require('../models/product');
 
+// Reusable retry logic for sending emails
+async function sendWithRetry(transporter, mailOptions, retries = 3, delayMs = 1500) {
+    for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+            await transporter.sendMail(mailOptions);
+            return true;
+        } catch (err) {
+            console.error(`Attempt ${attempt} failed:`, err.message);
+            if (attempt < retries) await new Promise(res => setTimeout(res, delayMs));
+        }
+    }
+    throw new Error('Failed to send email after multiple attempts.');
+}
+
 // Function to send order confirmation email
 async function sendOrderConfirmationEmail(clientEmail, orderItems, bEmail, BEPass, shipping, clientName, orderID) {
 console.log(clientEmail,bEmail)
@@ -124,22 +138,12 @@ console.log(clientEmail,bEmail)
         `;
         console.log('about to send email');
         // Send email to client
-        await transporter.sendMail({
-            from: bEmail, // Your GoDaddy email address
-            to: clientEmail, // Client's email address
-            subject: 'Order Confirmation',
-            html: emailContent
-        });
+        await sendWithRetry(transporter, { from: bEmail, to: clientEmail, subject: 'Order Confirmation', html: emailContent });
 
         console.log('Order confirmation email sent to client successfully');
 
         // Send email to business (yourself)
-        await transporter.sendMail({
-            from: bEmail, // Your GoDaddy email address
-            to: bEmail, // Business email (your email address)
-            subject: 'New Order Received',
-            html: emailContent // Reuse the same content
-        });
+        await sendWithRetry(transporter, { from: bEmail, to: bEmail, subject: 'New Order Received', html: emailContent });
 
         console.log('Order confirmation email sent to business successfully');
 
@@ -234,20 +238,11 @@ async function sendOrderStatusUpdateEmail(
 
     try {
         // Send email to client
-        await transporter.sendMail({
-            from: bEmail,
-            to: clientEmail,
-            subject,
-            html: emailContent
-        });
+        await sendWithRetry(transporter, { from: bEmail, to: clientEmail, subject , html: emailContent });
 
         // Send email to business (yourself)
-        await transporter.sendMail({
-            from: bEmail, // Your GoDaddy email address
-            to: bEmail, // Business email (your email address)
-            subject,
-            html: emailContent // Reuse the same content
-        });
+        await sendWithRetry(transporter, { from: bEmail, to: bEmail, subject , html: emailContent });
+
         console.log(`Order status email (${status}) sent to client successfully`);
     } catch (error) {
         console.error(`Error sending order status (${status}) email:`, error);
@@ -307,12 +302,7 @@ const emailContent = `
 
     try {
         // Send email to client
-        await transporter.sendMail({
-            from: bEmail,
-            to: clientEmail,
-            subject: 'Reset Password',
-            html: emailContent
-        });
+        await sendWithRetry(transporter, { from: bEmail, to: clientEmail, subject: 'Reset Password', html: emailContent });
         console.log(`Email sent to client successfully`);
     } catch (error) {
         console.error(`Error sending email:`, error);

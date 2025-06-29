@@ -246,6 +246,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
         const client = await Client.findOne({ clientID: req.clientId });
         if (client) {
             if (setStatus === 'processed') {
+                try {
                 await sendOrderStatusUpdateEmail(
                     order.customer.emailAddress,
                     order.customer.customerFirstName + ' ' + order.customer.customerLastName,
@@ -258,9 +259,13 @@ router.put('/:id', authenticateToken, async (req, res) => {
                     'nothing',
                     'nothing',
                 );
+                } catch (emailError) {
+            console.error('Email failed to send:', emailError.message);
+          }
             }
 
             if (setStatus === 'delivered') {
+                try {
                 await sendOrderStatusUpdateEmail(
                     order.customer.emailAddress,
                     order.customer.customerFirstName + ' ' + order.customer.customerLastName,
@@ -273,9 +278,13 @@ router.put('/:id', authenticateToken, async (req, res) => {
                     'nothing',
                     'nothing',
                 );
+                } catch (emailError) {
+            console.error('Email failed to send:', emailError.message);
+          }
             }
 
             if (setStatus === 'shipped') {
+                try {
                 await sendOrderStatusUpdateEmail(
                      order.customer.emailAddress,
                     order.customer.customerFirstName + ' ' + order.customer.customerLastName,
@@ -288,6 +297,9 @@ router.put('/:id', authenticateToken, async (req, res) => {
                     order._id, // for link to view order
                     order.orderTrackingLink // tracking link
                 );
+                } catch (emailError) {
+            console.error('Email failed to send:', emailError.message);
+          }
             }
         }
 
@@ -367,6 +379,7 @@ router.post('/update-order-payment', async (req, res) => {
         // Send order confirmation email
         const client = await Client.findOne({ clientID: order.clientID });
         if (client) {
+             try {
             console.log('sending mail')
             await sendOrderConfirmationEmail(
                 order.customer.emailAddress,
@@ -377,6 +390,9 @@ router.post('/update-order-payment', async (req, res) => {
                 order.clientID,
                 orderId
             );
+            } catch (emailError) {
+            console.error('Email failed to send:', emailError.message);
+          }
         }
 
         res.json({ success: true});
