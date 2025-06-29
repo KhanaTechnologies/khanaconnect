@@ -14,7 +14,6 @@ function isLockedOut(email) {
     return count >= MAX_ATTEMPTS && minutesSinceLastFail < COOLDOWN_MINUTES;
 }
 
-// Function to send user verification email
 async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass, websiteURL, clientName) {
     console.log(userEmail, verificationURL, bEmail, '********', websiteURL, clientName);
 
@@ -24,16 +23,19 @@ async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass,
 
     if (isLockedOut(bEmail)) {
         console.warn(`Email sending temporarily disabled for ${bEmail} due to repeated failures.`);
-        return; // Or throw an error if you want to notify the user
+        return;
     }
 
     const transporter = nodemailer.createTransport({
-        host: 'smtpout.secureserver.net',
+        host: 'mail.' + websiteURL, // e.g. mail.khanatechnologies.co.za
         port: 465,
         secure: true,
         auth: {
             user: bEmail,
             pass: BEPass
+        },
+        tls: {
+            rejectUnauthorized: false // ← IMPORTANT for some cPanel certificates
         }
     });
 
@@ -64,14 +66,14 @@ async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass,
 
     try {
         await transporter.sendMail({
-            from: bEmail,
+            from: `"${formattedClientName}" <${bEmail}>`, // proper formatting
             to: userEmail,
             subject: 'Verify Your Email Address',
             html: emailContent
         });
 
         console.log('Verification email sent successfully');
-        failedAttempts.delete(bEmail); // Clear any prior failures on success
+        failedAttempts.delete(bEmail);
     } catch (error) {
         console.error('Error sending verification email:', error);
 
