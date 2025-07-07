@@ -111,7 +111,6 @@ router.post('/', async (req, res) => {
 
 router.post('/registration', async (req, res) => {
   try {
-    console.log(req.body);
     const token = req.headers.authorization;
     if (!token || !token.startsWith('Bearer ')) {
       return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });

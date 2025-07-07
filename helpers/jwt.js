@@ -40,6 +40,7 @@ const authJwt = () => {
      `${api}/customer/registration`,
      `${api}/client/login`,
      `${api}/client/register`,
+     `${api}/discountcode/verify-discount-code`,
       // { url: /(.*)/ } 
     ]
   })

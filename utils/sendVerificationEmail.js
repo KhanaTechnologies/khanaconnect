@@ -15,7 +15,6 @@ function isLockedOut(email) {
 }
 
 async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass, websiteURL, clientName) {
-    console.log(userEmail, verificationURL, bEmail, '********', websiteURL, clientName);
 
     const formattedClientName = clientName
         ? 'The ' + clientName.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase()).trim() + ' Team'
