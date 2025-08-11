@@ -9,7 +9,6 @@ const authJwt = () => {
     isRevoked: isRevoked
   }).unless({
     path: [
-     path: [
   { url: /\/api\/v1\/emailsub\/subscribe/, methods: ['POST', 'OPTIONS'] },
   { url: /\/public\/uploads(.*)/, methods: ['GET', 'OPTIONS'] },
   { url: /\/api\/v1\/customer(.*)/, methods: ['GET', 'OPTIONS'] },
