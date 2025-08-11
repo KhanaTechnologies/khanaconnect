@@ -13,7 +13,7 @@ const authJwt = () => {
      { url: /\/public\/uploads(.*)/, methods: ['GET', 'OPTIONS'] },
      { url: /\/api\/v1\/customer(.*)/, methods: ['GET', 'OPTIONS'] },
     //  { url: /\/api\/v1\/notifications(.*)/, methods: ['GET', 'OPTIONS'] }, 
-     { url: /\/api\/v1\/client(.*)/, methods: ['GET', 'OPTIONS'] },
+     { url: /\/api\/v1\/client(.*)/, methods: ['GET','POST', 'OPTIONS'] },
      { url: /\/api\/v1\/categories(.*)/, methods: ['GET', 'OPTIONS'] },
      { url: /\/api\/v1\/tradecation(.*)/, methods: ['GET', 'OPTIONS'] },
      { url: /\/api\/v1\/membership(.*)/, methods: ['GET', 'OPTIONS'] },
