@@ -4,6 +4,7 @@
 
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
+const { config } = require('dotenv');
 
 /**
  * ============================
