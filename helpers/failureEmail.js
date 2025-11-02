@@ -19,13 +19,13 @@ const { config } = require('dotenv');
  * Example (hardcode) - replace values below:
  */
 const CONFIG = {
-  SMTP_HOST: process.env.SMTP_HOST || 'mail.yourdomain.com', // cPanel SMTP host
+  SMTP_HOST: process.env.SMTP_HOST, // cPanel SMTP host
   SMTP_PORT: Number(process.env.SMTP_PORT || 465),          // 465 or 587
   SMTP_SECURE: (process.env.SMTP_SECURE === 'true') || true, // true for 465, false for 587
-  SMTP_USER: process.env.SMTP_USER || 'errors@yourdomain.com', // <-- replace or set env
-  SMTP_PASS: process.env.SMTP_PASS || 'SuperSecretPassword',   // <-- replace or set env
-  ERROR_EMAIL_TO: process.env.ERROR_EMAIL_TO || 'you@yourdomain.com', // where notifications go
-  ERROR_EMAIL_FROM: process.env.ERROR_EMAIL_FROM || 'errors@yourdomain.com'
+  SMTP_USER: process.env.SMTP_USER, // <-- replace or set env
+  SMTP_PASS: process.env.SMTP_PASS,   // <-- replace or set env
+  ERROR_EMAIL_TO: process.env.ERROR_EMAIL_TO, // where notifications go
+  ERROR_EMAIL_FROM: process.env.ERROR_EMAIL_FROM
 };
 
 /**
