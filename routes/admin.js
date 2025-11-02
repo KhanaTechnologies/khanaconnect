@@ -98,10 +98,8 @@ router.get('/clients/:id/token-expiration', authJwt(), async (req, res) => {
 // Admin route to generate a new token for a client
 router.post('/clients/:id/generate-client-token', authJwt(), async (req, res) => {
   try {
-    console.log(req.body);
     const { id } = req.params; // Get client _id from params
     const clientID = await getClientIDFromParams(id); // Get clientID using helper function
-
     // Fetch the client from the database
     const client = await Client.findOne({ clientID });
 
