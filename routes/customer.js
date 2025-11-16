@@ -64,6 +64,18 @@ const validateCustomerInput = (req, res, next) => {
   next();
 };
 
+// Email domain normalization function
+const normalizeEmailDomain = (email) => {
+  if (!email) return email;
+  
+  // Replace common domain variations with standard gmail.com
+  return email
+    .replace(/@gmail\.co\.za$/i, '@gmail.com')
+    .replace(/@googlemail\.com$/i, '@gmail.com')
+    .replace(/@gmai\.com$/i, '@gmail.com')
+    .replace(/@gmal\.com$/i, '@gmail.com');
+};
+
 // --------------------
 // CART MANAGEMENT ROUTES
 // --------------------
@@ -664,6 +676,442 @@ router.get('/analytics/cart-abandonment', validateTokenAndExtractClientID, wrapR
 }));
 
 // --------------------
+// CUSTOMER AUTH ROUTES
+// --------------------
+
+// CREATE / REGISTER CUSTOMER
+router.post('/', validateTokenAndExtractClientID, validateCustomerInput, async (req, res) => {
+  try {
+    const client = await Client.findOne({ clientID: req.clientID });
+    if (!client) return res.status(400).json({ error: 'Client not found' });
+
+    // Normalize email domain during registration
+    const normalizedEmail = normalizeEmailDomain(req.body.emailAddress.toLowerCase());
+
+    // Check if customer already exists
+    const existingCustomer = await Customer.findOne({ 
+      emailAddress: normalizedEmail, 
+      clientID: req.clientID 
+    });
+    
+    if (existingCustomer) {
+      return res.status(409).json({ error: 'Customer with this email already exists' });
+    }
+
+    const newCustomer = new Customer({
+      clientID: req.clientID,
+      customerFirstName: req.body.customerFirstName,
+      customerLastName: req.body.customerLastName,
+      emailAddress: normalizedEmail, // Use normalized email
+      phoneNumber: req.body.phoneNumber,
+      passwordHash: bcrypt.hashSync(req.body.password, 10),
+      address: req.body.street ? `${req.body.street}${req.body.apartment ? `, ${req.body.apartment}` : ''}` : undefined,
+      city: req.body.city,
+      postalCode: req.body.postalCode,
+      preferences: {
+        notificationPreferences: {
+          cartReminders: true,
+          promotions: true,
+          restockAlerts: true
+        },
+        shoppingHabits: {
+          favoriteProducts: [],
+          averageOrderValue: 0,
+          typicalOrderInterval: 0
+        }
+      },
+      cartReminder: {
+        reminderType: 'day',
+        isActive: true,
+        nextReminder: calculateNextReminder('day')
+      }
+    });
+
+    const savedCustomer = await newCustomer.save();
+
+    // Generate verification token
+    const verificationToken = crypto.randomBytes(32).toString('hex');
+    savedCustomer.emailVerificationToken = verificationToken;
+    savedCustomer.emailVerificationExpires = Date.now() + 3600000; // 1 hour
+    await savedCustomer.save();
+
+    const verifyUrl = `${client.return_url}/verify-email/${verificationToken}`;
+
+    try {
+      await sendVerificationEmail(
+        savedCustomer.emailAddress, 
+        verifyUrl, 
+        client.businessEmail, 
+        client.businessEmailPassword, 
+        client.return_url, 
+        client.companyName
+      );
+    } catch (emailError) {
+      console.error('Email failed to send:', emailError.message);
+      // Don't fail the request if email fails
+    }
+
+    // Return customer without sensitive data
+    const customerResponse = savedCustomer.toObject();
+    delete customerResponse.passwordHash;
+    delete customerResponse.emailVerificationToken;
+    delete customerResponse.resetPasswordToken;
+
+    res.status(201).json({
+      success: true,
+      message: 'Customer registered successfully',
+      customer: customerResponse
+    });
+  } catch (error) {
+    console.error('Error registering customer:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// LOGIN CUSTOMER - UPDATED WITH EMAIL NORMALIZATION AND AUTO-RESEND VERIFICATION
+router.post('/login', loginLimiter, validateTokenAndExtractClientID, async (req, res) => {
+  try {
+    const { emailAddress, password } = req.body;
+    
+    if (!emailAddress || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
+    }
+
+    // Normalize email domain for login
+    const normalizedEmail = normalizeEmailDomain(emailAddress.toLowerCase());
+
+    const customer = await Customer.findOne({ 
+      emailAddress: normalizedEmail, 
+      clientID: req.clientID 
+    });
+
+    if (!customer) {
+      return res.status(401).json({ error: 'Invalid email address or password' });
+    }
+
+    const passwordMatch = bcrypt.compareSync(password, customer.passwordHash);
+    if (!passwordMatch) {
+      return res.status(401).json({ error: 'Invalid email address or password' });
+    }
+
+    // Check if email is verified
+    if (!customer.isVerified) {
+      // Auto-resend verification email if not verified
+      const client = await Client.findOne({ clientID: req.clientID });
+      if (client) {
+        const verificationToken = crypto.randomBytes(32).toString('hex');
+        customer.emailVerificationToken = verificationToken;
+        customer.emailVerificationExpires = Date.now() + 3600000; // 1 hour
+        await customer.save();
+
+        const verifyUrl = `${client.return_url}/verify-email/${verificationToken}`;
+        
+        try {
+          await sendVerificationEmail(
+            customer.emailAddress, 
+            verifyUrl, 
+            client.businessEmail, 
+            client.businessEmailPassword, 
+            client.return_url, 
+            client.companyName
+          );
+        } catch (emailError) {
+          console.error('Verification email failed to send:', emailError.message);
+        }
+      }
+
+      return res.status(403).json({ 
+        error: 'Please verify your email address before logging in. A new verification email has been sent to your email address.' 
+      });
+    }
+
+    const token = jwt.sign({ 
+      customerID: customer._id, 
+      clientID: customer.clientID, 
+      isActive: true 
+    }, process.env.JWT_SECRET || process.env.secret, { 
+      expiresIn: '1d' 
+    });
+
+    // Update last activity
+    customer.lastActivity = new Date();
+    await customer.save();
+
+    // Return customer without sensitive data
+    const customerResponse = customer.toObject();
+    delete customerResponse.passwordHash;
+    delete customerResponse.emailVerificationToken;
+    delete customerResponse.resetPasswordToken;
+
+    res.json({ 
+      success: true,
+      message: 'Login successful',
+      token, 
+      customer: customerResponse 
+    });
+  } catch (error) {
+    console.error('Error logging in:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// VERIFY EMAIL
+router.post('/verify/:token', async (req, res) => {
+  try {
+    const customer = await Customer.findOne({
+      emailVerificationToken: req.params.token,
+      emailVerificationExpires: { $gt: Date.now() }
+    });
+    
+    if (!customer) {
+      return res.status(400).json({ error: 'Invalid or expired verification token' });
+    }
+
+    customer.isVerified = true;
+    customer.emailVerificationToken = undefined;
+    customer.emailVerificationExpires = undefined;
+    await customer.save();
+
+    res.json({ 
+      success: true,
+      message: 'Email verification successful' 
+    });
+  } catch (err) {
+    console.error('Error verifying email:', err);
+    res.status(500).json({ error: 'Error verifying email' });
+  }
+});
+
+// RESEND VERIFICATION EMAIL
+router.post('/resend-verification', validateTokenAndExtractClientID, async (req, res) => {
+  try {
+    const { emailAddress } = req.body;
+    
+    if (!emailAddress) {
+      return res.status(400).json({ error: 'Email address is required' });
+    }
+
+    // Normalize email domain
+    const normalizedEmail = normalizeEmailDomain(emailAddress.toLowerCase());
+
+    const customer = await Customer.findOne({ 
+      emailAddress: normalizedEmail, 
+      clientID: req.clientID 
+    });
+    
+    if (!customer) {
+      return res.status(404).json({ error: 'Customer not found' });
+    }
+
+    if (customer.isVerified) {
+      return res.status(400).json({ error: 'Email is already verified' });
+    }
+
+    const client = await Client.findOne({ clientID: req.clientID });
+    if (!client) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+
+    // Generate new verification token
+    const verificationToken = crypto.randomBytes(32).toString('hex');
+    customer.emailVerificationToken = verificationToken;
+    customer.emailVerificationExpires = Date.now() + 3600000; // 1 hour
+    await customer.save();
+
+    const verifyUrl = `${client.return_url}/verify-email/${verificationToken}`;
+
+    try {
+      await sendVerificationEmail(
+        customer.emailAddress, 
+        verifyUrl, 
+        client.businessEmail, 
+        client.businessEmailPassword, 
+        client.return_url, 
+        client.companyName
+      );
+    } catch (emailError) {
+      console.error('Verification email failed to send:', emailError.message);
+      return res.status(500).json({ error: 'Failed to send verification email' });
+    }
+
+    res.json({ 
+      success: true,
+      message: 'Verification email sent successfully' 
+    });
+  } catch (error) {
+    console.error('Error resending verification:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// RESET PASSWORD REQUEST
+router.post('/reset-password', validateTokenAndExtractClientID, async (req, res) => {
+  try {
+    const { emailAddress } = req.body;
+    
+    if (!emailAddress) {
+      return res.status(400).json({ error: 'Email address is required' });
+    }
+
+    // Normalize email domain
+    const normalizedEmail = normalizeEmailDomain(emailAddress.toLowerCase());
+
+    const customer = await Customer.findOne({ 
+      emailAddress: normalizedEmail, 
+      clientID: req.clientID 
+    });
+    
+    if (!customer) {
+      return res.status(404).json({ error: 'Customer not found with this email address' });
+    }
+
+    const client = await Client.findOne({ clientID: req.clientID });
+    if (!client) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+
+    const token = crypto.randomBytes(32).toString('hex');
+    customer.resetPasswordToken = token;
+    customer.resetPasswordExpires = Date.now() + 3600000; // 1 hour
+    await customer.save();
+
+    const resetUrl = `${client.return_url}/reset-password/${token}`;
+    
+    try {
+      await sendResetPasswordEmail(
+        customer.emailAddress, 
+        `${customer.customerFirstName} ${customer.customerLastName}`, 
+        client.return_url, 
+        resetUrl, 
+        client.businessEmail, 
+        client.businessEmailPassword, 
+        client.companyName
+      );
+    } catch (emailError) {
+      console.error('Error sending reset password email:', emailError);
+      return res.status(500).json({ error: 'Error sending reset email' });
+    }
+
+    res.json({ 
+      success: true,
+      message: 'Password reset link sent to your email' 
+    });
+  } catch (err) {
+    console.error('Error in reset password request:', err);
+    res.status(500).json({ error: 'Error processing reset request' });
+  }
+});
+
+// RESET PASSWORD
+router.post('/reset-password/:token', async (req, res) => {
+  try {
+    const { password } = req.body;
+    
+    if (!password || password.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters long' });
+    }
+
+    const customer = await Customer.findOne({ 
+      resetPasswordToken: req.params.token, 
+      resetPasswordExpires: { $gt: Date.now() } 
+    });
+    
+    if (!customer) {
+      return res.status(400).json({ error: 'Invalid or expired reset token' });
+    }
+
+    customer.passwordHash = bcrypt.hashSync(password, 10);
+    customer.resetPasswordToken = undefined;
+    customer.resetPasswordExpires = undefined;
+    await customer.save();
+
+    res.json({ 
+      success: true,
+      message: 'Password successfully updated' 
+    });
+  } catch (err) {
+    console.error('Error resetting password:', err);
+    res.status(500).json({ error: 'Error resetting password' });
+  }
+});
+
+// --------------------
+// CUSTOMER PROFILE ROUTES
+// --------------------
+
+// GET CUSTOMER BY ID
+router.get('/:id', validateTokenAndExtractClientID, async (req, res) => {
+  try {
+    const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID })
+      .select('-passwordHash -emailVerificationToken -resetPasswordToken');
+    
+    if (!customer) {
+      return res.status(404).json({ error: 'Customer not found' });
+    }
+    
+    res.json({
+      success: true,
+      customer
+    });
+  } catch (error) {
+    console.error('Error getting customer:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// GET ALL CUSTOMERS
+router.get('/', validateTokenAndExtractClientID, async (req, res) => {
+  try {
+    const customers = await Customer.find({ clientID: req.clientID })
+      .select('-passwordHash -emailVerificationToken -resetPasswordToken');
+    
+    res.json({
+      success: true,
+      customers,
+      count: customers.length
+    });
+  } catch (error) {
+    console.error('Error getting customers:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// DELETE CUSTOMER
+router.delete('/:id', validateTokenAndExtractClientID, async (req, res) => {
+  try {
+    const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
+    if (!customer) {
+      return res.status(404).json({ success: false, error: 'Customer not found' });
+    }
+
+    await Customer.findByIdAndDelete(req.params.id);
+    
+    res.json({ 
+      success: true, 
+      message: 'Customer deleted successfully' 
+    });
+  } catch (error) {
+    console.error('Error deleting customer:', error);
+    res.status(500).json({ success: false, error: 'Internal Server Error' });
+  }
+});
+
+// CUSTOMER COUNT
+router.get('/get/count', validateTokenAndExtractClientID, async (req, res) => {
+  try {
+    const customerCount = await Customer.countDocuments({ clientID: req.clientID });
+    
+    res.json({ 
+      success: true, 
+      count: customerCount 
+    });
+  } catch (error) {
+    console.error('Error counting customers:', error);
+    res.status(500).json({ success: false, error: 'Internal Server Error' });
+  }
+});
+
+// --------------------
 // HELPER FUNCTIONS
 // --------------------
 
@@ -998,344 +1446,5 @@ function analyzeTimeBasedPatterns(customers) {
   });
   return hourCount;
 }
-
-// --------------------
-// CUSTOMER AUTH ROUTES (FIXED DUPLICATES)
-// --------------------
-
-// CREATE / REGISTER CUSTOMER
-router.post('/', validateTokenAndExtractClientID, validateCustomerInput, async (req, res) => {
-  try {
-    const client = await Client.findOne({ clientID: req.clientID });
-    if (!client) return res.status(400).json({ error: 'Client not found' });
-
-    // Check if customer already exists
-    const existingCustomer = await Customer.findOne({ 
-      emailAddress: req.body.emailAddress.toLowerCase(), 
-      clientID: req.clientID 
-    });
-    
-    if (existingCustomer) {
-      return res.status(409).json({ error: 'Customer with this email already exists' });
-    }
-
-    const newCustomer = new Customer({
-      clientID: req.clientID,
-      customerFirstName: req.body.customerFirstName,
-      customerLastName: req.body.customerLastName,
-      emailAddress: req.body.emailAddress.toLowerCase(),
-      phoneNumber: req.body.phoneNumber,
-      passwordHash: bcrypt.hashSync(req.body.password, 10),
-      address: req.body.street ? `${req.body.street}${req.body.apartment ? `, ${req.body.apartment}` : ''}` : undefined,
-      city: req.body.city,
-      postalCode: req.body.postalCode,
-      preferences: {
-        notificationPreferences: {
-          cartReminders: true,
-          promotions: true,
-          restockAlerts: true
-        },
-        shoppingHabits: {
-          favoriteProducts: [],
-          averageOrderValue: 0,
-          typicalOrderInterval: 0
-        }
-      },
-      cartReminder: {
-        reminderType: 'day',
-        isActive: true,
-        nextReminder: calculateNextReminder('day')
-      }
-    });
-
-    const savedCustomer = await newCustomer.save();
-
-    // Generate verification token
-    const verificationToken = crypto.randomBytes(32).toString('hex');
-    savedCustomer.emailVerificationToken = verificationToken;
-    savedCustomer.emailVerificationExpires = Date.now() + 3600000; // 1 hour
-    await savedCustomer.save();
-
-    const verifyUrl = `${client.return_url}/verify-email/${verificationToken}`;
-
-    try {
-      await sendVerificationEmail(
-        savedCustomer.emailAddress, 
-        verifyUrl, 
-        client.businessEmail, 
-        client.businessEmailPassword, 
-        client.return_url, 
-        client.companyName
-      );
-    } catch (emailError) {
-      console.error('Email failed to send:', emailError.message);
-      // Don't fail the request if email fails
-    }
-
-    // Return customer without sensitive data
-    const customerResponse = savedCustomer.toObject();
-    delete customerResponse.passwordHash;
-    delete customerResponse.emailVerificationToken;
-    delete customerResponse.resetPasswordToken;
-
-    res.status(201).json({
-      success: true,
-      message: 'Customer registered successfully',
-      customer: customerResponse
-    });
-  } catch (error) {
-    console.error('Error registering customer:', error);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
-
-// LOGIN CUSTOMER
-router.post('/login', loginLimiter, validateTokenAndExtractClientID, async (req, res) => {
-  try {
-    const { emailAddress, password } = req.body;
-    
-    if (!emailAddress || !password) {
-      return res.status(400).json({ error: 'Email and password are required' });
-    }
-
-    const customer = await Customer.findOne({ 
-      emailAddress: emailAddress.toLowerCase(), 
-      clientID: req.clientID 
-    });
-    
-    if (!customer) {
-      return res.status(401).json({ error: 'Invalid email address or password' });
-    }
-
-    const passwordMatch = bcrypt.compareSync(password, customer.passwordHash);
-    if (!passwordMatch) {
-      return res.status(401).json({ error: 'Invalid email address or password' });
-    }
-
-    // Check if email is verified
-    if (!customer.isVerified) {
-      return res.status(403).json({ error: 'Please verify your email address before logging in' });
-    }
-
-    const token = jwt.sign({ 
-      customerID: customer._id, 
-      clientID: customer.clientID, 
-      isActive: true 
-    }, process.env.JWT_SECRET || process.env.secret, { 
-      expiresIn: '1d' 
-    });
-
-    // Update last activity
-    customer.lastActivity = new Date();
-    await customer.save();
-
-    // Return customer without sensitive data
-    const customerResponse = customer.toObject();
-    delete customerResponse.passwordHash;
-    delete customerResponse.emailVerificationToken;
-    delete customerResponse.resetPasswordToken;
-
-    res.json({ 
-      success: true,
-      message: 'Login successful',
-      token, 
-      customer: customerResponse 
-    });
-  } catch (error) {
-    console.error('Error logging in:', error);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
-
-// VERIFY EMAIL
-router.post('/verify/:token', async (req, res) => {
-  try {
-    const customer = await Customer.findOne({
-      emailVerificationToken: req.params.token,
-      emailVerificationExpires: { $gt: Date.now() }
-    });
-    
-    if (!customer) {
-      return res.status(400).json({ error: 'Invalid or expired verification token' });
-    }
-
-    customer.isVerified = true;
-    customer.emailVerificationToken = undefined;
-    customer.emailVerificationExpires = undefined;
-    await customer.save();
-
-    res.json({ 
-      success: true,
-      message: 'Email verification successful' 
-    });
-  } catch (err) {
-    console.error('Error verifying email:', err);
-    res.status(500).json({ error: 'Error verifying email' });
-  }
-});
-
-// RESET PASSWORD REQUEST
-router.post('/reset-password', validateTokenAndExtractClientID, async (req, res) => {
-  try {
-    const { emailAddress } = req.body;
-    
-    if (!emailAddress) {
-      return res.status(400).json({ error: 'Email address is required' });
-    }
-
-    const customer = await Customer.findOne({ 
-      emailAddress: emailAddress.toLowerCase(), 
-      clientID: req.clientID 
-    });
-    
-    if (!customer) {
-      return res.status(404).json({ error: 'Customer not found with this email address' });
-    }
-
-    const client = await Client.findOne({ clientID: req.clientID });
-    if (!client) {
-      return res.status(404).json({ error: 'Client not found' });
-    }
-
-    const token = crypto.randomBytes(32).toString('hex');
-    customer.resetPasswordToken = token;
-    customer.resetPasswordExpires = Date.now() + 3600000; // 1 hour
-    await customer.save();
-
-    const resetUrl = `${client.return_url}/reset-password/${token}`;
-    
-    try {
-      await sendResetPasswordEmail(
-        customer.emailAddress, 
-        `${customer.customerFirstName} ${customer.customerLastName}`, 
-        client.return_url, 
-        resetUrl, 
-        client.businessEmail, 
-        client.businessEmailPassword, 
-        client.companyName
-      );
-    } catch (emailError) {
-      console.error('Error sending reset password email:', emailError);
-      return res.status(500).json({ error: 'Error sending reset email' });
-    }
-
-    res.json({ 
-      success: true,
-      message: 'Password reset link sent to your email' 
-    });
-  } catch (err) {
-    console.error('Error in reset password request:', err);
-    res.status(500).json({ error: 'Error processing reset request' });
-  }
-});
-
-// RESET PASSWORD
-router.post('/reset-password/:token', async (req, res) => {
-  try {
-    const { password } = req.body;
-    
-    if (!password || password.length < 6) {
-      return res.status(400).json({ error: 'Password must be at least 6 characters long' });
-    }
-
-    const customer = await Customer.findOne({ 
-      resetPasswordToken: req.params.token, 
-      resetPasswordExpires: { $gt: Date.now() } 
-    });
-    
-    if (!customer) {
-      return res.status(400).json({ error: 'Invalid or expired reset token' });
-    }
-
-    customer.passwordHash = bcrypt.hashSync(password, 10);
-    customer.resetPasswordToken = undefined;
-    customer.resetPasswordExpires = undefined;
-    await customer.save();
-
-    res.json({ 
-      success: true,
-      message: 'Password successfully updated' 
-    });
-  } catch (err) {
-    console.error('Error resetting password:', err);
-    res.status(500).json({ error: 'Error resetting password' });
-  }
-});
-
-// --------------------
-// CUSTOMER PROFILE ROUTES
-// --------------------
-
-// GET CUSTOMER BY ID
-router.get('/:id', validateTokenAndExtractClientID, async (req, res) => {
-  try {
-    const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID })
-      .select('-passwordHash -emailVerificationToken -resetPasswordToken');
-    
-    if (!customer) {
-      return res.status(404).json({ error: 'Customer not found' });
-    }
-    
-    res.json({
-      success: true,
-      customer
-    });
-  } catch (error) {
-    console.error('Error getting customer:', error);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
-
-// GET ALL CUSTOMERS
-router.get('/', validateTokenAndExtractClientID, async (req, res) => {
-  try {
-    const customers = await Customer.find({ clientID: req.clientID })
-      .select('-passwordHash -emailVerificationToken -resetPasswordToken');
-    
-    res.json({
-      success: true,
-      customers,
-      count: customers.length
-    });
-  } catch (error) {
-    console.error('Error getting customers:', error);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
-
-// DELETE CUSTOMER
-router.delete('/:id', validateTokenAndExtractClientID, async (req, res) => {
-  try {
-    const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
-    if (!customer) {
-      return res.status(404).json({ success: false, error: 'Customer not found' });
-    }
-
-    await Customer.findByIdAndDelete(req.params.id);
-    
-    res.json({ 
-      success: true, 
-      message: 'Customer deleted successfully' 
-    });
-  } catch (error) {
-    console.error('Error deleting customer:', error);
-    res.status(500).json({ success: false, error: 'Internal Server Error' });
-  }
-});
-
-// CUSTOMER COUNT
-router.get('/get/count', validateTokenAndExtractClientID, async (req, res) => {
-  try {
-    const customerCount = await Customer.countDocuments({ clientID: req.clientID });
-    
-    res.json({ 
-      success: true, 
-      count: customerCount 
-    });
-  } catch (error) {
-    console.error('Error counting customers:', error);
-    res.status(500).json({ success: false, error: 'Internal Server Error' });
-  }
-});
 
 module.exports = router;
