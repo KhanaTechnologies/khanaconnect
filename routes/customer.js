@@ -22,19 +22,46 @@ const loginLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// Middleware to validate token and extract clientID
+// Enhanced token validation middleware
 const validateTokenAndExtractClientID = (req, res, next) => {
-  const token = req.headers.authorization;
-  if (!token || !token.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
-  }
+  try {
+    const token = req.headers.authorization;
+    if (!token || !token.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
+    }
 
-  const tokenValue = token.split(' ')[1];
-  jwt.verify(tokenValue, process.env.secret, (err, decoded) => {
-    if (err) return res.status(403).json({ error: 'Forbidden - Invalid token', err });
-    req.clientID = decoded.clientID;
-    next();
-  });
+    const tokenValue = token.split(' ')[1];
+    jwt.verify(tokenValue, process.env.JWT_SECRET || process.env.secret, (err, decoded) => {
+      if (err) {
+        console.error('Token verification error:', err);
+        return res.status(403).json({ error: 'Forbidden - Invalid token' });
+      }
+      req.clientID = decoded.clientID;
+      next();
+    });
+  } catch (error) {
+    console.error('Token validation error:', error);
+    return res.status(401).json({ error: 'Unauthorized - Token validation failed' });
+  }
+};
+
+// Input validation middleware
+const validateCustomerInput = (req, res, next) => {
+  const { customerFirstName, customerLastName, emailAddress, password } = req.body;
+  
+  if (!customerFirstName || !customerLastName) {
+    return res.status(400).json({ error: 'First name and last name are required' });
+  }
+  
+  if (!emailAddress || !/\S+@\S+\.\S+/.test(emailAddress)) {
+    return res.status(400).json({ error: 'Valid email address is required' });
+  }
+  
+  if (password && password.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters long' });
+  }
+  
+  next();
 };
 
 // --------------------
@@ -49,6 +76,15 @@ router.post('/:id/cart', validateTokenAndExtractClientID, wrapRoute(async (req, 
 
     const { productId, quantity = 1, variant } = req.body;
     
+    // Validate input
+    if (!productId) {
+      return res.status(400).json({ error: 'Product ID is required' });
+    }
+
+    if (quantity < 1) {
+      return res.status(400).json({ error: 'Quantity must be at least 1' });
+    }
+    
     // Verify product exists and belongs to client
     const product = await Product.findOne({ _id: productId, clientID: req.clientID });
     if (!product) {
@@ -57,7 +93,7 @@ router.post('/:id/cart', validateTokenAndExtractClientID, wrapRoute(async (req, 
 
     // Check stock availability
     let availableStock = product.countInStock;
-    if (variant && product.variants.length > 0) {
+    if (variant && product.variants && product.variants.length > 0) {
       const variantOption = product.variants.find(v => 
         v.name === variant.name && v.values.some(val => val.value === variant.value)
       );
@@ -68,7 +104,10 @@ router.post('/:id/cart', validateTokenAndExtractClientID, wrapRoute(async (req, 
     }
 
     if (availableStock < quantity) {
-      return res.status(400).json({ error: 'Insufficient stock available' });
+      return res.status(400).json({ 
+        error: 'Insufficient stock available',
+        availableStock 
+      });
     }
 
     // Calculate final price (considering variants and sales)
@@ -85,15 +124,17 @@ router.post('/:id/cart', validateTokenAndExtractClientID, wrapRoute(async (req, 
     // Find existing item in cart
     const existingItemIndex = customer.cart.findIndex(item => 
       item.productId.toString() === productId && 
-      item.variant?.name === variant?.name && 
-      item.variant?.value === variant?.value
+      JSON.stringify(item.variant) === JSON.stringify(variant)
     );
     
     if (existingItemIndex > -1) {
       // Update existing item
       const newQuantity = customer.cart[existingItemIndex].quantity + quantity;
       if (newQuantity > availableStock) {
-        return res.status(400).json({ error: 'Cannot add more than available stock' });
+        return res.status(400).json({ 
+          error: 'Cannot add more than available stock',
+          availableStock 
+        });
       }
       customer.cart[existingItemIndex].quantity = newQuantity;
       customer.cart[existingItemIndex].lastAddedAt = new Date();
@@ -104,7 +145,7 @@ router.post('/:id/cart', validateTokenAndExtractClientID, wrapRoute(async (req, 
         productName: product.productName,
         quantity,
         price: finalPrice,
-        image: product.images[0] || '',
+        image: product.images && product.images[0] || '',
         category: product.category?.name || '',
         variant: variant || {},
         addedAt: new Date(),
@@ -118,11 +159,16 @@ router.post('/:id/cart', validateTokenAndExtractClientID, wrapRoute(async (req, 
     // Populate cart with product details for response
     const populatedCart = await Promise.all(
       customer.cart.map(async (item) => {
-        const productDetails = await Product.findById(item.productId).select('productName images category countInStock');
-        return {
-          ...item.toObject(),
-          product: productDetails
-        };
+        try {
+          const productDetails = await Product.findById(item.productId).select('productName images category countInStock');
+          return {
+            ...item.toObject(),
+            product: productDetails
+          };
+        } catch (error) {
+          console.error('Error populating product details:', error);
+          return item.toObject();
+        }
       })
     );
 
@@ -141,46 +187,52 @@ router.post('/:id/cart', validateTokenAndExtractClientID, wrapRoute(async (req, 
   }
 }));
 
-// UPDATE CART ITEM QUANTITY
+// UPDATE CART ITEM QUANTITY - FIXED VARIANT COMPARISON
 router.put('/:id/cart/:productId', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
 
     const { quantity, variant } = req.body;
+    
+    if (quantity === undefined) {
+      return res.status(400).json({ error: 'Quantity is required' });
+    }
+
     const cartItem = customer.cart.find(item => 
       item.productId.toString() === req.params.productId && 
-      item.variant?.name === variant?.name && 
-      item.variant?.value === variant?.value
+      JSON.stringify(item.variant) === JSON.stringify(variant || {})
     );
     
     if (!cartItem) return res.status(404).json({ error: 'Item not found in cart' });
 
-    // Check stock availability
-    const product = await Product.findOne({ _id: req.params.productId, clientID: req.clientID });
-    if (!product) return res.status(404).json({ error: 'Product not found' });
+    // Check stock availability only if increasing quantity
+    if (quantity > cartItem.quantity) {
+      const product = await Product.findOne({ _id: req.params.productId, clientID: req.clientID });
+      if (!product) return res.status(404).json({ error: 'Product not found' });
 
-    let availableStock = product.countInStock;
-    if (variant && product.variants.length > 0) {
-      const variantOption = product.variants.find(v => 
-        v.name === variant.name && v.values.some(val => val.value === variant.value)
-      );
-      if (variantOption) {
-        const specificVariant = variantOption.values.find(v => v.value === variant.value);
-        availableStock = specificVariant ? specificVariant.stock : product.countInStock;
+      let availableStock = product.countInStock;
+      if (variant && product.variants && product.variants.length > 0) {
+        const variantOption = product.variants.find(v => 
+          v.name === variant.name && v.values.some(val => val.value === variant.value)
+        );
+        if (variantOption) {
+          const specificVariant = variantOption.values.find(v => v.value === variant.value);
+          availableStock = specificVariant ? specificVariant.stock : product.countInStock;
+        }
       }
-    }
 
-    if (quantity > availableStock) {
-      return res.status(400).json({ error: 'Cannot add more than available stock' });
+      const quantityIncrease = quantity - cartItem.quantity;
+      if (quantityIncrease > availableStock) {
+        return res.status(400).json({ error: 'Cannot add more than available stock' });
+      }
     }
 
     if (quantity <= 0) {
       // Remove item if quantity is 0 or less
       customer.cart = customer.cart.filter(item => 
         !(item.productId.toString() === req.params.productId && 
-          item.variant?.name === variant?.name && 
-          item.variant?.value === variant?.value)
+          JSON.stringify(item.variant) === JSON.stringify(variant || {}))
       );
     } else {
       cartItem.quantity = quantity;
@@ -204,7 +256,7 @@ router.put('/:id/cart/:productId', validateTokenAndExtractClientID, wrapRoute(as
   }
 }));
 
-// REMOVE FROM CART
+// REMOVE FROM CART - FIXED VARIANT COMPARISON
 router.delete('/:id/cart/:productId', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
@@ -212,11 +264,15 @@ router.delete('/:id/cart/:productId', validateTokenAndExtractClientID, wrapRoute
 
     const { variant } = req.body;
     
+    const initialCartLength = customer.cart.length;
     customer.cart = customer.cart.filter(item => 
       !(item.productId.toString() === req.params.productId && 
-        item.variant?.name === variant?.name && 
-        item.variant?.value === variant?.value)
+        JSON.stringify(item.variant) === JSON.stringify(variant || {}))
     );
+    
+    if (customer.cart.length === initialCartLength) {
+      return res.status(404).json({ error: 'Item not found in cart' });
+    }
     
     customer.lastActivity = new Date();
     await customer.save();
@@ -265,13 +321,23 @@ router.get('/:id/cart', validateTokenAndExtractClientID, wrapRoute(async (req, r
     // Populate cart with product details
     const populatedCart = await Promise.all(
       customer.cart.map(async (item) => {
-        const product = await Product.findById(item.productId).select('productName images category countInStock salePercentage');
-        return {
-          ...item.toObject(),
-          product: product,
-          currentPrice: item.price,
-          isOnSale: product.salePercentage > 0
-        };
+        try {
+          const product = await Product.findById(item.productId).select('productName images category countInStock salePercentage');
+          return {
+            ...item.toObject(),
+            product: product,
+            currentPrice: item.price,
+            isOnSale: product && product.salePercentage > 0
+          };
+        } catch (error) {
+          console.error('Error populating product:', error);
+          return {
+            ...item.toObject(),
+            product: null,
+            currentPrice: item.price,
+            isOnSale: false
+          };
+        }
       })
     );
 
@@ -301,6 +367,11 @@ router.post('/:id/orders', validateTokenAndExtractClientID, wrapRoute(async (req
 
     const { orderId, products, totalAmount, status = 'completed' } = req.body;
 
+    // Validate required fields
+    if (!orderId || !products || !totalAmount) {
+      return res.status(400).json({ error: 'Order ID, products, and total amount are required' });
+    }
+
     // Add order to history
     customer.orderHistory.push({
       orderId,
@@ -323,7 +394,7 @@ router.post('/:id/orders', validateTokenAndExtractClientID, wrapRoute(async (req
     customer.totalSpent += totalAmount;
     customer.lastActivity = new Date();
     
-    // Update shopping habits
+    // Initialize shopping habits if not exists
     if (!customer.preferences.shoppingHabits) {
       customer.preferences.shoppingHabits = {
         averageOrderValue: 0,
@@ -354,7 +425,7 @@ router.post('/:id/orders', validateTokenAndExtractClientID, wrapRoute(async (req
     
     // Update favorite products
     products.forEach(product => {
-      if (!customer.preferences.shoppingHabits.favoriteProducts.includes(product.productId)) {
+      if (product.productId && !customer.preferences.shoppingHabits.favoriteProducts.includes(product.productId)) {
         customer.preferences.shoppingHabits.favoriteProducts.push(product.productId);
       }
     });
@@ -453,6 +524,8 @@ router.post('/:id/send-cart-reminder', validateTokenAndExtractClientID, wrapRout
     }
 
     const client = await Client.findOne({ clientID: req.clientID });
+    if (!client) return res.status(404).json({ error: 'Client not found' });
+
     await sendCartReminderEmail(customer, client);
 
     // Update reminder tracking
@@ -682,15 +755,15 @@ function generateCustomerBehaviorInsights(customers, period) {
   }
 
   const recentCustomers = customers.filter(c => c.lastActivity >= startDate);
-  const activeCustomers = customers.filter(c => c.cart.length > 0 || c.orderHistory.length > 0);
+  const activeCustomers = customers.filter(c => c.cart.length > 0 || (c.orderHistory && c.orderHistory.length > 0));
 
   return {
     totalCustomers: customers.length,
     activeCustomers: activeCustomers.length,
     recentActivity: recentCustomers.length,
-    averageCartSize: activeCustomers.reduce((sum, c) => sum + c.cart.length, 0) / activeCustomers.length || 0,
-    averageOrderValue: activeCustomers.reduce((sum, c) => sum + c.totalSpent, 0) / activeCustomers.length || 0,
-    cartAbandonmentRate: (activeCustomers.filter(c => c.cart.length > 0 && c.totalOrders === 0).length / activeCustomers.length) * 100 || 0,
+    averageCartSize: activeCustomers.length > 0 ? activeCustomers.reduce((sum, c) => sum + c.cart.length, 0) / activeCustomers.length : 0,
+    averageOrderValue: activeCustomers.length > 0 ? activeCustomers.reduce((sum, c) => sum + c.totalSpent, 0) / activeCustomers.length : 0,
+    cartAbandonmentRate: activeCustomers.length > 0 ? (activeCustomers.filter(c => c.cart.length > 0 && c.totalOrders === 0).length / activeCustomers.length) * 100 : 0,
     topCategories: getTopCategories(activeCustomers),
     customerRetention: calculateRetentionRate(customers, period),
     repeatPurchaseRate: calculateRepeatPurchaseRate(customers)
@@ -711,27 +784,29 @@ async function analyzePopularProducts(customers, limit, period) {
 
   for (const customer of customers) {
     // Count from order history (filtered by period)
-    customer.orderHistory
-      .filter(order => order.orderDate >= dateFilter)
-      .forEach(order => {
-        order.products.forEach(product => {
-          if (!productStats[product.productId]) {
-            productStats[product.productId] = {
-              productId: product.productId,
-              productName: product.productName,
-              totalOrders: 0,
-              totalQuantity: 0,
-              totalRevenue: 0,
-              inCarts: 0,
-              uniqueCustomers: new Set()
-            };
-          }
-          productStats[product.productId].totalOrders += 1;
-          productStats[product.productId].totalQuantity += product.quantity;
-          productStats[product.productId].totalRevenue += product.price * product.quantity;
-          productStats[product.productId].uniqueCustomers.add(customer._id.toString());
+    if (customer.orderHistory) {
+      customer.orderHistory
+        .filter(order => order.orderDate >= dateFilter)
+        .forEach(order => {
+          order.products.forEach(product => {
+            if (!productStats[product.productId]) {
+              productStats[product.productId] = {
+                productId: product.productId,
+                productName: product.productName,
+                totalOrders: 0,
+                totalQuantity: 0,
+                totalRevenue: 0,
+                inCarts: 0,
+                uniqueCustomers: new Set()
+              };
+            }
+            productStats[product.productId].totalOrders += 1;
+            productStats[product.productId].totalQuantity += product.quantity;
+            productStats[product.productId].totalRevenue += product.price * product.quantity;
+            productStats[product.productId].uniqueCustomers.add(customer._id.toString());
+          });
         });
-      });
+    }
 
     // Count from current carts
     customer.cart.forEach(item => {
@@ -786,9 +861,9 @@ function analyzeCartAbandonment(customers) {
   
   return {
     totalAbandonedCarts: abandonedCarts.length,
-    abandonmentRate: (abandonedCarts.length / customersWithCart.length) * 100 || 0,
-    averageAbandonedCartValue: abandonedCarts.reduce((sum, c) => 
-      sum + c.cart.reduce((cartSum, item) => cartSum + (item.price * item.quantity), 0), 0) / abandonedCarts.length || 0,
+    abandonmentRate: customersWithCart.length > 0 ? (abandonedCarts.length / customersWithCart.length) * 100 : 0,
+    averageAbandonedCartValue: abandonedCarts.length > 0 ? abandonedCarts.reduce((sum, c) => 
+      sum + c.cart.reduce((cartSum, item) => cartSum + (item.price * item.quantity), 0), 0) / abandonedCarts.length : 0,
     potentialRevenue: abandonedCarts.reduce((sum, c) => 
       sum + c.cart.reduce((cartSum, item) => cartSum + (item.price * item.quantity), 0), 0),
     customersNeedingReminders: customersWithCart.filter(c => 
@@ -800,11 +875,13 @@ function analyzeCartAbandonment(customers) {
 
 function getFrequentlyAddedProducts(customer) {
   const productCount = {};
-  customer.orderHistory.forEach(order => {
-    order.products.forEach(product => {
-      productCount[product.productId] = (productCount[product.productId] || 0) + 1;
+  if (customer.orderHistory) {
+    customer.orderHistory.forEach(order => {
+      order.products.forEach(product => {
+        productCount[product.productId] = (productCount[product.productId] || 0) + 1;
+      });
     });
-  });
+  }
 
   return Object.entries(productCount)
     .sort(([,a], [,b]) => b - a)
@@ -813,11 +890,13 @@ function getFrequentlyAddedProducts(customer) {
 }
 
 function calculateCustomerValue(customer) {
-  const monthsAsCustomer = (new Date() - new Date(customer.customerSince)) / (30 * 24 * 60 * 60 * 1000);
-  return monthsAsCustomer > 0 ? customer.totalSpent / monthsAsCustomer : customer.totalSpent;
+  if (!customer.customerSince) return customer.totalSpent;
+  const monthsAsCustomer = Math.max(1, (new Date() - new Date(customer.customerSince)) / (30 * 24 * 60 * 60 * 1000));
+  return customer.totalSpent / monthsAsCustomer;
 }
 
 function calculateMonthlyAverage(customer) {
+  if (!customer.customerSince) return customer.totalSpent;
   const monthsAsCustomer = Math.max(1, (new Date() - new Date(customer.customerSince)) / (30 * 24 * 60 * 60 * 1000));
   return customer.totalSpent / monthsAsCustomer;
 }
@@ -826,13 +905,15 @@ function getTopCategories(customers) {
   const categoryCount = {};
   
   customers.forEach(customer => {
-    customer.orderHistory.forEach(order => {
-      order.products.forEach(product => {
-        if (product.category) {
-          categoryCount[product.category] = (categoryCount[product.category] || 0) + 1;
-        }
+    if (customer.orderHistory) {
+      customer.orderHistory.forEach(order => {
+        order.products.forEach(product => {
+          if (product.category) {
+            categoryCount[product.category] = (categoryCount[product.category] || 0) + 1;
+          }
+        });
       });
-    });
+    }
   });
 
   return Object.entries(categoryCount)
@@ -842,6 +923,8 @@ function getTopCategories(customers) {
 }
 
 function calculateRetentionRate(customers, period) {
+  if (customers.length === 0) return 0;
+  
   const now = new Date();
   let daysBack = 30;
   if (period === 'weekly') daysBack = 7;
@@ -854,6 +937,7 @@ function calculateRetentionRate(customers, period) {
 }
 
 function calculateRepeatPurchaseRate(customers) {
+  if (customers.length === 0) return 0;
   const repeatCustomers = customers.filter(c => c.totalOrders > 1);
   return (repeatCustomers.length / customers.length) * 100;
 }
@@ -862,10 +946,12 @@ function analyzeSeasonalPatterns(customers) {
   // Simplified seasonal analysis
   const monthlySpending = Array(12).fill(0);
   customers.forEach(customer => {
-    customer.orderHistory.forEach(order => {
-      const month = new Date(order.orderDate).getMonth();
-      monthlySpending[month] += order.totalAmount;
-    });
+    if (customer.orderHistory) {
+      customer.orderHistory.forEach(order => {
+        const month = new Date(order.orderDate).getMonth();
+        monthlySpending[month] += order.totalAmount;
+      });
+    }
   });
   return monthlySpending;
 }
@@ -874,20 +960,22 @@ function findProductAssociations(customers) {
   // Simplified product association analysis
   const associations = {};
   customers.forEach(customer => {
-    customer.orderHistory.forEach(order => {
-      if (order.products.length > 1) {
-        order.products.forEach(product => {
-          if (!associations[product.productId]) {
-            associations[product.productId] = new Set();
-          }
-          order.products.forEach(otherProduct => {
-            if (otherProduct.productId !== product.productId) {
-              associations[product.productId].add(otherProduct.productId);
+    if (customer.orderHistory) {
+      customer.orderHistory.forEach(order => {
+        if (order.products.length > 1) {
+          order.products.forEach(product => {
+            if (!associations[product.productId]) {
+              associations[product.productId] = new Set();
             }
+            order.products.forEach(otherProduct => {
+              if (otherProduct.productId !== product.productId) {
+                associations[product.productId].add(otherProduct.productId);
+              }
+            });
           });
-        });
-      }
-    });
+        }
+      });
+    }
   });
 
   return Object.entries(associations)
@@ -901,23 +989,35 @@ function findProductAssociations(customers) {
 function analyzeTimeBasedPatterns(customers) {
   const hourCount = Array(24).fill(0);
   customers.forEach(customer => {
-    customer.orderHistory.forEach(order => {
-      const hour = new Date(order.orderDate).getHours();
-      hourCount[hour]++;
-    });
+    if (customer.orderHistory) {
+      customer.orderHistory.forEach(order => {
+        const hour = new Date(order.orderDate).getHours();
+        hourCount[hour]++;
+      });
+    }
   });
   return hourCount;
 }
 
 // --------------------
-// EXISTING CUSTOMER ROUTES (keep all your existing routes below)
+// CUSTOMER AUTH ROUTES (FIXED DUPLICATES)
 // --------------------
 
 // CREATE / REGISTER CUSTOMER
-router.post('/', validateTokenAndExtractClientID, async (req, res) => {
+router.post('/', validateTokenAndExtractClientID, validateCustomerInput, async (req, res) => {
   try {
     const client = await Client.findOne({ clientID: req.clientID });
     if (!client) return res.status(400).json({ error: 'Client not found' });
+
+    // Check if customer already exists
+    const existingCustomer = await Customer.findOne({ 
+      emailAddress: req.body.emailAddress.toLowerCase(), 
+      clientID: req.clientID 
+    });
+    
+    if (existingCustomer) {
+      return res.status(409).json({ error: 'Customer with this email already exists' });
+    }
 
     const newCustomer = new Customer({
       clientID: req.clientID,
@@ -926,7 +1026,7 @@ router.post('/', validateTokenAndExtractClientID, async (req, res) => {
       emailAddress: req.body.emailAddress.toLowerCase(),
       phoneNumber: req.body.phoneNumber,
       passwordHash: bcrypt.hashSync(req.body.password, 10),
-      address: `${req.body.street}, ${req.body.apartment}`,
+      address: req.body.street ? `${req.body.street}${req.body.apartment ? `, ${req.body.apartment}` : ''}` : undefined,
       city: req.body.city,
       postalCode: req.body.postalCode,
       preferences: {
@@ -959,12 +1059,30 @@ router.post('/', validateTokenAndExtractClientID, async (req, res) => {
     const verifyUrl = `${client.return_url}/verify-email/${verificationToken}`;
 
     try {
-      await sendVerificationEmail(savedCustomer.emailAddress, verifyUrl, client.businessEmail, client.businessEmailPassword, client.return_url, client.companyName);
+      await sendVerificationEmail(
+        savedCustomer.emailAddress, 
+        verifyUrl, 
+        client.businessEmail, 
+        client.businessEmailPassword, 
+        client.return_url, 
+        client.companyName
+      );
     } catch (emailError) {
       console.error('Email failed to send:', emailError.message);
+      // Don't fail the request if email fails
     }
 
-    res.status(201).json(savedCustomer);
+    // Return customer without sensitive data
+    const customerResponse = savedCustomer.toObject();
+    delete customerResponse.passwordHash;
+    delete customerResponse.emailVerificationToken;
+    delete customerResponse.resetPasswordToken;
+
+    res.status(201).json({
+      success: true,
+      message: 'Customer registered successfully',
+      customer: customerResponse
+    });
   } catch (error) {
     console.error('Error registering customer:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -975,200 +1093,245 @@ router.post('/', validateTokenAndExtractClientID, async (req, res) => {
 router.post('/login', loginLimiter, validateTokenAndExtractClientID, async (req, res) => {
   try {
     const { emailAddress, password } = req.body;
-    const customer = await Customer.findOne({ emailAddress: emailAddress.toLowerCase(), clientID: req.clientID });
-    if (!customer) return res.status(401).json({ error: 'Invalid email address or password' });
+    
+    if (!emailAddress || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
+    }
+
+    const customer = await Customer.findOne({ 
+      emailAddress: emailAddress.toLowerCase(), 
+      clientID: req.clientID 
+    });
+    
+    if (!customer) {
+      return res.status(401).json({ error: 'Invalid email address or password' });
+    }
 
     const passwordMatch = bcrypt.compareSync(password, customer.passwordHash);
-    if (!passwordMatch) return res.status(401).json({ error: 'Invalid email address or password' });
+    if (!passwordMatch) {
+      return res.status(401).json({ error: 'Invalid email address or password' });
+    }
 
-    const token = jwt.sign({ customerID: customer._id, clientID: customer.clientID, isActive: true }, process.env.secret, { expiresIn: '1d' });
-    res.json({ token, customer });
-  } catch (error) {
-    console.error('Error logging in:', error);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
+    // Check if email is verified
+    if (!customer.isVerified) {
+      return res.status(403).json({ error: 'Please verify your email address before logging in' });
+    }
 
-// --------------------
-// CREATE / REGISTER CUSTOMER
-// --------------------
-router.post('/', validateTokenAndExtractClientID, async (req, res) => {
-  try {
-    const client = await Client.findOne({ clientID: req.clientID });
-    if (!client) return res.status(400).json({ error: 'Client not found' });
-
-    const newCustomer = new Customer({
-      clientID: req.clientID,
-      customerFirstName: req.body.customerFirstName,
-      customerLastName: req.body.customerLastName,
-      emailAddress: req.body.emailAddress.toLowerCase(),
-      phoneNumber: req.body.phoneNumber,
-      passwordHash: bcrypt.hashSync(req.body.password, 10),
-      address: `${req.body.street}, ${req.body.apartment}`,
-      city: req.body.city,
-      postalCode: req.body.postalCode
+    const token = jwt.sign({ 
+      customerID: customer._id, 
+      clientID: customer.clientID, 
+      isActive: true 
+    }, process.env.JWT_SECRET || process.env.secret, { 
+      expiresIn: '1d' 
     });
 
-    const savedCustomer = await newCustomer.save();
+    // Update last activity
+    customer.lastActivity = new Date();
+    await customer.save();
 
-    // Generate verification token
-    const verificationToken = crypto.randomBytes(32).toString('hex');
-    savedCustomer.emailVerificationToken = verificationToken;
-    savedCustomer.emailVerificationExpires = Date.now() + 3600000; // 1 hour
-    await savedCustomer.save();
+    // Return customer without sensitive data
+    const customerResponse = customer.toObject();
+    delete customerResponse.passwordHash;
+    delete customerResponse.emailVerificationToken;
+    delete customerResponse.resetPasswordToken;
 
-    const verifyUrl = `${client.return_url}/verify-email/${verificationToken}`;
-
-    try {
-      await sendVerificationEmail(savedCustomer.emailAddress, verifyUrl, client.businessEmail, client.businessEmailPassword, client.return_url, client.companyName);
-    } catch (emailError) {
-      console.error('Email failed to send:', emailError.message);
-    }
-
-    res.status(201).json(savedCustomer);
-  } catch (error) {
-    console.error('Error registering customer:', error);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
-
-// --------------------
-// LOGIN CUSTOMER
-// --------------------
-router.post('/login', loginLimiter, validateTokenAndExtractClientID, async (req, res) => {
-  try {
-    const { emailAddress, password } = req.body;
-    const customer = await Customer.findOne({ emailAddress: emailAddress.toLowerCase(), clientID: req.clientID });
-    if (!customer) return res.status(401).json({ error: 'Invalid email address or password' });
-
-    const passwordMatch = bcrypt.compareSync(password, customer.passwordHash);
-    if (!passwordMatch) return res.status(401).json({ error: 'Invalid email address or password' });
-
-    const token = jwt.sign({ customerID: customer._id, clientID: customer.clientID, isActive: true }, process.env.secret, { expiresIn: '1d' });
-    res.json({ token, customer });
+    res.json({ 
+      success: true,
+      message: 'Login successful',
+      token, 
+      customer: customerResponse 
+    });
   } catch (error) {
     console.error('Error logging in:', error);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
-// --------------------
 // VERIFY EMAIL
-// --------------------
 router.post('/verify/:token', async (req, res) => {
   try {
     const customer = await Customer.findOne({
       emailVerificationToken: req.params.token,
       emailVerificationExpires: { $gt: Date.now() }
     });
-    if (!customer) return res.status(400).json({ message: 'Invalid or expired token' });
+    
+    if (!customer) {
+      return res.status(400).json({ error: 'Invalid or expired verification token' });
+    }
 
     customer.isVerified = true;
     customer.emailVerificationToken = undefined;
     customer.emailVerificationExpires = undefined;
     await customer.save();
 
-    res.json({ message: 'Email verification successful' });
+    res.json({ 
+      success: true,
+      message: 'Email verification successful' 
+    });
   } catch (err) {
     console.error('Error verifying email:', err);
-    res.status(500).json({ message: 'Error verifying email' });
+    res.status(500).json({ error: 'Error verifying email' });
   }
 });
 
-// --------------------
 // RESET PASSWORD REQUEST
-// --------------------
 router.post('/reset-password', validateTokenAndExtractClientID, async (req, res) => {
   try {
-    const customer = await Customer.findOne({ emailAddress: req.body.emailAddress.toLowerCase(), clientID: req.clientID });
-    if (!customer) return res.status(404).json({ message: 'User not found' });
+    const { emailAddress } = req.body;
+    
+    if (!emailAddress) {
+      return res.status(400).json({ error: 'Email address is required' });
+    }
+
+    const customer = await Customer.findOne({ 
+      emailAddress: emailAddress.toLowerCase(), 
+      clientID: req.clientID 
+    });
+    
+    if (!customer) {
+      return res.status(404).json({ error: 'Customer not found with this email address' });
+    }
 
     const client = await Client.findOne({ clientID: req.clientID });
+    if (!client) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+
     const token = crypto.randomBytes(32).toString('hex');
     customer.resetPasswordToken = token;
     customer.resetPasswordExpires = Date.now() + 3600000; // 1 hour
     await customer.save();
 
     const resetUrl = `${client.return_url}/reset-password/${token}`;
-    await sendResetPasswordEmail(customer.emailAddress, `${customer.customerFirstName} ${customer.customerLastName}`, client.return_url, resetUrl, client.businessEmail, client.businessEmailPassword, client.companyName);
+    
+    try {
+      await sendResetPasswordEmail(
+        customer.emailAddress, 
+        `${customer.customerFirstName} ${customer.customerLastName}`, 
+        client.return_url, 
+        resetUrl, 
+        client.businessEmail, 
+        client.businessEmailPassword, 
+        client.companyName
+      );
+    } catch (emailError) {
+      console.error('Error sending reset password email:', emailError);
+      return res.status(500).json({ error: 'Error sending reset email' });
+    }
 
-    res.json({ message: 'Reset link sent to email' });
+    res.json({ 
+      success: true,
+      message: 'Password reset link sent to your email' 
+    });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Error sending reset email' });
+    console.error('Error in reset password request:', err);
+    res.status(500).json({ error: 'Error processing reset request' });
   }
 });
 
-// --------------------
 // RESET PASSWORD
-// --------------------
 router.post('/reset-password/:token', async (req, res) => {
   try {
-    const customer = await Customer.findOne({ resetPasswordToken: req.params.token, resetPasswordExpires: { $gt: Date.now() } });
-    if (!customer) return res.status(400).json({ message: 'Invalid or expired token' });
+    const { password } = req.body;
+    
+    if (!password || password.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters long' });
+    }
 
-    customer.passwordHash = bcrypt.hashSync(req.body.password, 10);
+    const customer = await Customer.findOne({ 
+      resetPasswordToken: req.params.token, 
+      resetPasswordExpires: { $gt: Date.now() } 
+    });
+    
+    if (!customer) {
+      return res.status(400).json({ error: 'Invalid or expired reset token' });
+    }
+
+    customer.passwordHash = bcrypt.hashSync(password, 10);
     customer.resetPasswordToken = undefined;
     customer.resetPasswordExpires = undefined;
     await customer.save();
 
-    res.json({ message: 'Password successfully updated' });
+    res.json({ 
+      success: true,
+      message: 'Password successfully updated' 
+    });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Error resetting password' });
+    console.error('Error resetting password:', err);
+    res.status(500).json({ error: 'Error resetting password' });
   }
 });
 
 // --------------------
-// GET CUSTOMER BY ID
+// CUSTOMER PROFILE ROUTES
 // --------------------
+
+// GET CUSTOMER BY ID
 router.get('/:id', validateTokenAndExtractClientID, async (req, res) => {
   try {
-    const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID }).select('-passwordHash');
-    if (!customer) return res.status(404).json({ error: 'Customer not found' });
-    res.json(customer);
+    const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID })
+      .select('-passwordHash -emailVerificationToken -resetPasswordToken');
+    
+    if (!customer) {
+      return res.status(404).json({ error: 'Customer not found' });
+    }
+    
+    res.json({
+      success: true,
+      customer
+    });
   } catch (error) {
     console.error('Error getting customer:', error);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
-// --------------------
 // GET ALL CUSTOMERS
-// --------------------
 router.get('/', validateTokenAndExtractClientID, async (req, res) => {
   try {
-    const customers = await Customer.find({ clientID: req.clientID });
-    res.json(customers);
+    const customers = await Customer.find({ clientID: req.clientID })
+      .select('-passwordHash -emailVerificationToken -resetPasswordToken');
+    
+    res.json({
+      success: true,
+      customers,
+      count: customers.length
+    });
   } catch (error) {
     console.error('Error getting customers:', error);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
-// --------------------
 // DELETE CUSTOMER
-// --------------------
 router.delete('/:id', validateTokenAndExtractClientID, async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
-    if (!customer) return res.status(404).json({ success: false, message: 'Customer not found' });
+    if (!customer) {
+      return res.status(404).json({ success: false, error: 'Customer not found' });
+    }
 
-    await Customer.findByIdAndRemove(customer._id);
-    res.status(200).json({ success: true, message: 'Customer deleted successfully' });
+    await Customer.findByIdAndDelete(req.params.id);
+    
+    res.json({ 
+      success: true, 
+      message: 'Customer deleted successfully' 
+    });
   } catch (error) {
     console.error('Error deleting customer:', error);
     res.status(500).json({ success: false, error: 'Internal Server Error' });
   }
 });
 
-// --------------------
 // CUSTOMER COUNT
-// --------------------
 router.get('/get/count', validateTokenAndExtractClientID, async (req, res) => {
   try {
     const customerCount = await Customer.countDocuments({ clientID: req.clientID });
-    res.json({ success: true, customerCount });
+    
+    res.json({ 
+      success: true, 
+      count: customerCount 
+    });
   } catch (error) {
     console.error('Error counting customers:', error);
     res.status(500).json({ success: false, error: 'Internal Server Error' });
