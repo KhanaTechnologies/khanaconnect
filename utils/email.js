@@ -14,21 +14,226 @@ async function sendWithRetry(transporter, mailOptions, retries = 1, delayMs = 15
     throw new Error('Failed to send email after multiple attempts.');
 }
 
-// -----------------------------
-// Order Confirmation Email
-// -----------------------------
-async function sendOrderConfirmationEmail(clientEmail, orderItems, bEmail, BEPass, shipping, clientName, orderID) {
-    const formattedClientName = clientName
+function getFormattedClientName(clientName) {
+    return clientName
         ? 'The ' + clientName.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase()).trim() + ' Team'
         : 'The Khana Technologies Team';
+}
 
-    const transporter = nodemailer.createTransport({
-        host: `mail.${bEmail.split('@')[1]}`, // auto-detect domain
+function createTransporter(bEmail, BEPass) {
+    return nodemailer.createTransport({
+        host: `mail.${bEmail.split('@')[1]}`,
         port: 465,
         secure: true,
         auth: { user: bEmail, pass: BEPass },
         tls: { rejectUnauthorized: false }
     });
+}
+
+function formatBookingDate(date) {
+    return new Date(date).toLocaleDateString('en-US', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+    });
+}
+
+// -----------------------------
+// Booking Confirmation Email
+// -----------------------------
+async function sendBookingConfirmationEmail(booking, bEmail, BEPass, clientName) {
+    console.log(booking, bEmail, BEPass, clientName)
+    const formattedClientName = getFormattedClientName(clientName);
+    const transporter = createTransporter(bEmail, BEPass);
+    const formattedDate = formatBookingDate(booking.date);
+
+    const servicesList = booking.services.map(service => `<li>${service}</li>`).join('');
+
+    const emailContent = `
+        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
+            <h2 style="text-align: center; color: #444;">Booking Confirmed! 🎉</h2>
+            <p>Hi ${booking.customerName},</p>
+            <p>Your booking has been confirmed. We're looking forward to seeing you!</p>
+
+            <div style="margin: 20px 0; padding: 15px; background-color: #eef6fc; border-left: 4px solid #2196F3;">
+                <h3 style="margin-top: 0;">Booking Details</h3>
+                <p><strong>Date:</strong> ${formattedDate}</p>
+                <p><strong>Time:</strong> ${booking.time} - ${booking.endTime}</p>
+                <p><strong>Services:</strong></p>
+                <ul>${servicesList}</ul>
+                ${booking.notes ? `<p><strong>Notes:</strong> ${booking.notes}</p>` : ''}
+                ${booking.payment.amount ? `<p><strong>Amount:</strong> R${booking.payment.amount}</p>` : ''}
+            </div>
+
+            <div style="margin: 20px 0; padding: 15px; background-color: #fff3cd; border-left: 4px solid #ffc107;">
+                <h4 style="margin-top: 0;">📍 Location & Preparation</h4>
+                <p>Please arrive 10 minutes before your scheduled time.</p>
+                <p>If you need to reschedule or cancel, please contact us at least 24 hours in advance.</p>
+            </div>
+
+            <p style="margin-top: 30px;">If you have any questions, feel free to reply to this email.</p>
+            <p>Warm regards,<br>${formattedClientName}</p>
+        </div>
+    `;
+
+    await sendWithRetry(transporter, {
+        from: bEmail,
+        to: booking.customerEmail,
+        subject: `Booking Confirmation - ${formattedDate}`,
+        html: emailContent
+    });
+
+    // Send notification to business
+    await sendWithRetry(transporter, {
+        from: bEmail,
+        to: bEmail,
+        subject: `New Booking - ${booking.customerName}`,
+        html: emailContent
+    });
+
+    console.log('Booking confirmation email sent successfully');
+}
+
+// -----------------------------
+// Booking Reminder Email
+// -----------------------------
+async function sendBookingReminderEmail(booking, bEmail, BEPass, clientName) {
+    const formattedClientName = getFormattedClientName(clientName);
+    const transporter = createTransporter(bEmail, BEPass);
+    const formattedDate = formatBookingDate(booking.date);
+
+    const servicesList = booking.services.map(service => `<li>${service}</li>`).join('');
+
+    const emailContent = `
+        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
+            <h2 style="text-align: center; color: #444;">Friendly Reminder: Booking Tomorrow! ⏰</h2>
+            <p>Hi ${booking.customerName},</p>
+            <p>This is a friendly reminder about your booking scheduled for tomorrow.</p>
+
+            <div style="margin: 20px 0; padding: 15px; background-color: #eef6fc; border-left: 4px solid #2196F3;">
+                <h3 style="margin-top: 0;">Booking Details</h3>
+                <p><strong>Date:</strong> ${formattedDate}</p>
+                <p><strong>Time:</strong> ${booking.time} - ${booking.endTime}</p>
+                <p><strong>Services:</strong></p>
+                <ul>${servicesList}</ul>
+            </div>
+
+            <div style="margin: 20px 0; padding: 15px; background-color: #d4edda; border-left: 4px solid #28a745;">
+                <h4 style="margin-top: 0;">💡 Tips for Your Visit</h4>
+                <p>• Please arrive 10 minutes early</p>
+                <p>• Bring any necessary documents or items</p>
+                <p>• Contact us if you're running late</p>
+            </div>
+
+            <p>We're looking forward to seeing you!</p>
+            <p>Warm regards,<br>${formattedClientName}</p>
+        </div>
+    `;
+
+    await sendWithRetry(transporter, {
+        from: bEmail,
+        to: booking.customerEmail,
+        subject: `Reminder: Your Booking Tomorrow - ${formattedDate}`,
+        html: emailContent
+    });
+
+    console.log('Booking reminder email sent successfully');
+}
+
+// -----------------------------
+// Payment Confirmation Email
+// -----------------------------
+async function sendPaymentConfirmationEmail(booking, bEmail, BEPass, clientName) {
+    const formattedClientName = getFormattedClientName(clientName);
+    const transporter = createTransporter(bEmail, BEPass);
+    const formattedDate = formatBookingDate(booking.date);
+
+    const emailContent = `
+        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
+            <h2 style="text-align: center; color: #444;">Payment Confirmed! ✅</h2>
+            <p>Hi ${booking.customerName},</p>
+            <p>Your payment for the upcoming booking has been successfully processed.</p>
+
+            <div style="margin: 20px 0; padding: 15px; background-color: #eef6fc; border-left: 4px solid #2196F3;">
+                <h3 style="margin-top: 0;">Payment Details</h3>
+                <p><strong>Amount:</strong> R${booking.payment.amount}</p>
+                <p><strong>Date:</strong> ${new Date(booking.payment.paidAt).toLocaleDateString()}</p>
+                <p><strong>Transaction ID:</strong> ${booking.payment.transactionId}</p>
+            </div>
+
+            <div style="margin: 20px 0; padding: 15px; background-color: #eef6fc; border-left: 4px solid #2196F3;">
+                <h3 style="margin-top: 0;">Booking Details</h3>
+                <p><strong>Date:</strong> ${formattedDate}</p>
+                <p><strong>Time:</strong> ${booking.time} - ${booking.endTime}</p>
+                <p><strong>Services:</strong> ${booking.services.join(', ')}</p>
+            </div>
+
+            <p>Your booking is now confirmed and we're looking forward to seeing you!</p>
+            <p>Warm regards,<br>${formattedClientName}</p>
+        </div>
+    `;
+
+    await sendWithRetry(transporter, {
+        from: bEmail,
+        to: booking.customerEmail,
+        subject: `Payment Confirmed - Booking ${formattedDate}`,
+        html: emailContent
+    });
+
+    console.log('Payment confirmation email sent successfully');
+}
+
+// -----------------------------
+// Booking Cancellation Email
+// -----------------------------
+async function sendBookingCancellationEmail(booking, bEmail, BEPass, clientName, reason = '') {
+    const formattedClientName = getFormattedClientName(clientName);
+    const transporter = createTransporter(bEmail, BEPass);
+    const formattedDate = formatBookingDate(booking.date);
+
+    const emailContent = `
+        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
+            <h2 style="text-align: center; color: #444;">Booking Cancelled</h2>
+            <p>Hi ${booking.customerName},</p>
+            <p>Your booking has been cancelled.</p>
+
+            <div style="margin: 20px 0; padding: 15px; background-color: #f8d7da; border-left: 4px solid #dc3545;">
+                <h3 style="margin-top: 0;">Cancelled Booking Details</h3>
+                <p><strong>Date:</strong> ${formattedDate}</p>
+                <p><strong>Time:</strong> ${booking.time}</p>
+                <p><strong>Services:</strong> ${booking.services.join(', ')}</p>
+                ${reason ? `<p><strong>Reason:</strong> ${reason}</p>` : ''}
+            </div>
+
+            ${booking.payment.status === 'paid' ? `
+            <div style="margin: 20px 0; padding: 15px; background-color: #fff3cd; border-left: 4px solid #ffc107;">
+                <h4 style="margin-top: 0;">Refund Information</h4>
+                <p>Your payment will be refunded within 5-7 business days.</p>
+            </div>
+            ` : ''}
+
+            <p>We hope to see you again in the future!</p>
+            <p>Warm regards,<br>${formattedClientName}</p>
+        </div>
+    `;
+
+    await sendWithRetry(transporter, {
+        from: bEmail,
+        to: booking.customerEmail,
+        subject: `Booking Cancelled - ${formattedDate}`,
+        html: emailContent
+    });
+
+    console.log('Booking cancellation email sent successfully');
+}
+
+// -----------------------------
+// Order Confirmation Email
+// -----------------------------
+async function sendOrderConfirmationEmail(clientEmail, orderItems, bEmail, BEPass, shipping, clientName, orderID) {
+    const formattedClientName = getFormattedClientName(clientName);
+    const transporter = createTransporter(bEmail, BEPass);
 
     async function populateOrderItems(items) {
         return Promise.all(items.map(async item => {
@@ -119,25 +324,17 @@ async function sendOrderConfirmationEmail(clientEmail, orderItems, bEmail, BEPas
 // Order Status Update Email
 // -----------------------------
 async function sendOrderStatusUpdateEmail(clientEmail, customerName, status, orderID, websiteURL, bEmail, BEPass, clientName, trackingID, trackingLink) {
-    const formattedClientName = clientName
-        ? 'The ' + clientName.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase()).trim() + ' Team'
-        : 'The Khana Technologies Team';
+    const formattedClientName = getFormattedClientName(clientName);
 
     const statusMessages = {
-        processed: { subject: 'Your Order Has Been Processed', message: 'We’ve finished preparing your order and it’s now processed. It will be shipped soon.' },
+        processed: { subject: 'Your Order Has Been Processed', message: 'We\'ve finished preparing your order and it\'s now processed. It will be shipped soon.' },
         shipped: { subject: 'Your Order Has Been Shipped', message: 'Good news! Your order has been shipped. You can track it below.' },
         delivered: { subject: 'Your Order Has Been Delivered', message: 'Your order has been marked as delivered. We hope you enjoy your purchase!' }
     };
 
-    const { subject, message } = statusMessages[status.toLowerCase()] || { subject: 'Order Update', message: 'There’s an update regarding your order.' };
+    const { subject, message } = statusMessages[status.toLowerCase()] || { subject: 'Order Update', message: 'There\'s an update regarding your order.' };
 
-    const transporter = nodemailer.createTransport({
-        host: `mail.${bEmail.split('@')[1]}`,
-        port: 465,
-        secure: true,
-        auth: { user: bEmail, pass: BEPass },
-        tls: { rejectUnauthorized: false }
-    });
+    const transporter = createTransporter(bEmail, BEPass);
 
     const viewOrderLink = `${websiteURL}/login`;
     const trackOrderLink = `${trackingLink || viewOrderLink}`;
@@ -167,17 +364,8 @@ async function sendOrderStatusUpdateEmail(clientEmail, customerName, status, ord
 // Reset Password Email
 // -----------------------------
 async function sendResetPasswordEmail(clientEmail, customerName, websiteURL, resetLink, bEmail, BEPass, clientName) {
-    const formattedClientName = clientName
-        ? 'The ' + clientName.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase()).trim() + ' Team'
-        : 'The Khana Technologies Team';
-
-    const transporter = nodemailer.createTransport({
-        host: `mail.${bEmail.split('@')[1]}`,
-        port: 465,
-        secure: true,
-        auth: { user: bEmail, pass: BEPass },
-        tls: { rejectUnauthorized: false }
-    });
+    const formattedClientName = getFormattedClientName(clientName);
+    const transporter = createTransporter(bEmail, BEPass);
 
     const emailContent = `
         <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
@@ -198,4 +386,12 @@ async function sendResetPasswordEmail(clientEmail, customerName, websiteURL, res
     console.log('Reset password email sent successfully');
 }
 
-module.exports = { sendOrderConfirmationEmail, sendOrderStatusUpdateEmail, sendResetPasswordEmail };
+module.exports = {
+    sendBookingConfirmationEmail,
+    sendBookingReminderEmail,
+    sendPaymentConfirmationEmail,
+    sendBookingCancellationEmail,
+    sendOrderConfirmationEmail,
+    sendOrderStatusUpdateEmail,
+    sendResetPasswordEmail
+};

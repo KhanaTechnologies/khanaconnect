@@ -9,76 +9,109 @@ const crypto = require('crypto');
  * ============================
  * CONFIGURE SMTP CREDENTIALS
  * ============================
- * You can keep them in environment variables:
+ * Keep them in environment variables:
  *   process.env.SMTP_HOST
  *   process.env.SMTP_PORT
- *   process.env.SMTP_SECURE
  *   process.env.SMTP_USER
  *   process.env.SMTP_PASS
  *   process.env.ERROR_EMAIL_TO
  *   process.env.ERROR_EMAIL_FROM
  */
 const CONFIG = {
-  SMTP_HOST: process.env.SMTP_HOST, // cPanel / GoDaddy SMTP host
-  SMTP_PORT: Number(process.env.SMTP_PORT || 465),
-  SMTP_SECURE: (process.env.SMTP_SECURE === 'true') || true,
+  SMTP_HOST: process.env.SMTP_HOST, // mail.khanatechnologies.co.za
+  SMTP_PORT: Number(process.env.SMTP_PORT || 465), // working port for SMTP
+  SMTP_SECURE: true, // SSL required for port 465
   SMTP_USER: process.env.SMTP_USER,
   SMTP_PASS: process.env.SMTP_PASS,
   ERROR_EMAIL_TO: process.env.ERROR_EMAIL_TO,
   ERROR_EMAIL_FROM: process.env.ERROR_EMAIL_FROM
 };
 
-/**
- * Nodemailer transporter
- * Includes a fallback for GoDaddy blocking too many login attempts
- */
-let transporter = nodemailer.createTransport({
+
+// Updated transporter configuration
+// Most SMTP servers work better on port 587
+const transporter = nodemailer.createTransport({
   host: CONFIG.SMTP_HOST,
-  port: CONFIG.SMTP_PORT,
-  secure: CONFIG.SMTP_SECURE,
+  port: 465, // SSL port
+  secure: true, // true for SSL
   auth: {
     user: CONFIG.SMTP_USER,
     pass: CONFIG.SMTP_PASS
   },
-  // tls: { rejectUnauthorized: false } // uncomment if you run into cert issues (dev only)
+  tls: {
+    rejectUnauthorized: false, // Allow self-signed certificates if needed
+    minVersion: 'TLSv1.2' // Force modern TLS
+  },
+  // Connection pooling to prevent "too many connections"
+  pool: true,
+  maxConnections: 1,
+  maxMessages: 5,
+  connectionTimeout: 30000,
+  greetingTimeout: 30000
 });
 
-/**
- * Simple in-memory dedupe to avoid flooding emails for the same error signature
- */
+// --- Simple in-memory dedupe ---
 const DEDUPE_WINDOW_MS = 60 * 1000; // 60 seconds
 const dedupeStore = new Map(); // signature -> timestamp
-
 function dedupeShouldSend(signature) {
   const now = Date.now();
   const last = dedupeStore.get(signature) || 0;
   if (now - last < DEDUPE_WINDOW_MS) return false;
   dedupeStore.set(signature, now);
-  // cleanup occasionally
+
+  // occasional cleanup
   if (dedupeStore.size > 1000) {
     for (const [k, ts] of dedupeStore.entries()) {
       if (now - ts > DEDUPE_WINDOW_MS * 5) dedupeStore.delete(k);
     }
   }
+
   return true;
 }
 
-/**
- * Safe stringify
- */
+// --- Safe stringify ---
 function safeStringify(obj, fallback = '') {
-  try {
-    return JSON.stringify(obj, null, 2);
-  } catch (e) {
-    try { return String(obj); } catch (e2) { return fallback; }
-  }
+  try { return JSON.stringify(obj, null, 2); } catch { return String(obj) || fallback; }
 }
 
-/**
- * Format the HTML body for the error email
- */
+// --- Format HTML for error email ---
 function formatErrorHtml({ req, resBody, err }) {
-  const now = new Date().toISOString();
+  // Get current date in South Africa timezone (UTC+2)
+  const now = new Date();
+  const options = { 
+    timeZone: 'Africa/Johannesburg',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    weekday: 'long'
+  };
+  
+  const dateFormatter = new Intl.DateTimeFormat('en-ZA', options);
+  const dateParts = dateFormatter.formatToParts(now);
+  
+  const year = dateParts.find(part => part.type === 'year').value;
+  const month = dateParts.find(part => part.type === 'month').value;
+  const day = dateParts.find(part => part.type === 'day').value;
+  const weekday = dateParts.find(part => part.type === 'weekday').value;
+  
+  // Format time with milliseconds
+  const timeFormatter = new Intl.DateTimeFormat('en-ZA', {
+    timeZone: 'Africa/Johannesburg',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+    fractionalSecondDigits: 3
+  });
+  
+  const timeParts = timeFormatter.formatToParts(now);
+  const hour = timeParts.find(part => part.type === 'hour').value;
+  const minute = timeParts.find(part => part.type === 'minute').value;
+  const second = timeParts.find(part => part.type === 'second').value;
+  const fractionalSecond = timeParts.find(part => part.type === 'fractionalSecond')?.value || '000';
+  
+  const formattedDate = `${year}-${month}-${day}(${weekday})T${hour}:${minute}:${second}.${fractionalSecond}Z`;
+  
   const url = req ? `${req.method} ${req.originalUrl}` : '(no req)';
   const headers = req ? safeStringify(req.headers) : '(no headers)';
   const reqBody = req && typeof req.body !== 'undefined' ? safeStringify(req.body) : '(no body)';
@@ -86,24 +119,15 @@ function formatErrorHtml({ req, resBody, err }) {
   const stack = err && err.stack ? err.stack : (err ? safeStringify(err) : '(no error stack)');
 
   return `
-    <h2>API Error — ${now}</h2>
-    <h3>Endpoint</h3>
-    <pre>${url}</pre>
-
-    <h3>Request</h3>
-    <pre>Headers:\n${headers}\n\nBody:\n${reqBody}</pre>
-
-    <h3>Response (captured)</h3>
-    <pre>${resBodyStr}</pre>
-
-    <h3>Error</h3>
-    <pre>${stack}</pre>
+    <h2>API Error — ${formattedDate}</h2>
+    <h3>Endpoint</h3><pre>${url}</pre>
+    <h3>Request</h3><pre>Headers:\n${headers}\n\nBody:\n${reqBody}</pre>
+    <h3>Response (captured)</h3><pre>${resBodyStr}</pre>
+    <h3>Error</h3><pre>${stack}</pre>
   `;
 }
 
-/**
- * Send error email (best-effort)
- */
+// --- Send error email ---
 async function sendErrorEmail({ subject, html, text, dedupe = true }) {
   try {
     const signature = crypto.createHash('sha1').update((subject || '') + '\n' + (html || '')).digest('hex');
@@ -116,8 +140,8 @@ async function sendErrorEmail({ subject, html, text, dedupe = true }) {
       from: CONFIG.ERROR_EMAIL_FROM || CONFIG.SMTP_USER,
       to: CONFIG.ERROR_EMAIL_TO || CONFIG.SMTP_USER,
       subject: subject || 'API Error Notification',
-      html: html || undefined,
-      text: text || undefined
+      html,
+      text
     };
 
     const result = await transporter.sendMail(mailOptions);
@@ -171,13 +195,19 @@ function wrapRoute(handler) {
         const resBody = (typeof res.__getCapturedBody === 'function') ? res.__getCapturedBody() : undefined;
         const subject = `API Error — ${req.method} ${req.originalUrl}`;
         const html = formatErrorHtml({ req, resBody, err });
-        sendErrorEmail({ subject, html }).catch(e => {
-          console.error('[failureEmail] sendErrorEmail error (wrapRoute):', e);
-        });
+        await sendErrorEmail({ subject, html }); // await here
       } catch (mailerErr) {
-        console.error('[failureEmail] error while trying to send error email:', mailerErr);
+        console.error('[failureEmail] sendErrorEmail error (wrapRoute):', mailerErr);
       }
-      next(err);
+      
+      // Send error response here instead of passing to global handler
+      const status = err && err.status && Number(err.status) >= 400 ? err.status : 500;
+      res.status(status).json({
+        success: false,
+        message: status === 500 ? 'Internal Server Error' : (err.message || 'Error')
+      });
+      
+      // DON'T call next(err) - this prevents duplicate emails
     }
   };
 }

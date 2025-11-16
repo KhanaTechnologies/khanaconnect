@@ -14,34 +14,44 @@ const clientSchema = new Schema({
   businessEmailPassword:{type: String, required: true,},
   cancel_url:{type: String, required: true},
   notify_url:{type: String, required: true},
-  sessionToken: { type: String, default: null }, // Session token
-  sessionExpires: { type: Date, default: null }, // Session expiration
-  isLoggedIn: { type: Boolean, default: false },  // Login status
+  sessionToken: { type: String, default: null },
+  sessionExpires: { type: Date, default: null },
+  isLoggedIn: { type: Boolean, default: false },
   tier:  {type: String, 
-    enum: ["bronze", "silver" , "gold"],  // ✅ Ensures only "Client" or "Admin" are allowed
+    enum: ["bronze", "silver" , "gold"],
     required: true, 
-    default: "bronze"  // (Optional) Default role is "Client"
+    default: "bronze"
     },
   role: { 
     type: String, 
-    enum: ["client", "admin"],  // ✅ Ensures only "Client" or "Admin" are allowed
+    enum: ["client", "admin"],
     required: true, 
-    default: "Client"  // (Optional) Default role is "Client"
+    default: "client"
   },
   permissions: {
     bookings: { type: Boolean, default: false },
     orders: { type: Boolean, default: false },
     staff: { type: Boolean, default: false }
   },
-     // ✅ Delivery Options - Array of objects
-     deliveryOptions: [
-      {
-        type: { type: String }, // e.g., "Standard", "Express"
-        price: { type: Number } // e.g., 75, 120
-      }
-    ]
-
-  // Other client-related fields
+  deliveryOptions: [
+    {
+      type: { type: String },
+      price: { type: Number }
+    }
+  ],
+  emailSignature: {type: String},
+  
+  // ✅ ADDED: Google Analytics Configuration
+  analyticsConfig: {
+    googleAnalytics: {
+      measurementId: { type: String, default: '' },
+      apiSecret: { type: String, default: '' },
+      propertyId: { type: String, default: '' },
+      isEnabled: { type: Boolean, default: false }
+    }
+  }
+}, {
+  timestamps: true
 });
 
 clientSchema.virtual('id').get(function () {

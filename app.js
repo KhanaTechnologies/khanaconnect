@@ -20,6 +20,15 @@ const errorHandler = require('./helpers/error-handler');
 // Make sure this path matches where you put failureEmail.js
 const failureEmail = require('./helpers/failureEmail');
 
+// <-- NEW: Booking Reminder Service
+const ReminderService = require('./helpers/reminderService');
+
+// <-- NEW: required for IMAP + Socket.IO integration
+const http = require('http');
+const { Server } = require('socket.io');
+const emailRouter = require('./routes/emailRouter');
+const { startImap } = require('./helpers/imapService');
+
 /**
  * Security & Performance Middleware
  */
@@ -67,6 +76,7 @@ var bookingsRouter = require('./routes/booking');
 var staffRouter = require('./routes/staff');
 var serviceRouter = require('./routes/services');
 var adminRouter = require('./routes/admin');
+var resourcesRouter = require('./routes/resources');
 
 
 app.use('/', indexRouter);
@@ -90,6 +100,10 @@ app.use(`${api}/bookings`, bookingsRouter);
 app.use(`${api}/staff`, staffRouter);
 app.use(`${api}/services`, serviceRouter);
 app.use(`${api}/admin`, adminRouter);
+app.use(`${api}/resources`, resourcesRouter);
+
+// <-- NEW: mount email router under /api/v1/email
+app.use(`${api}/email`, emailRouter);
 
 // mongoose.connect(process.env.CONNECTION_STRING,{ useNewUrlParser: true,useUnifiedTopology: true, dbName: 'KhanaConnect_DevDB',} )
 // DB Connection with Pooling
@@ -102,7 +116,22 @@ mongoose.connect(process.env.CONNECTION_STRING, {
     serverSelectionTimeoutMS: 5000, // Optional but recommended
     socketTimeoutMS: 45000, // Optional but recommended
 })
-.then(() => console.log('DB Connected!'))
+.then(() => {
+  console.log('DB Connected!');
+  
+  // <-- NEW: Start the Booking Reminder Service after DB connection is established
+  try {
+    const reminderService = new ReminderService();
+    console.log('✅ Booking Reminder Service started successfully');
+  } catch (error) {
+    console.error('❌ Failed to start Booking Reminder Service:', error);
+    // Notify via email about reminder service failure
+    failureEmail.sendErrorEmail({
+      subject: 'Booking Reminder Service Failed to Start',
+      html: `<h3>Booking Reminder Service Startup Error</h3><pre>${error && error.stack ? error.stack : JSON.stringify(error)}</pre>`
+    }).catch(e => console.error('Failed to send reminder service error email:', e));
+  }
+})
 .catch(err => {
   console.log('DB Connection Error:', err);
   // optionally notify on DB connection failure
@@ -142,8 +171,43 @@ process.on('unhandledRejection', (reason, promise) => {
  */
 app.use(failureEmail.globalErrorHandler);
 
-// Start Server
+// ---------------------------
+// REPLACED: create HTTP server, attach Socket.IO, start IMAP worker
+// ---------------------------
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
 
+// create http server and attach socket.io so we can emit events from IMAP worker
+const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: '*' } });
+
+// make io available on app.locals if any other code needs it
+app.locals.io = io;
+
+io.on('connection', socket => {
+  console.log('socket connected', socket.id);
+  // optional: listen to client events
+  socket.on('disconnect', () => console.log('socket disconnected', socket.id));
+});
+
+// No IMAP worker needed on startup with Option 2
+server.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+});
+
+// Graceful shutdown handling
+process.on('SIGTERM', async () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  server.close(() => {
+    console.log('Process terminated');
+  });
+});
+
+process.on('SIGINT', async () => {
+  console.log('SIGINT received, shutting down gracefully');
+  server.close(() => {
+    console.log('Process terminated');
+  });
+});
+
+// export app for testing (you can still require app in tests)
 module.exports = app;
