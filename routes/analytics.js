@@ -6,6 +6,11 @@ const Client = require("../models/client"); // Assuming you have a Client model
 const gaClient = require("../helpers/gaClient");
 const cache = new NodeCache({ stdTTL: 300 }); // 5 min cache
 
+console.log(
+  "GA JSON exists:",
+  !!process.env.GA_SERVICE_ACCOUNT_JSON
+);
+
 // ---------------- Middleware ---------------- //
 const validateClient = (req, res, next) => {
     const token = req.headers.authorization;
