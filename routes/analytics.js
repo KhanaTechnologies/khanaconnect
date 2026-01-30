@@ -6,10 +6,7 @@ const Client = require("../models/client"); // Assuming you have a Client model
 const gaClient = require("../helpers/gaClient");
 const cache = new NodeCache({ stdTTL: 300 }); // 5 min cache
 
-console.log(
-  "GA JSON exists:",
-  !!process.env.GA_SERVICE_ACCOUNT_JSON
-);
+
 
 // ---------------- Middleware ---------------- //
 const validateClient = (req, res, next) => {
@@ -57,6 +54,10 @@ const aggregateVisits = (rows, period) => {
 
 // ---------------- /overview Route ---------------- //
 router.get("/overview", validateClient, async (req, res) => {
+  console.log(
+  "GA JSON exists:",
+  !!process.env.GA_SERVICE_ACCOUNT_JSON
+);
     try {
         const clientId = req.clientId;
         const cacheKey = `ga:${clientId}:overview`;
