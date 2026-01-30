@@ -522,4 +522,84 @@ router.post('/logout', wrapRoute(async (req, res) => {
   res.status(200).send('Logout successful');
 }));
 
+
+
+
+// Add this test endpoint to your routes
+router.post('/:clientId/analytics/test-connection', wrapRoute(async (req, res) => {
+  try {
+    const client = await Client.findOne({ clientID: req.params.clientId });
+    if (!client) return res.status(404).json({ error: 'Client not found' });
+
+    const { propertyId, measurementId, isEnabled } = client.analyticsConfig?.googleAnalytics || {};
+    
+    if (!isEnabled) {
+      return res.json({
+        success: false,
+        message: 'Google Analytics is not enabled for this client',
+        config: { propertyId, measurementId, isEnabled }
+      });
+    }
+
+    if (!propertyId) {
+      return res.json({
+        success: false,
+        message: 'Property ID is not configured',
+        config: { propertyId, measurementId, isEnabled }
+      });
+    }
+
+    // Test minimal API call
+    const analyticsDataClient = new BetaAnalyticsDataClient();
+    
+    const [response] = await analyticsDataClient.runReport({
+      property: `properties/${propertyId}`,
+      dateRanges: [{ startDate: 'today', endDate: 'today' }],
+      dimensions: [{ name: 'date' }],
+      metrics: [{ name: 'sessions' }],
+      limit: 1
+    });
+
+    const hasData = response.rows && response.rows.length > 0;
+    
+    res.json({
+      success: true,
+      message: hasData ? 'Connected successfully with data' : 'Connected but no data available',
+      config: { propertyId, measurementId, isEnabled },
+      testResult: {
+        connected: true,
+        hasData: hasData,
+        sampleData: hasData ? {
+          date: response.rows[0].dimensionValues[0].value,
+          sessions: response.rows[0].metricValues[0].value
+        } : null
+      }
+    });
+
+  } catch (error) {
+    console.error('GA Test Connection Error:', error);
+    
+    // Parse error for better messaging
+    let errorMessage = error.message;
+    let errorType = 'Unknown';
+    
+    if (error.message.includes('PERMISSION_DENIED')) {
+      errorType = 'Authentication Error';
+      errorMessage = 'Service account lacks permission to access this GA4 property';
+    } else if (error.message.includes('NOT_FOUND')) {
+      errorType = 'Property Not Found';
+      errorMessage = 'GA4 property not found. Check Property ID';
+    } else if (error.message.includes('invalid property')) {
+      errorType = 'Invalid Property';
+      errorMessage = 'Invalid Property ID format';
+    }
+
+    res.status(400).json({
+      success: false,
+      errorType,
+      error: errorMessage,
+      config: client?.analyticsConfig?.googleAnalytics || {}
+    });
+  }
+}));
 module.exports = router;

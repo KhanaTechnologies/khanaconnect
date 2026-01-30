@@ -54,15 +54,47 @@ router.get('/', validateClient, wrapRoute(async (req, res) => {
     res.json(bookings);
 }));
 
-// POST: Create a new booking
+// POST: Create a new booking (supports both services and accommodation)
 router.post('/', validateClient, wrapRoute(async (req, res) => {
     const clientId = req.clientId;
-    const client = await Client.findOne({ clientID: req.clientId });
+    const client = await Client.findOne({ clientID: clientId });
+    
+    if (!client) {
+        return res.status(404).json({ error: 'Client not found' });
+    }
+
     if (!req.body) {
         return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    // Validate resource if provided
+    const bookingType = req.body.bookingType || 'service';
+    
+    // Validate based on booking type
+    if (bookingType === 'accommodation' || bookingType === 'mixed') {
+        if (!req.body.accommodation || !req.body.accommodation.checkIn || !req.body.accommodation.checkOut) {
+            return res.status(400).json({ error: 'Check-in and check-out dates are required for accommodation bookings' });
+        }
+        
+        const checkIn = new Date(req.body.accommodation.checkIn);
+        const checkOut = new Date(req.body.accommodation.checkOut);
+        
+        if (checkIn >= checkOut) {
+            return res.status(400).json({ error: 'Check-out date must be after check-in date' });
+        }
+        
+        // Validate same-day booking permissions for accommodation
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        checkIn.setHours(0, 0, 0, 0);
+        
+        if (checkIn.getTime() === today.getTime() && client.tier !== 'gold') {
+            return res.status(400).json({ 
+                error: 'Same-day accommodation bookings are only available for Gold tier clients.' 
+            });
+        }
+    }
+
+    // Validate resource/room if provided
     if (req.body.resourceId) {
         if (!mongoose.Types.ObjectId.isValid(req.body.resourceId)) {
             return res.status(400).json({ error: 'Invalid resource ID format' });
@@ -73,17 +105,63 @@ router.post('/', validateClient, wrapRoute(async (req, res) => {
         }
     }
 
-    // Calculate end time if duration is provided
+    // Calculate end time for service bookings
     let endTime = req.body.endTime;
-    if (!endTime && req.body.duration) {
+    if (!endTime && req.body.duration && bookingType !== 'accommodation') {
         const [hours, minutes] = req.body.time.split(':').map(Number);
-        const startDateTime = new Date();
+        const startDateTime = new Date(req.body.date);
         startDateTime.setHours(hours, minutes, 0, 0);
         const endDateTime = new Date(startDateTime.getTime() + req.body.duration * 60000);
         endTime = `${endDateTime.getHours().toString().padStart(2, '0')}:${endDateTime.getMinutes().toString().padStart(2, '0')}`;
     }
 
-    const booking = new Booking({
+    // Calculate reminder times
+    const reminders = [];
+    const now = new Date();
+
+    if (bookingType === 'accommodation' || bookingType === 'mixed') {
+        // Accommodation reminders
+        const checkInDate = new Date(req.body.accommodation.checkIn);
+        const checkOutDate = new Date(req.body.accommodation.checkOut);
+        
+        // Check-in reminder (24 hours before)
+        reminders.push({
+            type: 'email',
+            scheduledTime: new Date(checkInDate.getTime() - 24 * 60 * 60 * 1000),
+            sent: false,
+            reminderType: 'checkin'
+        });
+        
+        // Check-out reminder (day before check-out)
+        reminders.push({
+            type: 'email',
+            scheduledTime: new Date(checkOutDate.getTime() - 24 * 60 * 60 * 1000),
+            sent: false,
+            reminderType: 'checkout'
+        });
+        
+    } else {
+        // Service booking reminder
+        const appointmentDate = new Date(req.body.date);
+        const [hours, minutes] = req.body.time.split(':').map(Number);
+        appointmentDate.setHours(hours, minutes, 0, 0);
+
+        let reminderTime;
+        if (appointmentDate.toDateString() === now.toDateString() && client.tier === 'gold') {
+            reminderTime = new Date(now.getTime() + 60 * 60 * 1000);
+        } else {
+            reminderTime = new Date(appointmentDate.getTime() - 24 * 60 * 60 * 1000);
+        }
+
+        reminders.push({
+            type: 'email',
+            scheduledTime: reminderTime,
+            sent: false,
+            reminderType: 'service'
+        });
+    }
+
+    const bookingData = {
         customerName: req.body.customerName,
         customerEmail: req.body.customerEmail,
         customerPhone: req.body.customerPhone,
@@ -96,23 +174,60 @@ router.post('/', validateClient, wrapRoute(async (req, res) => {
         resourceId: req.body.resourceId,
         notes: req.body.notes,
         clientID: clientId,
-        status: req.body.status || "pending",
+        status: req.body.status || "confirmed",
+        bookingType: bookingType,
+        reminders: reminders,
         payment: {
             amount: req.body.amount,
+            currency: 'ZAR',
             status: req.body.amount ? 'pending' : 'paid'
-        },
-        reminders: [{
-            type: 'email',
-            scheduledTime: new Date(new Date(req.body.date).getTime() - 24 * 60 * 60 * 1000), // 24 hours before
-            sent: false
-        }]
-    });
+        }
+    };
 
+    // Add accommodation data if provided
+    if (bookingType === 'accommodation' || bookingType === 'mixed') {
+        bookingData.accommodation = {
+            checkIn: req.body.accommodation.checkIn,
+            checkOut: req.body.accommodation.checkOut,
+            numberOfGuests: req.body.accommodation.numberOfGuests || 1,
+            numberOfRooms: req.body.accommodation.numberOfRooms || 1,
+            roomType: req.body.accommodation.roomType || 'double',
+            specialRequests: req.body.accommodation.specialRequests,
+            amenities: req.body.accommodation.amenities || []
+        };
+        
+        // Calculate number of nights
+        const checkIn = new Date(req.body.accommodation.checkIn);
+        const checkOut = new Date(req.body.accommodation.checkOut);
+        const numberOfNights = Math.ceil((checkOut - checkIn) / (1000 * 60 * 60 * 24));
+        bookingData.accommodation.numberOfNights = numberOfNights;
+        
+        // Calculate payment details for accommodation
+        if (req.body.amount) {
+            bookingData.payment.depositAmount = req.body.accommodation.depositAmount || (req.body.amount * 0.5); // 50% deposit
+            bookingData.payment.balanceDue = req.body.amount - bookingData.payment.depositAmount;
+            bookingData.payment.dueDate = new Date(checkIn.getTime() - 7 * 24 * 60 * 60 * 1000); // 7 days before check-in
+        }
+    }
+
+    // Add guest info if provided
+    if (req.body.guestInfo) {
+        bookingData.guestInfo = req.body.guestInfo;
+    }
+
+    const booking = new Booking(bookingData);
     await booking.save();
     
-    // Send confirmation email
+    // Send appropriate confirmation email
     try {
-        await sendBookingConfirmationEmail(booking, client.businessEmail, client.businessEmailPassword, client.clientName || req.clientId);
+        if (bookingType === 'accommodation') {
+            await sendAccommodationConfirmationEmail(booking, client.businessEmail, client.businessEmailPassword, client.clientName || clientId);
+        } else if (bookingType === 'mixed') {
+            await sendMixedBookingConfirmationEmail(booking, client.businessEmail, client.businessEmailPassword, client.clientName || clientId);
+        } else {
+            await sendBookingConfirmationEmail(booking, client.businessEmail, client.businessEmailPassword, client.clientName || clientId);
+        }
+        console.log('Confirmation email sent successfully');
     } catch (emailError) {
         console.error('Failed to send confirmation email:', emailError);
     }
@@ -525,11 +640,11 @@ router.post('/waitlist/:id/convert-to-booking', validateClient, wrapRoute(async 
             amount: req.body.amount || 0,
             status: req.body.amount ? 'pending' : 'paid'
         },
-        reminders: [{
-            type: 'email',
-            scheduledTime: new Date(new Date(date).getTime() - 24 * 60 * 60 * 1000),
-            sent: false
-        }]
+         reminders: [{
+        type: 'email',
+        scheduledTime: new Date(new Date(req.body.date).getTime() - 24 * 60 * 60 * 1000),
+        sent: false
+    }]
     });
 
     await booking.save();
@@ -657,5 +772,60 @@ async function generateResourceTimeSlots(date, resource, duration) {
     
     return slots;
 }
+
+
+
+
+// Add this to your booking routes
+router.get('/debug/all-bookings', validateClient, wrapRoute(async (req, res) => {
+    const now = new Date();
+    const fortyEightHoursFromNow = new Date(now.getTime() + 48 * 60 * 60 * 1000);
+    
+    console.log('=== DEBUG: Checking ALL bookings in system ===');
+    console.log('Current time:', now.toISOString());
+    console.log('Search range:', fortyEightHoursFromNow.toISOString());
+    
+    const allBookings = await Booking.find({
+        clientID: req.clientId,
+        $or: [
+            { date: { $gte: now } },
+            { 'accommodation.checkIn': { $gte: now } }
+        ]
+    }).sort({ date: 1 });
+    
+    console.log(`Total future bookings found: ${allBookings.length}`);
+    
+    const debugBookings = allBookings.map(booking => {
+        const bookingDate = new Date(booking.date);
+        const [hours, minutes] = booking.time ? booking.time.split(':').map(Number) : [0, 0];
+        bookingDate.setHours(hours, minutes, 0, 0);
+        
+        const hoursUntil = booking.time ? 
+            ((bookingDate.getTime() - now.getTime()) / (1000 * 60 * 60)).toFixed(1) : 
+            'N/A';
+            
+        return {
+            id: booking._id.toString(),
+            customer: booking.customerName,
+            type: booking.bookingType,
+            date: booking.date,
+            time: booking.time,
+            status: booking.status,
+            checkIn: booking.accommodation?.checkIn,
+            checkOut: booking.accommodation?.checkOut,
+            hoursUntil: hoursUntil,
+            reminders: booking.reminders ? booking.reminders.length : 0,
+            sentReminders: booking.reminders ? booking.reminders.filter(r => r.sent).length : 0
+        };
+    });
+    
+    console.log('All future bookings:', JSON.stringify(debugBookings, null, 2));
+    
+    res.json({
+        currentTime: now.toISOString(),
+        bookings: debugBookings,
+        total: allBookings.length
+    });
+}));
 
 module.exports = router;

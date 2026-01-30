@@ -1,17 +1,29 @@
 const nodemailer = require('nodemailer');
 const Product = require('../models/product');
 
-async function sendWithRetry(transporter, mailOptions, retries = 1, delayMs = 1500) {
+async function sendWithRetry(transporter, mailOptions, retries = 3, delayMs = 2000) {
     for (let attempt = 1; attempt <= retries; attempt++) {
         try {
-            await transporter.sendMail(mailOptions);
-            return true;
+            const result = await transporter.sendMail(mailOptions);
+            
+            if (attempt > 1) {
+                console.log(`✅ Email delivered successfully after ${attempt} attempts`);
+            } else {
+                console.log(`✅ Email sent successfully on first attempt`);
+            }
+            
+            return result;
         } catch (err) {
-            console.error(`Attempt ${attempt} failed:`, err.message);
-            if (attempt < retries) await new Promise(res => setTimeout(res, delayMs));
+            if (attempt === retries) {
+                console.error(`💥 Final email attempt failed:`, err.message);
+                throw new Error('Failed to send email after multiple attempts.');
+            }
+            // Don't log every intermediate failure to reduce noise
+            console.log(`🔄 Email attempt ${attempt} failed, retrying in ${delayMs/1000} seconds...`);
+            await new Promise(res => setTimeout(res, delayMs));
+            delayMs *= 1.5; // Exponential backoff
         }
     }
-    throw new Error('Failed to send email after multiple attempts.');
 }
 
 function getFormattedClientName(clientName) {
@@ -22,11 +34,23 @@ function getFormattedClientName(clientName) {
 
 function createTransporter(bEmail, BEPass) {
     return nodemailer.createTransport({
-        host: `mail.${bEmail.split('@')[1]}`,
-        port: 465,
-        secure: true,
-        auth: { user: bEmail, pass: BEPass },
-        tls: { rejectUnauthorized: false }
+        host: `mail.${bEmail.split('@')[1]}`, // Use the domain from the email
+        port: 465, // SSL port
+        secure: true, // true for SSL
+        auth: {
+            user: bEmail,
+            pass: BEPass
+        },
+        tls: {
+            rejectUnauthorized: false, // Allow self-signed certificates if needed
+            minVersion: 'TLSv1.2' // Force modern TLS
+        },
+        // Connection pooling to prevent "too many connections"
+        pool: true,
+        maxConnections: 1,
+        maxMessages: 5,
+        connectionTimeout: 30000,
+        greetingTimeout: 30000
     });
 }
 
@@ -229,6 +253,50 @@ async function sendBookingCancellationEmail(booking, bEmail, BEPass, clientName,
 }
 
 // -----------------------------
+// Booking Rescheduling Email
+// -----------------------------
+async function sendReschedulingEmail(booking, oldDetails, bEmail, BEPass, clientName, reason) {
+    const formattedClientName = getFormattedClientName(clientName);
+    const transporter = createTransporter(bEmail, BEPass);
+    const newFormattedDate = formatBookingDate(booking.date);
+    const oldFormattedDate = formatBookingDate(oldDetails.date);
+
+    const emailContent = `
+        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
+            <h2 style="text-align: center; color: #444;">Booking Rescheduled 🔄</h2>
+            <p>Hi ${booking.customerName},</p>
+            <p>Your booking has been successfully rescheduled.</p>
+
+            <div style="margin: 20px 0; padding: 15px; background-color: #fff3cd; border-left: 4px solid #ffc107;">
+                <h4 style="margin-top: 0;">Previous Booking</h4>
+                <p><strong>Date:</strong> ${oldFormattedDate}</p>
+                <p><strong>Time:</strong> ${oldDetails.time} - ${oldDetails.endTime}</p>
+                ${reason ? `<p><strong>Reason:</strong> ${reason}</p>` : ''}
+            </div>
+
+            <div style="margin: 20px 0; padding: 15px; background-color: #eef6fc; border-left: 4px solid #2196F3;">
+                <h3 style="margin-top: 0;">New Booking Details</h3>
+                <p><strong>Date:</strong> ${newFormattedDate}</p>
+                <p><strong>Time:</strong> ${booking.time} - ${booking.endTime}</p>
+                <p><strong>Services:</strong> ${booking.services.join(', ')}</p>
+            </div>
+
+            <p>We look forward to seeing you at your new scheduled time!</p>
+            <p>Warm regards,<br>${formattedClientName}</p>
+        </div>
+    `;
+
+    await sendWithRetry(transporter, {
+        from: bEmail,
+        to: booking.customerEmail,
+        subject: `Booking Rescheduled - ${newFormattedDate}`,
+        html: emailContent
+    });
+
+    console.log('Booking rescheduling email sent successfully');
+}
+
+// -----------------------------
 // Order Confirmation Email
 // -----------------------------
 async function sendOrderConfirmationEmail(clientEmail, orderItems, bEmail, BEPass, shipping, clientName, orderID) {
@@ -358,6 +426,115 @@ async function sendOrderStatusUpdateEmail(clientEmail, customerName, status, ord
     await sendWithRetry(transporter, { from: bEmail, to: bEmail, subject, html: emailContent });
 
     console.log(`Order status email (${status}) sent successfully`);
+}
+
+// -----------------------------
+// Accommodation Confirmation Email
+// -----------------------------
+async function sendAccommodationConfirmationEmail(booking, bEmail, BEPass, clientName) {
+    const formattedClientName = getFormattedClientName(clientName);
+    const transporter = createTransporter(bEmail, BEPass);
+    
+    const checkInDate = formatBookingDate(booking.accommodation.checkIn);
+    const checkOutDate = formatBookingDate(booking.accommodation.checkOut);
+
+    const emailContent = `
+        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
+            <h2 style="text-align: center; color: #444;">Accommodation Booking Confirmed! 🏨</h2>
+            <p>Hi ${booking.customerName},</p>
+            <p>Your accommodation booking has been confirmed. We look forward to hosting you!</p>
+
+            <div style="margin: 20px 0; padding: 15px; background-color: #eef6fc; border-left: 4px solid #2196F3;">
+                <h3 style="margin-top: 0;">Accommodation Details</h3>
+                <p><strong>Check-in:</strong> ${checkInDate} (from 14:00)</p>
+                <p><strong>Check-out:</strong> ${checkOutDate} (until 11:00)</p>
+                <p><strong>Duration:</strong> ${booking.accommodation.numberOfNights} night(s)</p>
+                <p><strong>Guests:</strong> ${booking.accommodation.numberOfGuests}</p>
+                <p><strong>Room Type:</strong> ${booking.accommodation.roomType}</p>
+                ${booking.accommodation.specialRequests ? `<p><strong>Special Requests:</strong> ${booking.accommodation.specialRequests}</p>` : ''}
+            </div>
+
+            <div style="margin: 20px 0; padding: 15px; background-color: #fff3cd; border-left: 4px solid #ffc107;">
+                <h4 style="margin-top: 0;">📍 Location & Arrival</h4>
+                <p>Please bring your ID/document for check-in.</p>
+                <p>Early check-in and late check-out are subject to availability.</p>
+            </div>
+
+            ${booking.payment.amount ? `
+            <div style="margin: 20px 0; padding: 15px; background-color: #d4edda; border-left: 4px solid #28a745;">
+                <h4 style="margin-top: 0;">💰 Payment Details</h4>
+                <p><strong>Total Amount:</strong> R${booking.payment.amount}</p>
+                ${booking.payment.depositAmount ? `<p><strong>Deposit Paid:</strong> R${booking.payment.depositAmount}</p>` : ''}
+                ${booking.payment.balanceDue ? `<p><strong>Balance Due:</strong> R${booking.payment.balanceDue} (before ${new Date(booking.payment.dueDate).toLocaleDateString()})</p>` : ''}
+            </div>
+            ` : ''}
+
+            <p style="margin-top: 30px;">If you have any questions about your stay, feel free to reply to this email.</p>
+            <p>Warm regards,<br>${formattedClientName}</p>
+        </div>
+    `;
+
+    await sendWithRetry(transporter, {
+        from: bEmail,
+        to: booking.customerEmail,
+        subject: `Accommodation Confirmation - ${checkInDate} to ${checkOutDate}`,
+        html: emailContent
+    });
+
+    // Send notification to business
+    await sendWithRetry(transporter, {
+        from: bEmail,
+        to: bEmail,
+        subject: `New Accommodation Booking - ${booking.customerName}`,
+        html: emailContent
+    });
+
+    console.log('Accommodation confirmation email sent successfully');
+}
+
+// -----------------------------
+// Mixed Booking Confirmation Email
+// -----------------------------
+async function sendMixedBookingConfirmationEmail(booking, bEmail, BEPass, clientName) {
+    const formattedClientName = getFormattedClientName(clientName);
+    const transporter = createTransporter(bEmail, BEPass);
+    
+    const serviceDate = formatBookingDate(booking.date);
+    const checkInDate = formatBookingDate(booking.accommodation.checkIn);
+
+    const emailContent = `
+        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
+            <h2 style="text-align: center; color: #444;">Booking Confirmed! 🎉🏨</h2>
+            <p>Hi ${booking.customerName},</p>
+            <p>Your combined service and accommodation booking has been confirmed!</p>
+
+            <div style="margin: 20px 0; padding: 15px; background-color: #eef6fc; border-left: 4px solid #2196F3;">
+                <h3 style="margin-top: 0;">Service Details</h3>
+                <p><strong>Date:</strong> ${serviceDate}</p>
+                <p><strong>Time:</strong> ${booking.time} - ${booking.endTime}</p>
+                <p><strong>Services:</strong> ${booking.services.join(', ')}</p>
+            </div>
+
+            <div style="margin: 20px 0; padding: 15px; background-color: #e8f5e8; border-left: 4px solid #4CAF50;">
+                <h3 style="margin-top: 0;">Accommodation Details</h3>
+                <p><strong>Check-in:</strong> ${checkInDate}</p>
+                <p><strong>Duration:</strong> ${booking.accommodation.numberOfNights} night(s)</p>
+                <p><strong>Room Type:</strong> ${booking.accommodation.roomType}</p>
+            </div>
+
+            <p style="margin-top: 30px;">We look forward to serving you and providing a comfortable stay!</p>
+            <p>Warm regards,<br>${formattedClientName}</p>
+        </div>
+    `;
+
+    await sendWithRetry(transporter, {
+        from: bEmail,
+        to: booking.customerEmail,
+        subject: `Booking Confirmation - Services & Accommodation`,
+        html: emailContent
+    });
+
+    console.log('Mixed booking confirmation email sent successfully');
 }
 
 // -----------------------------

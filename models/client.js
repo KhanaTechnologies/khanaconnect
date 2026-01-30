@@ -40,7 +40,7 @@ const clientSchema = new Schema({
     }
   ],
   emailSignature: {type: String},
-  
+  ga4PropertyId : {type: String},
   // ✅ ADDED: Google Analytics Configuration
   analyticsConfig: {
     googleAnalytics: {
