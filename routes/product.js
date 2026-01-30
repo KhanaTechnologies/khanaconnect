@@ -2,16 +2,15 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const Product = require('../models/product');
-const {Category}  = require('../models/category');
+const { Category } = require('../models/category');
 const multer = require('multer');
 const { Octokit } = require("@octokit/rest");
 const { body, validationResult } = require('express-validator');
-const { SalesItem } = require('../models/salesItem')
+const { SalesItem } = require('../models/salesItem');
+const { wrapRoute } = require('../helpers/failureEmail'); // ✅ Import wrapRoute
 require('dotenv').config();
 
-const octokit = new Octokit({
-    auth: process.env.GITHUB_TOKEN
-});
+const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
 
 const FILE_TYPE_MAP = {
     'image/png': 'png',
@@ -21,84 +20,42 @@ const FILE_TYPE_MAP = {
 
 const storage = multer.memoryStorage();
 const upload = multer({ 
-    storage: storage,
-    limits: { fileSize: 5 * 1024 * 1024 } // Limit file size to 5MB
+    storage,
+    limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
 });
 
 const createFilePath = (fileName) => `public/uploads/${fileName}`;
 
 const uploadImageToGitHub = async (file, fileName) => {
-    try {
-        const filePath = createFilePath(fileName);
-        const content = file.buffer.toString('base64');
-        const { data } = await octokit.repos.createOrUpdateFileContents({
-            owner: process.env.GITHUB_REPO.split('/')[0],
-            repo: process.env.GITHUB_REPO.split('/')[1],
-            path: filePath,
-            message: `Upload ${fileName}`,
-            content: content,
-            branch: process.env.GITHUB_BRANCH
-        });
-        return data.content.download_url;
-    } catch (error) {
-        console.error('Error uploading image to GitHub:', error);
-        throw new Error('Failed to upload image to GitHub');
-    }
+    const filePath = createFilePath(fileName);
+    const content = file.buffer.toString('base64');
+    const { data } = await octokit.repos.createOrUpdateFileContents({
+        owner: process.env.GITHUB_REPO.split('/')[0],
+        repo: process.env.GITHUB_REPO.split('/')[1],
+        path: filePath,
+        message: `Upload ${fileName}`,
+        content,
+        branch: process.env.GITHUB_BRANCH
+    });
+    return data.content.download_url;
 };
 
-const processVariants = (variantData) => {
-    if (!variantData) return [];
-    if (typeof variantData === 'string') {
-        try {
-            variantData = JSON.parse(variantData);
-        } catch (error) {
-            console.error('Failed to parse variantData as JSON:', error);
-            return [];
-        }
-    }
-    if (!Array.isArray(variantData)) {
-        variantData = [variantData];
-    }
-    return variantData.map(v => ({
-        value: v.value ? v.value.trim() : '',
-        price: parseFloat(v.price) || 0,
-        quantity: parseInt(v.quantity) || 0
-    }));
+// Middleware to authenticate JWT and attach clientId
+const validateClient = (req, res, next) => {
+    const token = req.headers.authorization;
+    if (!token || !token.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
+
+    const tokenValue = token.split(' ')[1];
+    jwt.verify(tokenValue, process.env.secret, (err, user) => {
+        if (err || !user.clientID) return res.status(403).json({ error: 'Forbidden - Invalid token' });
+        req.clientId = user.clientID;
+        next();
+    });
 };
 
-// Middleware for client validation
-const validateClient = async (req, res, next) => {
+// -------------------- ROUTES -------------------- //
 
-    try {
-        const token = req.headers.authorization;
-        if (!token || !token.startsWith('Bearer ')) {
-            return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
-        }
-        const tokenValue = token.split(' ')[1];
-        jwt.verify(tokenValue, process.env.secret, async (err, user) => {
-            if (err) {
-                return res.status(403).json({ error: 'Forbidden - Invalid token', err });
-            }
-            if (!user.clientID) {
-                return res.status(403).json({ error: 'Forbidden - Invalid token payload' });
-            }
-            req.clientId = user.clientID; // Attach client ID to request object
-
-            next();
-        });
-    } catch (error) {
-        console.error('Error in client validation:', error);
-        res.status(500).json({ error: 'Internal Server Error' });
-    }
-};
-
-// Centralized error handling middleware
-router.use((err, req, res, next) => {
-    console.error('Unhandled error:', err);
-    res.status(500).json({ error: 'Internal Server Error' });
-});
-
-// Create new product
+// CREATE new product
 router.post(
     '/',
     upload.array('images', 5),
@@ -109,109 +66,65 @@ router.post(
         body('countInStock').isInt({ min: 0 }).withMessage('Count in stock must be a non-negative integer'),
     ],
     validateClient,
-    async (req, res) => {
-        console.log('Incoming Body:', req.body);
+    wrapRoute(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-        try {
-            const errors = validationResult(req);
-            if (!errors.isEmpty()) {
-                return res.status(400).json({ errors: errors.array() });
-            }
+        const files = req.files;
+        if (!files || files.length < 1) return res.status(400).json({ error: 'No images provided' });
 
-            const files = req.files;
-            if (!files || files.length < 1) {
-                return res.status(400).send('No images in the request');
-            }
+        const category = await Category.findById(req.body.category);
+        if (!category) return res.status(400).json({ error: 'Invalid category ID' });
 
-            const category = await Category.findById(req.body.category);
-            if (!category) {
-                return res.status(400).json({ error: 'Invalid category ID' });
-            }
-
-            // ✅ Parse and transform variants
-            let variants = [];
+        // Parse variants
+        let variants = [];
+        if (req.body.variants) {
             try {
-                let parsedVariants;
-
-                if (typeof req.body.variants === 'string') {
-                    parsedVariants = JSON.parse(req.body.variants);
-                } else if (Array.isArray(req.body.variants)) {
-                    parsedVariants = req.body.variants;
-                } else {
-                    throw new Error('Invalid variants format: must be string or array');
-                }
-
-                variants = parsedVariants.map(variant => {
-                    const attribute = variant.attributes?.[0];
-
-                    if (!attribute || !attribute.name || !Array.isArray(attribute.values)) {
-                        throw new Error('Invalid variant attribute structure');
-                    }
-
-                    return {
-                        name: attribute.name,
-                        values: attribute.values.map(value => ({
-                            value: value.value,
-                            price: Number(value.price),
-                            stock: Number(value.stock)
-                        }))
-                    };
-                });
-
-                console.log('✅ Transformed Variants:', JSON.stringify(variants, null, 2));
+                const parsedVariants = typeof req.body.variants === 'string' ? JSON.parse(req.body.variants) : req.body.variants;
+                variants = parsedVariants.map(variant => ({
+                    name: variant.attributes?.[0]?.name || '',
+                    values: (variant.attributes?.[0]?.values || []).map(v => ({
+                        value: v.value || '',
+                        price: Number(v.price) || 0,
+                        stock: Number(v.stock) || 0
+                    }))
+                }));
             } catch (err) {
-                console.error('❌ Error parsing variants:', err.message);
                 return res.status(400).json({ error: 'Invalid variants format', details: err.message });
             }
-
-
-            // ✅ Upload images
-            const imageUploadPromises = files.map(file => {
-                if (!FILE_TYPE_MAP[file.mimetype]) {
-                    throw new Error('Invalid file type');
-                }
-
-                const fileName = `${file.originalname.split(' ').join('-')}-${Date.now()}.${FILE_TYPE_MAP[file.mimetype]}`;
-                return uploadImageToGitHub(file, fileName);
-            });
-
-            const imagePaths = await Promise.all(imageUploadPromises);
-
-            // ✅ Create product document
-            const newProduct = new Product({
-                productName: req.body.productName,
-                description: req.body.description,
-                richDescription: req.body.richDescription || '',
-                images: imagePaths,
-                brand: req.body.brand || '',
-                price: Number(req.body.price),
-                countInStock: Number(req.body.countInStock),
-                category: category._id,
-                rating: 0,
-                numReviews: 0,
-                isFeatured: false,
-                clientID: req.clientId, // double-check your middleware attaches this as `req.clientId`
-                ingredients: req.body.ingredients,
-                usage: req.body.usage,
-                variants: variants
-            });
-
-            const savedProduct = await newProduct.save();
-            console.log('✅ Product saved:', savedProduct);
-            res.json(savedProduct);
-        } catch (error) {
-            console.error('❌ Internal Error:', error);
-            res.status(500).json({ error: error.message || 'Internal Server Error' });
         }
-    }
+
+        // Upload images to GitHub
+        const imagePaths = await Promise.all(files.map(file => {
+            if (!FILE_TYPE_MAP[file.mimetype]) throw new Error('Invalid file type');
+            const fileName = `${file.originalname.split(' ').join('-')}-${Date.now()}.${FILE_TYPE_MAP[file.mimetype]}`;
+            return uploadImageToGitHub(file, fileName);
+        }));
+
+        const newProduct = new Product({
+            productName: req.body.productName,
+            description: req.body.description || '',
+            richDescription: req.body.richDescription || '',
+            images: imagePaths,
+            brand: req.body.brand || '',
+            price: Number(req.body.price),
+            countInStock: Number(req.body.countInStock),
+            category: category._id,
+            rating: 0,
+            numReviews: 0,
+            isFeatured: false,
+            clientID: req.clientId,
+            ingredients: req.body.ingredients || '',
+            usage: req.body.usage || '',
+            variants
+        });
+
+        const savedProduct = await newProduct.save();
+        res.json(savedProduct);
+    })
 );
 
-
-
-
-
-
-// PUT to update an existing product with images
+// UPDATE existing product
 router.put(
     '/:id',
     upload.array('images', 5),
@@ -222,150 +135,93 @@ router.put(
         body('countInStock').optional().isInt({ min: 0 }).withMessage('Count in stock must be a non-negative integer'),
     ],
     validateClient,
-    async (req, res) => {
-        try {
-            const errors = validationResult(req);
-            if (!errors.isEmpty()) {
-                return res.status(400).json({ errors: errors.array() });
-            }
-            
-            // Make sure variants is always an object/array
-            if (typeof req.body.variants === 'string') {
+    wrapRoute(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+        const product = await Product.findById(req.params.id);
+        if (!product) return res.status(404).json({ error: 'Product not found' });
+
+        const category = req.body.category ? await Category.findById(req.body.category) : product.category;
+        if (!category) return res.status(400).json({ error: 'Invalid category ID' });
+
+        let variants = product.variants || [];
+        if (req.body.variants) {
             try {
-                req.body.variants = JSON.parse(req.body.variants);
-            } catch (err) {
-                return res.status(400).json({ message: 'Invalid variants JSON format' });
-            }
-            }
-
-
-            const files = req.files;
-            console.log(req.body)
-            const category = await Category.findById(req.body.category);
-            if (!category) return res.status(400).json({ error: 'Invalid category ID' });
-
-            const product = await Product.findById(req.params.id);
-            if (!product) return res.status(404).json({ error: 'Product not found' });
-
-            // ✅ Parse dynamic variant fields
-            let variants = [];
-            try {
-                const receivedVariants = JSON.parse(req.body.variants); // Expecting an array of objects
-                if (!Array.isArray(receivedVariants)) throw new Error();
-                variants = receivedVariants;
+                variants = typeof req.body.variants === 'string' ? JSON.parse(req.body.variants) : req.body.variants;
             } catch (err) {
                 return res.status(400).json({ error: 'Invalid variants format' });
             }
-
-            // ✅ Handle deleted images
-            let updatedImages = [...product.images];
-            if (req.body.deletedImages) {
-                try {
-                    const deletedImages = JSON.parse(req.body.deletedImages);
-                    if (Array.isArray(deletedImages)) {
-                        updatedImages = updatedImages.filter(img => !deletedImages.includes(img));
-                    }
-                } catch (err) {
-                    return res.status(400).json({ error: 'Invalid deletedImages format' });
-                }
-            }
-            
-            // ✅ Upload new images
-            if (files.length > 0) {
-                const imageUploadPromises = files.map(file => {
-                    if (!FILE_TYPE_MAP[file.mimetype]) {
-                        throw new Error('Invalid file type');
-                    }
-                    const fileName = `${file.originalname.split(' ').join('-')}-${Date.now()}.${FILE_TYPE_MAP[file.mimetype]}`;
-                    return uploadImageToGitHub(file, fileName);
-                });
-                const newImagePaths = await Promise.all(imageUploadPromises);
-                updatedImages = [...updatedImages, ...newImagePaths];
-            }
-
-            const updatedProduct = {
-                productName: req.body.productName || product.productName,
-                description: req.body.description || product.description,
-                richDescription: req.body.richDescription || product.richDescription,
-                images: updatedImages,
-                brand: req.body.brand || product.brand,
-                price: req.body.price || product.price,
-                category: category || product.category,
-                countInStock: req.body.countInStock || product.countInStock,
-                rating: req.body.rating || product.rating,
-                numReviews: req.body.numReviews || product.numReviews,
-                isFeatured: req.body.isFeatured || product.isFeatured,
-                ingredients: req.body.ingredients || product.ingredients,
-                usage: req.body.usage || product.usage,
-                variants,  // ✅ Store dynamic variants
-            };
-
-            const updatedProductResult = await Product.findByIdAndUpdate(req.params.id, updatedProduct, { new: true });
-            res.json(updatedProductResult);
-        } catch (error) {
-            console.error('Error:', error);
-            res.status(500).json({ error: error.message || 'Internal Server Error' });
         }
-    }
+
+        // Handle deleted images
+        let updatedImages = [...product.images];
+        if (req.body.deletedImages) {
+            try {
+                const deletedImages = typeof req.body.deletedImages === 'string' ? JSON.parse(req.body.deletedImages) : req.body.deletedImages;
+                updatedImages = updatedImages.filter(img => !deletedImages.includes(img));
+            } catch (err) {
+                return res.status(400).json({ error: 'Invalid deletedImages format' });
+            }
+        }
+
+        // Upload new images
+        const files = req.files || [];
+        if (files.length > 0) {
+            const newImagePaths = await Promise.all(files.map(file => {
+                if (!FILE_TYPE_MAP[file.mimetype]) throw new Error('Invalid file type');
+                const fileName = `${file.originalname.split(' ').join('-')}-${Date.now()}.${FILE_TYPE_MAP[file.mimetype]}`;
+                return uploadImageToGitHub(file, fileName);
+            }));
+            updatedImages = [...updatedImages, ...newImagePaths];
+        }
+
+        const updatedProduct = await Product.findByIdAndUpdate(req.params.id, {
+            productName: req.body.productName || product.productName,
+            description: req.body.description || product.description,
+            richDescription: req.body.richDescription || product.richDescription,
+            images: updatedImages,
+            brand: req.body.brand || product.brand,
+            price: req.body.price || product.price,
+            category: category._id,
+            countInStock: req.body.countInStock || product.countInStock,
+            rating: req.body.rating || product.rating,
+            numReviews: req.body.numReviews || product.numReviews,
+            isFeatured: req.body.isFeatured || product.isFeatured,
+            ingredients: req.body.ingredients || product.ingredients,
+            usage: req.body.usage || product.usage,
+            variants
+        }, { new: true });
+
+        res.json(updatedProduct);
+    })
 );
 
-// GET featured products
-router.get('/get/featured/:count', validateClient, async (req, res) => {
-    try {
-        const clientId = req.clientId;
-        const count = req.params.count ? parseInt(req.params.count, 10) : 0;
-        const featuredProducts = await Product.find({ isFeatured: true, clientID: clientId }).limit(count);
-        res.json(featuredProducts);
-    } catch (error) {
-        console.error('Error:', error);
-        res.status(500).json({ error: 'Internal Server Error' });
-    }
-});
-
 // GET all products
-router.get('/', validateClient, async (req, res) => {
+router.get('/', validateClient, wrapRoute(async (req, res) => {
+    const products = await Product.find({ clientID: req.clientId }).populate('category');
+    res.json(products);
+}));
 
-    try {
-        const clientId = req.clientId;
-        const productList = await Product.find({ clientID: clientId }).populate('category');
-        res.json(productList);
-    } catch (error) {
-        console.error('Error:', error);
-        res.status(500).json({ error: 'Internal Server Error' });
-    }
-});
+// GET featured products
+router.get('/get/featured/:count', validateClient, wrapRoute(async (req, res) => {
+    const count = parseInt(req.params.count, 10) || 0;
+    const featuredProducts = await Product.find({ isFeatured: true, clientID: req.clientId }).limit(count);
+    res.json(featuredProducts);
+}));
 
-// GET a single product by id
-router.get('/:id', validateClient, async (req, res) => {
-    try {
-        const clientId = req.clientId;
-        const product = await Product.findOne({ _id: req.params.id, clientID: clientId }).populate('category');
-        if (!product) {
-            return res.status(404).json({ error: 'Product not found' });
-        }
-        console.log(product);
-        res.json(product);
-    } catch (error) {
-        console.error('Error:', error);
-        res.status(500).json({ error: 'Internal Server Error' });
-    }
-});
+// GET product by ID
+router.get('/:id', validateClient, wrapRoute(async (req, res) => {
+    const product = await Product.findOne({ _id: req.params.id, clientID: req.clientId }).populate('category');
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    res.json(product);
+}));
 
-// DELETE a product by id
-router.delete('/:id', validateClient, async (req, res) => {
-    try {
-        const product = await Product.findByIdAndDelete(req.params.id);
-        if (!product) {
-            return res.status(404).json({ error: 'Product not found' });
-        }
-        res.json({ message: 'Product deleted successfully' });
-    } catch (error) {
-        console.error('Error:', error);
-        res.status(500).json({ error: 'Internal Server Error' });
-    }
-});
-
-
-
+// DELETE product by ID
+router.delete('/:id', validateClient, wrapRoute(async (req, res) => {
+    const product = await Product.findByIdAndDelete(req.params.id);
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    res.json({ message: 'Product deleted successfully' });
+}));
 
 module.exports = router;

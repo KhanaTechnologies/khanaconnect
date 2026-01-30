@@ -14,6 +14,19 @@ function isLockedOut(email) {
     return count >= MAX_ATTEMPTS && minutesSinceLastFail < COOLDOWN_MINUTES;
 }
 
+// Helper function to extract domain from URL
+function extractDomain(url) {
+    if (!url) return '';
+    
+    // Remove protocol and paths
+    let domain = url.replace(/https?:\/\//, '') // Remove http:// or https://
+                   .replace(/^www\./, '')      // Remove www.
+                   .split('/')[0]              // Remove paths after domain
+                   .split('?')[0];             // Remove query parameters
+    
+    return domain;
+}
+
 async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass, websiteURL, clientName) {
 
     const formattedClientName = clientName
@@ -25,17 +38,24 @@ async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass,
         return;
     }
 
+    // Extract clean domain from websiteURL
+    const domain = extractDomain(websiteURL);
+    console.log('Email configuration:', { 
+        bEmail, 
+        websiteURL, 
+        extractedDomain: domain,
+        mailHost: `mail.${domain}`
+    });
+
     const transporter = nodemailer.createTransport({
-        host: 'mail.' + websiteURL, // e.g. mail.khanatechnologies.co.za
+        host: `mail.${domain}`, // e.g. mail.herbeauty.co.za
         port: 465,
         secure: true,
         auth: {
             user: bEmail,
             pass: BEPass
         },
-        tls: {
-            rejectUnauthorized: false // ← IMPORTANT for some cPanel certificates
-        }
+        tls: { rejectUnauthorized: false } // for cPanel certs
     });
 
     const emailContent = `
@@ -50,11 +70,11 @@ async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass,
                 </a>
             </div>
 
-            <p>If the button above doesn’t work, copy and paste this link into your browser:</p>
+            <p>If the button above doesn't work, copy and paste this link into your browser:</p>
             <p style="word-break: break-all;"><a href="${verificationURL}">${verificationURL}</a></p>
 
             <p>This link will expire in 1 hour.</p>
-            <p>If you didn’t sign up for an account, please ignore this email.</p>
+            <p>If you didn't sign up for an account, please ignore this email.</p>
 
             <p style="margin-top: 30px;">Warm regards,<br>${formattedClientName}</p>
 
@@ -65,7 +85,7 @@ async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass,
 
     try {
         await transporter.sendMail({
-            from: `"${formattedClientName}" <${bEmail}>`, // proper formatting
+            from: `"${formattedClientName}" <${bEmail}>`,
             to: userEmail,
             subject: 'Verify Your Email Address',
             html: emailContent
@@ -86,4 +106,4 @@ async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass,
     }
 }
 
-module.exports = { sendVerificationEmail };
+module.exports = { sendVerificationEmail, extractDomain };
