@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "khanaconnect-484716",
+  "private_key_id": "842b641963bf60bddf05daa5894082768e8ea3b7",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQC28IzBIDF2ae25\n3T/l/2UV6173foTWIDxmcdht98N2DLCUsLBpy7QXexjjFqInN6T5MUhiiBek8Jya\nBwXWEZuTt4ure3kQEat98v5FZz3UdKZDMaQYjZD6Yw13VJ/Mnwx2svud756XpOF/\n/5ituGTBLuKt+0b7Dqke/EMCbxL77G+iuGf0Rn66TXLp6ABJZRCdgK3GAVHdOXF4\nOPE70XXAdHioPJL2bPH4G0UWpYBW4a9YuUf3kE98t6el96M53tbbKM2jXTZ1/HiR\n0jLYA37oW4csQ4cJov8ik9cNw/MrSGz156GBk3rZDfdyTuGZThBQXHs+KdH3mbUr\npmjq68BfAgMBAAECggEAAyQg6zY1D9hQQU7EhS/rQhPACLfQcUzjSu066578wMyM\nMQKp3aGz6V3vEaU9gFHikE8DS50vSUYg5nM0ePLy7Blq/po7K0MR/OHTk361MDUJ\nfebesq1Vfs8e9guaHkud/J3GSjIgsh9NI2Tk7+MZg1zQBQP0fPkgmgInAcRm83Cn\ncBA0cEfbL/XMXJnyWtrJqbOu1qEeGJP/1ciTqz3ft7mFGY+icWebs0fh7fRQMsqc\nYxOFXP19KbT5cZxqAqP8yYp7zFId5VlnGbSU/8aYYuI0Y5nKOB7ll3jl9un7r0W0\n2Z/z8Lc9805dkJYlplTVStCmuH53Q76ieGgti5OSNQKBgQDj3Z/cav0A8fKrG1Bu\nr/BLIUGVrjHNVMVuEb2pGmXNBR2MLzxBWCX+B9UximPyI7is4Jvbm3iXK8rVJm5/\n5QEMfDKWVppxl+KOz88wFeZms0lPiN0fyf0CuNTj/2HZ0l/0LTVNbL/Pj65dUIT6\nPSWlhD0TOurRzLE/+d+y0PkFOwKBgQDNhuciyH5+UkHKVRGEYMJLyGQpNb+bhQNW\nk3AxcKngds8TediPTxWm5W5KHMf7wfteLHy0VH/IcqKfup2PquJ7ivHdRHuGbvFh\n2H+aSSEuvYTNRJCb6qPOb0AApZ1hprT4QzmAMHrp1lyYncStbMyKRZ/7XJ2wNuFq\nlRlMMpAvLQKBgH7Tsw+e6PUmtZexG0KQYKGgf/2MuCF+JmlOLI87px/G0hxdih8g\nrfzHZU0uptR2N2rZlUZVMXiKolmjC2vaDYxicFGnIE1LaYltdvdfqR7OeWZwWgtA\nhLeIIs5ILbFsW4Xvx7QxbE1dvoInt+wELrkCcnAKofpmAN4H+Q9xKrlTAoGALaUn\nUi9LAI0ONXx9HnRK0n/X1tssCcMZwbGO+jv2Tna0eLPX58P9oApWWzlXJM+pHvos\nW/RkSMVE3sqYUZ73G8749lZORMYA7+UgOcjCCNpoUxpGL4qGBMPqZ/pgIJ7glD6B\n17lsouBLwk1Pr+B48MCTzkR8dPVLTNt+OdEE+qUCgYBHQP+TiC1oai2dnTgooD64\nEZyCr9vcTIivZlCEvBztk0SBsCx6kGcpEzP9r+H0vijMAICJlN571D3O0mZEWAgA\nNk7DdTN17OBaybl+KpYTCQmCTCnJKQ+jSvwHzEREXp0dR9ivd1PbQnufBjFxgtsp\nOpca3E/R1QnVPQ40iHPk6Q==\n-----END PRIVATE KEY-----\n",
+  "client_email": "ga-analytics-reader@khanaconnect-484716.iam.gserviceaccount.com",
+  "client_id": "114235432771046675936",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/ga-analytics-reader%40khanaconnect-484716.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
