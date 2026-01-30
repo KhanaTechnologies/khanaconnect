@@ -58,6 +58,14 @@ router.get("/overview", validateClient, async (req, res) => {
   "GA JSON exists:",
   !!process.env.GA_SERVICE_ACCOUNT_JSON
 );
+
+    try {
+  const creds = JSON.parse(process.env.GA_SERVICE_ACCOUNT_JSON);
+  console.log("GA client email:", creds.client_email);
+} catch (e) {
+  console.error("GA JSON PARSE FAILED:", e.message);
+}
+
     try {
         const clientId = req.clientId;
         const cacheKey = `ga:${clientId}:overview`;
