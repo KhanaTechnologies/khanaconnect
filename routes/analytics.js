@@ -6,6 +6,8 @@ const Client = require("../models/client"); // Assuming you have a Client model
 const gaClient = require("../helpers/gaClient");
 const cache = new NodeCache({ stdTTL: 300 }); // 5 min cache
 
+
+
 // ---------------- Middleware ---------------- //
 const validateClient = (req, res, next) => {
     const token = req.headers.authorization;
@@ -52,6 +54,18 @@ const aggregateVisits = (rows, period) => {
 
 // ---------------- /overview Route ---------------- //
 router.get("/overview", validateClient, async (req, res) => {
+  console.log(
+  "GA JSON exists:",
+  !!process.env.GA_SERVICE_ACCOUNT_JSON
+);
+
+    try {
+  const creds = JSON.parse(process.env.GA_SERVICE_ACCOUNT_JSON);
+  console.log("GA client email:", creds.client_email);
+} catch (e) {
+  console.error("GA JSON PARSE FAILED:", e.message);
+}
+
     try {
         const clientId = req.clientId;
         const cacheKey = `ga:${clientId}:overview`;
