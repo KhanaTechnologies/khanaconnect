@@ -29,6 +29,7 @@ const authJwt = () => {
      { url: /\/api\/v1\/product(.*)/, methods: ['GET'] },
      { url: /\/api\/v1\/productsales(.*)/, methods: ['GET'] },
      { url: /\/api\/v1\/resource(.*)/, methods: ['GET'] },
+     { url: /\/api\/v1\/campaigns(.*)/, methods: ['GET','POST'] },
      //`${api}/emailsub/subscribe`,
      `${api}/orders/update-order-payment`,
      `${api}/customer/reset-password`,
@@ -63,7 +64,7 @@ async function isRevoked(req, token) {
     return false;
   }
 
-  if (!token.payload.isActive) {
+  if (token.payload.hasOwnProperty('isActive') && !token.payload.isActive) {
     return true;
   }
   return false;
