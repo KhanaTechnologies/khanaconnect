@@ -198,4 +198,35 @@ router.get("/clients/:id/numberOfDiscountCodes", wrapRoute(async (req, res) => {
   res.json({ totalDiscountCodes: count });
 }));
 
+// 🔹 UPDATE client permissions (Admin only)
+router.put("/clients/:id/permissions", authJwt(), wrapRoute(async (req, res) => {
+  const { id } = req.params;
+  const { permissions } = req.body;
+  
+  // Find the client by ID
+  const client = await Client.findById(id);
+  if (!client) {
+    return res.status(404).json({ error: "Client not found" });
+  }
+
+  // Update permissions
+  client.permissions = {
+    ...client.permissions, // Keep existing permissions
+    ...permissions // Override with new permissions
+  };
+
+  await client.save();
+
+  res.json({
+    success: true,
+    message: "Client permissions updated successfully",
+    client: {
+      _id: client._id,
+      clientID: client.clientID,
+      companyName: client.companyName,
+      permissions: client.permissions
+    }
+  });
+}));
+
 module.exports = router;

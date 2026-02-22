@@ -31,7 +31,13 @@ const clientSchema = new Schema({
   permissions: {
     bookings: { type: Boolean, default: false },
     orders: { type: Boolean, default: false },
-    staff: { type: Boolean, default: false }
+    staff: { type: Boolean, default: false },
+    categories: { type: Boolean, default: false },
+    preorder: { type: Boolean, default: false },
+    voting: { type: Boolean, default: false },
+    sales: { type: Boolean, default: false },
+    services:  { type: Boolean, default: false },
+    products: { type: Boolean, default: false }
   },
   deliveryOptions: [
     {

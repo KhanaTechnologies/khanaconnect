@@ -229,6 +229,9 @@ var staffRouter = require('./routes/staff');
 var serviceRouter = require('./routes/services');
 var adminRouter = require('./routes/admin');
 var resourcesRouter = require('./routes/resources');
+var PreorderPledgeRouter = require('./routes/preorderPledges');
+var campaignsRouter = require('./routes/campaigns');
+var votingCampaignsRouter = require('./routes/votingCampaigns');
 
 const analyticsRoutes = require("./routes/analytics");
 app.use('/', indexRouter);
@@ -252,6 +255,10 @@ app.use(`${api}/services`, serviceRouter);
 app.use(`${api}/admin`, adminRouter);
 app.use(`${api}/resources`, resourcesRouter); 
 app.use(`${api}/analytics`, analyticsRoutes);
+app.use(`${api}/preorderpledge`, PreorderPledgeRouter);
+app.use(`${api}/campaigns`, campaignsRouter);
+app.use(`${api}/votingcampaigns`, votingCampaignsRouter);
+
 
 // <-- NEW: mount email router under /api/v1/email
 app.use(`${api}/email`, emailRouter);

@@ -49,6 +49,63 @@ function authenticateToken(req, res, next) {
   }
 }
 
+// Dashboard permission middleware
+function checkDashboardPermission(requiredPermission = 'view') {
+  return async (req, res, next) => {
+    try {
+      const token = req.headers.authorization?.split(' ')[1];
+      if (!token) return res.status(401).json({ error: 'Unauthorized' });
+
+      jwt.verify(token, process.env.secret, async (err, decoded) => {
+        if (err) return res.status(403).json({ error: 'Invalid token' });
+
+        const client = await Client.findOne({ clientID: decoded.clientID });
+        if (!client) return res.status(404).json({ error: 'Client not found' });
+
+        // Check if client has admin role (admins have all permissions)
+        if (client.role === 'admin') {
+          req.user = decoded;
+          req.clientPermissions = {
+            view: true,
+            analytics: true,
+            reports: true,
+            sales: true,
+            bookings: true,
+            orders: true,
+            staff: true,
+            categories: true,
+            preorder: true,
+            voting: true
+          };
+          return next();
+        }
+
+        // Check dashboard permission from permissions object
+        const hasDashboardAccess = client.permissions?.dashboard || false;
+        
+        if (!hasDashboardAccess) {
+          return res.status(403).json({ error: 'Dashboard access denied' });
+        }
+
+        // For granular permissions, you can extend this
+        if (requiredPermission === 'analytics' && !client.permissions?.sales) {
+          return res.status(403).json({ error: 'No permission to view analytics' });
+        }
+
+        if (requiredPermission === 'reports' && !client.permissions?.sales) {
+          return res.status(403).json({ error: 'No permission to view reports' });
+        }
+
+        req.user = decoded;
+        req.clientPermissions = client.permissions;
+        next();
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+}
+
 // --------------------
 // ANALYTICS FUNCTIONS
 // --------------------
@@ -285,7 +342,8 @@ router.post('/', wrapRoute(async (req, res) => {
     role, 
     permissions, 
     deliveryOptions,
-    emailSignature 
+    emailSignature,
+    ga4PropertyId
   } = req.body;
   
   const hashedPassword = bcrypt.hashSync(password, 10);
@@ -309,15 +367,21 @@ router.post('/', wrapRoute(async (req, res) => {
     permissions: permissions || {
       bookings: false,
       orders: false,
-      staff: false
+      staff: false,
+      categories: false,
+      preorder: false,
+      voting: false,
+      sales: false,
+      dashboard: false // Add dashboard permission
     },
     deliveryOptions: deliveryOptions || [],
     emailSignature: emailSignature || '',
+    ga4PropertyId: ga4PropertyId || '',
     analyticsConfig: {
       googleAnalytics: {
         measurementId: '',
         apiSecret: '',
-        propertyId: '',
+        propertyId: ga4PropertyId || '',
         isEnabled: false
       }
     }
@@ -355,6 +419,35 @@ router.put('/:clientId', wrapRoute(async (req, res) => {
   res.json(updatedClient);
 }));
 
+// Update client permissions including dashboard
+router.put('/:clientId/permissions', wrapRoute(async (req, res) => {
+  const { permissions } = req.body;
+  console.log(req.body)
+  const updatedClient = await Client.findOneAndUpdate(
+    { clientID: req.params.clientId },
+    { $set: { permissions } },
+    { new: true }
+  );
+
+  if (!updatedClient) return res.status(404).json({ error: 'Client not found' });
+
+  res.json({ 
+    success: true, 
+    message: 'Permissions updated',
+    permissions: updatedClient.permissions
+  });
+}));
+
+// Get client permissions
+router.get('/:clientId/permissions', wrapRoute(async (req, res) => {
+  const client = await Client.findOne({ clientID: req.params.clientId });
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  res.json({
+    permissions: client.permissions
+  });
+}));
+
 // Update client analytics configuration
 router.put('/:clientId/analytics/config', wrapRoute(async (req, res) => {
   const { googleAnalytics } = req.body;
@@ -363,7 +456,8 @@ router.put('/:clientId/analytics/config', wrapRoute(async (req, res) => {
     { clientID: req.params.clientId },
     { 
       $set: { 
-        'analyticsConfig.googleAnalytics': googleAnalytics
+        'analyticsConfig.googleAnalytics': googleAnalytics,
+        ga4PropertyId: googleAnalytics.propertyId // Also update the legacy field
       } 
     },
     { new: true }
@@ -388,90 +482,105 @@ router.get('/:clientId/analytics/config', wrapRoute(async (req, res) => {
   });
 }));
 
-// Get Website Performance Data
-router.get('/:clientId/analytics/performance', wrapRoute(async (req, res) => {
-  try {
-    const { startDate = '7daysAgo', endDate = 'today' } = req.query;
-    
-    const performanceData = await getWebsitePerformance(
-      req.params.clientId, 
-      startDate, 
-      endDate
-    );
+// Get Website Performance Data - Requires analytics permission (sales permission used for analytics)
+router.get('/:clientId/analytics/performance', 
+  checkDashboardPermission('analytics'),
+  wrapRoute(async (req, res) => {
+    try {
+      const { startDate = '7daysAgo', endDate = 'today' } = req.query;
+      
+      const performanceData = await getWebsitePerformance(
+        req.params.clientId, 
+        startDate, 
+        endDate
+      );
 
-    res.json({ 
-      success: true, 
-      period: { startDate, endDate },
-      performance: performanceData 
-    });
-  } catch (error) {
-    res.status(400).json({ 
-      success: false, 
-      error: error.message 
-    });
-  }
-}));
-
-// Get Traffic Sources Data
-router.get('/:clientId/analytics/traffic-sources', wrapRoute(async (req, res) => {
-  try {
-    const { startDate = '7daysAgo', endDate = 'today' } = req.query;
-    
-    const trafficData = await getTrafficSources(
-      req.params.clientId, 
-      startDate, 
-      endDate
-    );
-
-    res.json({ 
-      success: true, 
-      period: { startDate, endDate },
-      traffic: trafficData 
-    });
-  } catch (error) {
-    res.status(400).json({ 
-      success: false, 
-      error: error.message 
-    });
-  }
-}));
-
-// Get Analytics Dashboard
-router.get('/:clientId/analytics/dashboard', wrapRoute(async (req, res) => {
-  try {
-    const { startDate = '7daysAgo', endDate = 'today' } = req.query;
-    const client = await Client.findOne({ clientID: req.params.clientId });
-    
-    if (!client) return res.status(404).json({ error: 'Client not found' });
-
-    const dashboardData = {
-      clientInfo: {
-        companyName: client.companyName,
-        clientID: client.clientID,
-        analyticsEnabled: client.analyticsConfig?.googleAnalytics?.isEnabled || false
-      },
-      period: { startDate, endDate }
-    };
-
-    if (client.analyticsConfig?.googleAnalytics?.isEnabled) {
-      try {
-        const [performance, traffic] = await Promise.all([
-          getWebsitePerformance(client.clientID, startDate, endDate),
-          getTrafficSources(client.clientID, startDate, endDate)
-        ]);
-
-        dashboardData.performance = performance;
-        dashboardData.trafficSources = traffic;
-        
-      } catch (gaError) {
-        dashboardData.error = `Analytics data unavailable: ${gaError.message}`;
-      }
+      res.json({ 
+        success: true, 
+        period: { startDate, endDate },
+        performance: performanceData 
+      });
+    } catch (error) {
+      res.status(400).json({ 
+        success: false, 
+        error: error.message 
+      });
     }
+}));
 
-    res.json({ success: true, dashboard: dashboardData });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
+// Get Traffic Sources Data - Requires analytics permission
+router.get('/:clientId/analytics/traffic-sources',
+  checkDashboardPermission('analytics'),
+  wrapRoute(async (req, res) => {
+    try {
+      const { startDate = '7daysAgo', endDate = 'today' } = req.query;
+      
+      const trafficData = await getTrafficSources(
+        req.params.clientId, 
+        startDate, 
+        endDate
+      );
+
+      res.json({ 
+        success: true, 
+        period: { startDate, endDate },
+        traffic: trafficData 
+      });
+    } catch (error) {
+      res.status(400).json({ 
+        success: false, 
+        error: error.message 
+      });
+    }
+}));
+
+// Get Analytics Dashboard - Requires dashboard view permission
+router.get('/:clientId/analytics/dashboard',
+  checkDashboardPermission('view'),
+  wrapRoute(async (req, res) => {
+    try {
+      const { startDate = '7daysAgo', endDate = 'today' } = req.query;
+      const client = await Client.findOne({ clientID: req.params.clientId });
+      
+      if (!client) return res.status(404).json({ error: 'Client not found' });
+
+      const dashboardData = {
+        clientInfo: {
+          companyName: client.companyName,
+          clientID: client.clientID,
+          analyticsEnabled: client.analyticsConfig?.googleAnalytics?.isEnabled || false,
+          tier: client.tier,
+          role: client.role
+        },
+        period: { startDate, endDate },
+        permissions: {
+          ...client.permissions,
+          hasDashboardAccess: client.permissions?.dashboard || false
+        }
+      };
+
+      // Only fetch analytics if user has sales permission (for analytics) and GA is enabled
+      if (client.permissions?.sales && client.analyticsConfig?.googleAnalytics?.isEnabled) {
+        try {
+          const [performance, traffic] = await Promise.all([
+            getWebsitePerformance(client.clientID, startDate, endDate),
+            getTrafficSources(client.clientID, startDate, endDate)
+          ]);
+
+          dashboardData.performance = performance;
+          dashboardData.trafficSources = traffic;
+          
+        } catch (gaError) {
+          dashboardData.analyticsError = `Analytics data unavailable: ${gaError.message}`;
+        }
+      } else if (!client.permissions?.sales) {
+        dashboardData.analyticsMessage = 'Analytics access requires sales permission';
+      }
+
+      res.json({ success: true, dashboard: dashboardData });
+    } catch (error) {
+      res.status(500).json({ success: false, error: error.message });
+    }
 }));
 
 // Client login
@@ -499,8 +608,12 @@ router.post('/login', loginLimiter, wrapRoute(async (req, res) => {
       ID: client.clientID,
       merchant_id: client.merchant_id,
       token,
-      permissions: client.permissions,
-      role: client.role
+      permissions: {
+        ...client.permissions,
+        hasDashboardAccess: client.permissions?.dashboard || false
+      },
+      role: client.role,
+      tier: client.tier
     });
   } else {
     res.status(400).send('The user email and password are incorrect!');
@@ -522,84 +635,84 @@ router.post('/logout', wrapRoute(async (req, res) => {
   res.status(200).send('Logout successful');
 }));
 
+// Test Google Analytics connection
+router.post('/:clientId/analytics/test-connection', 
+  checkDashboardPermission('analytics'),
+  wrapRoute(async (req, res) => {
+    try {
+      const client = await Client.findOne({ clientID: req.params.clientId });
+      if (!client) return res.status(404).json({ error: 'Client not found' });
 
-
-
-// Add this test endpoint to your routes
-router.post('/:clientId/analytics/test-connection', wrapRoute(async (req, res) => {
-  try {
-    const client = await Client.findOne({ clientID: req.params.clientId });
-    if (!client) return res.status(404).json({ error: 'Client not found' });
-
-    const { propertyId, measurementId, isEnabled } = client.analyticsConfig?.googleAnalytics || {};
-    
-    if (!isEnabled) {
-      return res.json({
-        success: false,
-        message: 'Google Analytics is not enabled for this client',
-        config: { propertyId, measurementId, isEnabled }
-      });
-    }
-
-    if (!propertyId) {
-      return res.json({
-        success: false,
-        message: 'Property ID is not configured',
-        config: { propertyId, measurementId, isEnabled }
-      });
-    }
-
-    // Test minimal API call
-    const analyticsDataClient = new BetaAnalyticsDataClient();
-    
-    const [response] = await analyticsDataClient.runReport({
-      property: `properties/${propertyId}`,
-      dateRanges: [{ startDate: 'today', endDate: 'today' }],
-      dimensions: [{ name: 'date' }],
-      metrics: [{ name: 'sessions' }],
-      limit: 1
-    });
-
-    const hasData = response.rows && response.rows.length > 0;
-    
-    res.json({
-      success: true,
-      message: hasData ? 'Connected successfully with data' : 'Connected but no data available',
-      config: { propertyId, measurementId, isEnabled },
-      testResult: {
-        connected: true,
-        hasData: hasData,
-        sampleData: hasData ? {
-          date: response.rows[0].dimensionValues[0].value,
-          sessions: response.rows[0].metricValues[0].value
-        } : null
+      const { propertyId, measurementId, isEnabled } = client.analyticsConfig?.googleAnalytics || {};
+      
+      if (!isEnabled) {
+        return res.json({
+          success: false,
+          message: 'Google Analytics is not enabled for this client',
+          config: { propertyId, measurementId, isEnabled }
+        });
       }
-    });
 
-  } catch (error) {
-    console.error('GA Test Connection Error:', error);
-    
-    // Parse error for better messaging
-    let errorMessage = error.message;
-    let errorType = 'Unknown';
-    
-    if (error.message.includes('PERMISSION_DENIED')) {
-      errorType = 'Authentication Error';
-      errorMessage = 'Service account lacks permission to access this GA4 property';
-    } else if (error.message.includes('NOT_FOUND')) {
-      errorType = 'Property Not Found';
-      errorMessage = 'GA4 property not found. Check Property ID';
-    } else if (error.message.includes('invalid property')) {
-      errorType = 'Invalid Property';
-      errorMessage = 'Invalid Property ID format';
+      if (!propertyId) {
+        return res.json({
+          success: false,
+          message: 'Property ID is not configured',
+          config: { propertyId, measurementId, isEnabled }
+        });
+      }
+
+      // Test minimal API call
+      const analyticsDataClient = new BetaAnalyticsDataClient();
+      
+      const [response] = await analyticsDataClient.runReport({
+        property: `properties/${propertyId}`,
+        dateRanges: [{ startDate: 'today', endDate: 'today' }],
+        dimensions: [{ name: 'date' }],
+        metrics: [{ name: 'sessions' }],
+        limit: 1
+      });
+
+      const hasData = response.rows && response.rows.length > 0;
+      
+      res.json({
+        success: true,
+        message: hasData ? 'Connected successfully with data' : 'Connected but no data available',
+        config: { propertyId, measurementId, isEnabled },
+        testResult: {
+          connected: true,
+          hasData: hasData,
+          sampleData: hasData ? {
+            date: response.rows[0].dimensionValues[0].value,
+            sessions: response.rows[0].metricValues[0].value
+          } : null
+        }
+      });
+
+    } catch (error) {
+      console.error('GA Test Connection Error:', error);
+      
+      // Parse error for better messaging
+      let errorMessage = error.message;
+      let errorType = 'Unknown';
+      
+      if (error.message.includes('PERMISSION_DENIED')) {
+        errorType = 'Authentication Error';
+        errorMessage = 'Service account lacks permission to access this GA4 property';
+      } else if (error.message.includes('NOT_FOUND')) {
+        errorType = 'Property Not Found';
+        errorMessage = 'GA4 property not found. Check Property ID';
+      } else if (error.message.includes('invalid property')) {
+        errorType = 'Invalid Property';
+        errorMessage = 'Invalid Property ID format';
+      }
+
+      res.status(400).json({
+        success: false,
+        errorType,
+        error: errorMessage,
+        config: client?.analyticsConfig?.googleAnalytics || {}
+      });
     }
-
-    res.status(400).json({
-      success: false,
-      errorType,
-      error: errorMessage,
-      config: client?.analyticsConfig?.googleAnalytics || {}
-    });
-  }
 }));
+
 module.exports = router;

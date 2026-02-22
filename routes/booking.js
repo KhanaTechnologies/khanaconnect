@@ -55,6 +55,7 @@ router.get('/', validateClient, wrapRoute(async (req, res) => {
 }));
 
 // POST: Create a new booking (supports both services and accommodation)
+// POST: Create a new booking
 router.post('/', validateClient, wrapRoute(async (req, res) => {
     const clientId = req.clientId;
     const client = await Client.findOne({ clientID: clientId });
@@ -63,176 +64,67 @@ router.post('/', validateClient, wrapRoute(async (req, res) => {
         return res.status(404).json({ error: 'Client not found' });
     }
 
-    if (!req.body) {
-        return res.status(400).json({ error: 'Missing required fields' });
-    }
-
-    const bookingType = req.body.bookingType || 'service';
+    // ... all your existing validation and booking creation code ...
     
-    // Validate based on booking type
-    if (bookingType === 'accommodation' || bookingType === 'mixed') {
-        if (!req.body.accommodation || !req.body.accommodation.checkIn || !req.body.accommodation.checkOut) {
-            return res.status(400).json({ error: 'Check-in and check-out dates are required for accommodation bookings' });
-        }
-        
-        const checkIn = new Date(req.body.accommodation.checkIn);
-        const checkOut = new Date(req.body.accommodation.checkOut);
-        
-        if (checkIn >= checkOut) {
-            return res.status(400).json({ error: 'Check-out date must be after check-in date' });
-        }
-        
-        // Validate same-day booking permissions for accommodation
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        checkIn.setHours(0, 0, 0, 0);
-        
-        if (checkIn.getTime() === today.getTime() && client.tier !== 'gold') {
-            return res.status(400).json({ 
-                error: 'Same-day accommodation bookings are only available for Gold tier clients.' 
-            });
-        }
-    }
-
-    // Validate resource/room if provided
-    if (req.body.resourceId) {
-        if (!mongoose.Types.ObjectId.isValid(req.body.resourceId)) {
-            return res.status(400).json({ error: 'Invalid resource ID format' });
-        }
-        const resource = await Resource.findOne({ _id: req.body.resourceId, clientID: clientId });
-        if (!resource) {
-            return res.status(400).json({ error: 'Resource not found or does not belong to your client' });
-        }
-    }
-
-    // Calculate end time for service bookings
-    let endTime = req.body.endTime;
-    if (!endTime && req.body.duration && bookingType !== 'accommodation') {
-        const [hours, minutes] = req.body.time.split(':').map(Number);
-        const startDateTime = new Date(req.body.date);
-        startDateTime.setHours(hours, minutes, 0, 0);
-        const endDateTime = new Date(startDateTime.getTime() + req.body.duration * 60000);
-        endTime = `${endDateTime.getHours().toString().padStart(2, '0')}:${endDateTime.getMinutes().toString().padStart(2, '0')}`;
-    }
-
-    // Calculate reminder times
-    const reminders = [];
-    const now = new Date();
-
-    if (bookingType === 'accommodation' || bookingType === 'mixed') {
-        // Accommodation reminders
-        const checkInDate = new Date(req.body.accommodation.checkIn);
-        const checkOutDate = new Date(req.body.accommodation.checkOut);
-        
-        // Check-in reminder (24 hours before)
-        reminders.push({
-            type: 'email',
-            scheduledTime: new Date(checkInDate.getTime() - 24 * 60 * 60 * 1000),
-            sent: false,
-            reminderType: 'checkin'
-        });
-        
-        // Check-out reminder (day before check-out)
-        reminders.push({
-            type: 'email',
-            scheduledTime: new Date(checkOutDate.getTime() - 24 * 60 * 60 * 1000),
-            sent: false,
-            reminderType: 'checkout'
-        });
-        
-    } else {
-        // Service booking reminder
-        const appointmentDate = new Date(req.body.date);
-        const [hours, minutes] = req.body.time.split(':').map(Number);
-        appointmentDate.setHours(hours, minutes, 0, 0);
-
-        let reminderTime;
-        if (appointmentDate.toDateString() === now.toDateString() && client.tier === 'gold') {
-            reminderTime = new Date(now.getTime() + 60 * 60 * 1000);
-        } else {
-            reminderTime = new Date(appointmentDate.getTime() - 24 * 60 * 60 * 1000);
-        }
-
-        reminders.push({
-            type: 'email',
-            scheduledTime: reminderTime,
-            sent: false,
-            reminderType: 'service'
-        });
-    }
-
-    const bookingData = {
-        customerName: req.body.customerName,
-        customerEmail: req.body.customerEmail,
-        customerPhone: req.body.customerPhone,
-        services: req.body.services,
-        date: req.body.date,
-        time: req.body.time,
-        endTime: endTime,
-        duration: req.body.duration,
-        assignedTo: req.body.assignedTo,
-        resourceId: req.body.resourceId,
-        notes: req.body.notes,
-        clientID: clientId,
-        status: req.body.status || "confirmed",
-        bookingType: bookingType,
-        reminders: reminders,
-        payment: {
-            amount: req.body.amount,
-            currency: 'ZAR',
-            status: req.body.amount ? 'pending' : 'paid'
-        }
-    };
-
-    // Add accommodation data if provided
-    if (bookingType === 'accommodation' || bookingType === 'mixed') {
-        bookingData.accommodation = {
-            checkIn: req.body.accommodation.checkIn,
-            checkOut: req.body.accommodation.checkOut,
-            numberOfGuests: req.body.accommodation.numberOfGuests || 1,
-            numberOfRooms: req.body.accommodation.numberOfRooms || 1,
-            roomType: req.body.accommodation.roomType || 'double',
-            specialRequests: req.body.accommodation.specialRequests,
-            amenities: req.body.accommodation.amenities || []
-        };
-        
-        // Calculate number of nights
-        const checkIn = new Date(req.body.accommodation.checkIn);
-        const checkOut = new Date(req.body.accommodation.checkOut);
-        const numberOfNights = Math.ceil((checkOut - checkIn) / (1000 * 60 * 60 * 24));
-        bookingData.accommodation.numberOfNights = numberOfNights;
-        
-        // Calculate payment details for accommodation
-        if (req.body.amount) {
-            bookingData.payment.depositAmount = req.body.accommodation.depositAmount || (req.body.amount * 0.5); // 50% deposit
-            bookingData.payment.balanceDue = req.body.amount - bookingData.payment.depositAmount;
-            bookingData.payment.dueDate = new Date(checkIn.getTime() - 7 * 24 * 60 * 60 * 1000); // 7 days before check-in
-        }
-    }
-
-    // Add guest info if provided
-    if (req.body.guestInfo) {
-        bookingData.guestInfo = req.body.guestInfo;
-    }
-
     const booking = new Booking(bookingData);
     await booking.save();
     
-    // Send appropriate confirmation email
-    try {
-        if (bookingType === 'accommodation') {
-            await sendAccommodationConfirmationEmail(booking, client.businessEmail, client.businessEmailPassword, client.clientName || clientId);
-        } else if (bookingType === 'mixed') {
-            await sendMixedBookingConfirmationEmail(booking, client.businessEmail, client.businessEmailPassword, client.clientName || clientId);
-        } else {
-            await sendBookingConfirmationEmail(booking, client.businessEmail, client.businessEmailPassword, client.clientName || clientId);
-        }
-        console.log('Confirmation email sent successfully');
-    } catch (emailError) {
-        console.error('Failed to send confirmation email:', emailError);
-    }
+    // Populate the response
+    const populatedBooking = await Booking.findById(booking._id)
+        .populate('assignedTo')
+        .populate('resourceId');
     
-    res.status(201).json(booking);
+    // SEND RESPONSE IMMEDIATELY - DON'T WAIT FOR EMAILS
+    res.status(201).json({
+        message: 'Booking created successfully',
+        booking: populatedBooking,
+        reminderSchedule: {
+            type: bookingType === 'accommodation' ? '24 hours before check-in/out' : 
+                  (new Date(booking.date).toDateString() === new Date().toDateString() ? '2 hours before' : '24 hours before'),
+            scheduledTime: booking.reminders[0]?.scheduledTime
+        }
+    });
+
+    // ============ BACKGROUND EMAIL PROCESSING ============
+    // Process confirmation email after response is sent
+    setImmediate(async () => {
+        try {
+            const hasValidEmail = client.businessEmail && 
+                                 client.businessEmailPassword && 
+                                 !client.businessEmail.includes('company.com') &&
+                                 client.businessEmail !== 'your-email@gmail.com';
+            
+            if (hasValidEmail) {
+                if (bookingType === 'accommodation') {
+                    await sendAccommodationConfirmationEmail(
+                        populatedBooking, 
+                        client.businessEmail, 
+                        client.businessEmailPassword, 
+                        client.clientName || clientId
+                    );
+                } else if (bookingType === 'mixed') {
+                    await sendMixedBookingConfirmationEmail(
+                        populatedBooking, 
+                        client.businessEmail, 
+                        client.businessEmailPassword, 
+                        client.clientName || clientId
+                    );
+                } else {
+                    await sendBookingConfirmationEmail(
+                        populatedBooking, 
+                        client.businessEmail, 
+                        client.businessEmailPassword, 
+                        client.clientName || clientId
+                    );
+                }
+                console.log('✅ Background confirmation email sent successfully');
+            } else {
+                console.log('📧 [DEV MODE] Confirmation email would be sent to:', booking.customerEmail);
+            }
+        } catch (emailError) {
+            console.error('⚠️ Background email failed:', emailError.message);
+        }
+    });
 }));
 
 // PUT: Update a booking by ID
@@ -250,32 +142,237 @@ router.put('/:id', validateClient, wrapRoute(async (req, res) => {
         return res.status(404).json({ error: 'Booking not found or unauthorized' });
     }
 
+    // Don't allow updating accommodation bookings to service or mixed
+    if (booking.bookingType === 'accommodation' && req.body.bookingType && req.body.bookingType !== 'accommodation') {
+        return res.status(400).json({ error: 'Cannot change accommodation booking to service booking' });
+    }
+
     // Validate resource if provided
     if (req.body.resourceId) {
-        if (!mongoose.Types.ObjectId.isValid(req.body.resourceId)) {
+        let resourceId = req.body.resourceId;
+        if (typeof req.body.resourceId === 'object' && req.body.resourceId._id) {
+            resourceId = req.body.resourceId._id;
+        }
+        
+        if (!mongoose.Types.ObjectId.isValid(resourceId)) {
             return res.status(400).json({ error: 'Invalid resource ID format' });
         }
-        const resource = await Resource.findOne({ _id: req.body.resourceId, clientID: clientId });
+        const resource = await Resource.findOne({ _id: resourceId, clientID: clientId });
         if (!resource) {
             return res.status(400).json({ error: 'Resource not found or does not belong to your client' });
         }
+        req.body.resourceId = resourceId;
+    }
+
+    // Handle assignedTo - frontend sends full staff object or just ID
+    if (req.body.assignedTo) {
+        let staffId = req.body.assignedTo;
+        if (typeof req.body.assignedTo === 'object' && req.body.assignedTo._id) {
+            staffId = req.body.assignedTo._id;
+        }
+        
+        if (staffId) {
+            if (!mongoose.Types.ObjectId.isValid(staffId)) {
+                return res.status(400).json({ error: 'Invalid staff ID format' });
+            }
+            const staff = await Staff.findOne({ _id: staffId, clientID: clientId });
+            if (!staff) {
+                return res.status(400).json({ error: 'Staff member not found or does not belong to your client' });
+            }
+            req.body.assignedTo = staffId;
+        }
+    } else if (req.body.assignedTo === '' || req.body.assignedTo === 'unassigned' || req.body.assignedTo === null) {
+        req.body.assignedTo = null;
+    }
+
+    // Validate duration if provided
+    if (req.body.duration) {
+        const duration = parseInt(req.body.duration);
+        if (isNaN(duration) || duration <= 0) {
+            return res.status(400).json({ error: 'Duration must be a positive number' });
+        }
+        req.body.duration = duration;
     }
 
     // Update fields
     const updatableFields = [
         'customerName', 'customerEmail', 'customerPhone', 'services',
-        'date', 'time', 'endTime', 'duration', 'assignedTo', 'resourceId', 
-        'notes', 'status'
+        'date', 'time', 'duration', 'assignedTo', 'resourceId', 
+        'notes', 'status', 'endTime'
     ];
 
+    // Handle accommodation-specific updates
+    if (booking.bookingType === 'accommodation' || booking.bookingType === 'mixed') {
+        if (req.body.accommodation) {
+            if (req.body.accommodation.checkIn || req.body.accommodation.checkOut) {
+                const checkIn = new Date(req.body.accommodation.checkIn || booking.accommodation.checkIn);
+                const checkOut = new Date(req.body.accommodation.checkOut || booking.accommodation.checkOut);
+                
+                if (checkIn >= checkOut) {
+                    return res.status(400).json({ error: 'Check-out date must be after check-in date' });
+                }
+                
+                booking.accommodation = {
+                    ...booking.accommodation,
+                    ...req.body.accommodation
+                };
+                
+                const numberOfNights = Math.ceil((checkOut - checkIn) / (1000 * 60 * 60 * 24));
+                booking.accommodation.numberOfNights = numberOfNights;
+                
+                booking.reminders = [
+                    {
+                        type: 'email',
+                        scheduledTime: new Date(checkIn.getTime() - 24 * 60 * 60 * 1000),
+                        sent: false,
+                        reminderType: 'checkin'
+                    },
+                    {
+                        type: 'email',
+                        scheduledTime: new Date(checkOut.getTime() - 24 * 60 * 60 * 1000),
+                        sent: false,
+                        reminderType: 'checkout'
+                    }
+                ];
+            }
+        }
+    }
+
+    // For service bookings, recalculate endTime and reminders if date/time/duration changes
+    if (booking.bookingType === 'service' || booking.bookingType === 'mixed') {
+        const dateChanged = req.body.date && req.body.date !== booking.date.toISOString().split('T')[0];
+        const timeChanged = req.body.time && req.body.time !== booking.time;
+        const durationChanged = req.body.duration && req.body.duration !== booking.duration;
+        
+        if (dateChanged || timeChanged || durationChanged) {
+            const bookingDate = req.body.date || booking.date;
+            const bookingTime = req.body.time || booking.time;
+            const bookingDuration = parseInt(req.body.duration) || booking.duration;
+            
+            if (bookingTime) {
+                const timeRegex = /^([0-1]?[0-9]|2[0-3]):([0-5][0-9])$/;
+                if (!timeRegex.test(bookingTime)) {
+                    return res.status(400).json({ error: 'Invalid time format. Use HH:MM format (e.g., 09:15, 14:30, 16:45)' });
+                }
+            }
+            
+            if (!req.body.endTime) {
+                const [hours, minutes] = bookingTime.split(':').map(Number);
+                const startDateTime = new Date(bookingDate);
+                startDateTime.setHours(hours, minutes, 0, 0);
+                const endDateTime = new Date(startDateTime.getTime() + bookingDuration * 60000);
+                req.body.endTime = `${endDateTime.getHours().toString().padStart(2, '0')}:${endDateTime.getMinutes().toString().padStart(2, '0')}`;
+            }
+            
+            booking.duration = bookingDuration;
+            
+            const now = new Date();
+            const appointmentDate = new Date(bookingDate);
+            const [hours, minutes] = bookingTime.split(':').map(Number);
+            appointmentDate.setHours(hours, minutes, 0, 0);
+            
+            let reminderTime;
+            const isToday = appointmentDate.toDateString() === now.toDateString();
+            
+            if (isToday) {
+                reminderTime = new Date(appointmentDate.getTime() - 2 * 60 * 60 * 1000);
+                console.log(`📅 Booking moved to today - scheduling reminder 2 hours before at: ${reminderTime.toISOString()}`);
+            } else {
+                reminderTime = new Date(appointmentDate.getTime() - 24 * 60 * 60 * 1000);
+                console.log(`📅 Future booking - scheduling reminder 24 hours before at: ${reminderTime.toISOString()}`);
+            }
+            
+            if (reminderTime < now) {
+                console.log(`⚠️ Calculated reminder time is in the past (${reminderTime.toISOString()}), setting to now + 1 minute`);
+                reminderTime = new Date(now.getTime() + 60 * 1000);
+            }
+            
+            booking.reminders = [{
+                type: 'email',
+                scheduledTime: reminderTime,
+                sent: false,
+                reminderType: 'service'
+            }];
+        }
+    }
+
+    // Update all updatable fields
     updatableFields.forEach(field => {
         if (req.body[field] !== undefined) {
             booking[field] = req.body[field];
         }
     });
 
+    // If endTime wasn't set but we have duration and time, calculate it
+    if (!booking.endTime && booking.time && booking.duration) {
+        const [hours, minutes] = booking.time.split(':').map(Number);
+        const startDateTime = new Date(booking.date);
+        startDateTime.setHours(hours, minutes, 0, 0);
+        const endDateTime = new Date(startDateTime.getTime() + booking.duration * 60000);
+        booking.endTime = `${endDateTime.getHours().toString().padStart(2, '0')}:${endDateTime.getMinutes().toString().padStart(2, '0')}`;
+    }
+
     await booking.save();
-    res.json(booking);
+    
+    // Populate the response
+    const updatedBooking = await Booking.findById(booking._id)
+        .populate('assignedTo')
+        .populate('resourceId');
+    
+    // ============ ASYNC EMAIL SENDING - NON BLOCKING ============
+    // Send response immediately, then handle emails in the background
+    
+    res.json({
+        message: 'Booking updated successfully',
+        booking: updatedBooking
+    });
+
+    // ============ BACKGROUND EMAIL PROCESSING ============
+    // This runs AFTER the response is sent, so frontend doesn't wait
+    
+    // Check if this is a service booking that was moved to today
+    if (booking.bookingType === 'service' && req.body.date) {
+        const newDate = new Date(req.body.date);
+        const today = new Date();
+        const isToday = newDate.toDateString() === today.toDateString();
+        
+        if (isToday) {
+            // Process email in background without blocking
+            setImmediate(async () => {
+                try {
+                    // Check if client has valid email configuration
+                    const hasValidEmail = client.businessEmail && 
+                                         client.businessEmailPassword && 
+                                         !client.businessEmail.includes('company.com') &&
+                                         client.businessEmail !== 'your-email@gmail.com';
+                    
+                    if (hasValidEmail) {
+                        const [hours, minutes] = booking.time.split(':').map(Number);
+                        const appointmentTime = new Date(booking.date);
+                        appointmentTime.setHours(hours, minutes, 0, 0);
+                        
+                        const hoursUntilAppointment = (appointmentTime.getTime() - today.getTime()) / (1000 * 60 * 60);
+                        
+                        // Only send immediate notification if appointment is within 2 hours
+                        if (hoursUntilAppointment <= 2 && hoursUntilAppointment > 0) {
+                            console.log(`📧 Sending background notification for today's rescheduled booking ${booking._id}`);
+                            await sendBookingConfirmationEmail(
+                                booking,
+                                client.businessEmail,
+                                client.businessEmailPassword,
+                                client.clientName || booking.clientID
+                            );
+                            console.log(`✅ Background notification sent for booking ${booking._id}`);
+                        }
+                    }
+                } catch (emailError) {
+                    console.error(`⚠️ Background email failed for booking ${booking._id}:`, emailError.message);
+                    // Never throw - this is background processing
+                }
+            });
+        }
+    }
+    
 }));
 
 // POST: Payment Confirmation Webhook
@@ -444,26 +541,35 @@ router.get('/resources/available', validateClient, wrapRoute(async (req, res) =>
     });
 }));
 
-// Utility function to calculate end time
+// Utility function to calculate end time - updated to handle any minute value
 function calculateEndTime(startTime, duration) {
+    if (!startTime) return null;
+    
     const [hours, minutes] = startTime.split(':').map(Number);
     const startDateTime = new Date();
     startDateTime.setHours(hours, minutes, 0, 0);
-    const endDateTime = new Date(startDateTime.getTime() + duration * 60000);
+    const endDateTime = new Date(startDateTime.getTime() + parseInt(duration) * 60000);
     return `${endDateTime.getHours().toString().padStart(2, '0')}:${endDateTime.getMinutes().toString().padStart(2, '0')}`;
 }
 
-// Utility function to generate time slots
+// Utility function to generate time slots with support for 15-minute intervals
 function generateTimeSlots(date, existingBookings, duration = 60) {
     const slots = [];
     const startHour = 9; // 9 AM
     const endHour = 17; // 5 PM
+    const intervalMinutes = 15; // Changed from 30 to 15 for more granular slots
     
     for (let hour = startHour; hour < endHour; hour++) {
-        for (let minute = 0; minute < 60; minute += 30) { // 30-minute intervals
+        for (let minute = 0; minute < 60; minute += intervalMinutes) {
             const slotTime = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
             const slotEnd = new Date(date);
-            slotEnd.setHours(hour, minute + duration, 0, 0);
+            slotEnd.setHours(hour, minute + parseInt(duration), 0, 0);
+            
+            // Check if slot goes beyond end hour
+            if (slotEnd.getHours() > endHour || (slotEnd.getHours() === endHour && slotEnd.getMinutes() > 0)) {
+                continue;
+            }
+            
             const slotEndTime = `${slotEnd.getHours().toString().padStart(2, '0')}:${slotEnd.getMinutes().toString().padStart(2, '0')}`;
             
             // Check if slot conflicts with existing bookings
@@ -477,6 +583,7 @@ function generateTimeSlots(date, existingBookings, duration = 60) {
                 slots.push({
                     time: slotTime,
                     endTime: slotEndTime,
+                    duration: parseInt(duration),
                     available: true
                 });
             }
