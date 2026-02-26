@@ -100,11 +100,18 @@ router.post(
         }
 
         // Upload images to GitHub
-        const imagePaths = await Promise.all(files.map(file => {
-            if (!FILE_TYPE_MAP[file.mimetype]) throw new Error('Invalid file type');
-            const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${FILE_TYPE_MAP[file.mimetype]}`;
-            return uploadImageToGitHub(file, fileName);
-        }));
+        const imagePaths = [];
+
+            for (const file of files) {
+                if (!FILE_TYPE_MAP[file.mimetype]) {
+                    throw new Error('Invalid file type');
+                }
+
+                const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${FILE_TYPE_MAP[file.mimetype]}`;
+
+                const imageUrl = await uploadImageToGitHub(file, fileName);
+                imagePaths.push(imageUrl);
+            }
 
         const newProduct = new Product({
             productName: req.body.productName,
