@@ -374,6 +374,7 @@ router.get('/', validateClient, wrapRoute(async (req, res) => {
   const skip = (page - 1) * limit;
 
   const campaigns = await Campaign.find(filter)
+    .populate('products.productId') 
     .sort(sort)
     .limit(parseInt(limit))
     .skip(skip);
@@ -390,6 +391,10 @@ router.get('/', validateClient, wrapRoute(async (req, res) => {
     obj.typeDisplay = c.typeDisplay;
     return obj;
   });
+
+  const jsonString = JSON.stringify(campaigns);
+
+console.log(jsonString);
 
   res.json({
     success: true,
@@ -431,7 +436,7 @@ router.get('/:id', validateClient, wrapRoute(async (req, res) => {
     _id: req.params.id,
     clientId: req.clientId,
     isDeleted: false
-  });
+  }).populate('products.productId');
 
   if (!campaign) {
     return res.status(404).json({
@@ -471,7 +476,7 @@ router.get('/public/:campaignId', wrapRoute(async (req, res) => {
     ],
     status: 'active',
     isDeleted: false
-  });
+  }).populate('products.productId');
 
   if (!campaign) {
     return res.status(404).json({
@@ -874,7 +879,7 @@ router.delete('/:id/gallery/:imageIndex', validateClient, wrapRoute(async (req, 
 }));
 
 // Soft delete campaign
-router.delete('/:id', validateClient, requireAdmin, wrapRoute(async (req, res) => {
+router.delete('/:id', validateClient, wrapRoute(async (req, res) => {
   const campaign = await Campaign.findOneAndUpdate(
     { 
       _id: req.params.id, 
