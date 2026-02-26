@@ -51,6 +51,7 @@ const uploadImageToGitHub = async (file, fileName) => {
         }
     }
 
+    try {
     const response = await octokit.repos.createOrUpdateFileContents({
         owner,
         repo,
@@ -62,6 +63,13 @@ const uploadImageToGitHub = async (file, fileName) => {
     });
 
     return response.data.content.download_url;
+
+    } catch (err) {
+        console.log("GITHUB FULL ERROR:");
+        console.log("Status:", err.status);
+        console.log("Message:", err.response?.data);
+        throw err;
+    }
 };
 
 // Middleware to authenticate JWT and attach clientId
@@ -194,7 +202,7 @@ router.put(
         if (files.length > 0) {
             const newImagePaths = await Promise.all(files.map(file => {
                 if (!FILE_TYPE_MAP[file.mimetype]) throw new Error('Invalid file type');
-                const fileName = `${file.originalname.split(' ').join('-')}-${Date.now()}.${FILE_TYPE_MAP[file.mimetype]}`;
+                 const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${FILE_TYPE_MAP[file.mimetype]}`;
                 return uploadImageToGitHub(file, fileName);
             }));
             updatedImages = [...updatedImages, ...newImagePaths];
