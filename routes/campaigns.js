@@ -392,9 +392,6 @@ router.get('/', validateClient, wrapRoute(async (req, res) => {
     return obj;
   });
 
-  const jsonString = JSON.stringify(campaigns);
-
-console.log(jsonString);
 
   res.json({
     success: true,
@@ -773,11 +770,147 @@ router.get('/:id/metrics', validateClient, wrapRoute(async (req, res) => {
   }
 }));
 
-// Duplicate campaign
-router.post('/:id/duplicate', validateClient, wrapRoute(async (req, res) => {
+// Get all signups/pledges for a campaign - Simplified version
+router.get('/:id/signups', validateClient, wrapRoute(async (req, res) => {
+  const {
+    status,
+    isObligated,
+    search,
+    startDate,
+    endDate,
+    limit = 20,
+    page = 1,
+    sortBy = 'signupDate',
+    sortOrder = 'desc'
+  } = req.query;
+
+  // First verify the campaign belongs to this client
   const campaign = await Campaign.findOne({
     _id: req.params.id,
-    clientId: req.clientId
+    clientId: req.clientId,
+    isDeleted: false
+  });
+
+  if (!campaign) {
+    return res.status(404).json({
+      success: false,
+      message: 'Campaign not found or you do not have permission to view it'
+    });
+  }
+
+  // Build filter for preorder pledges
+  const filter = { 
+    campaignId: campaign._id.toString(),
+    isDeleted: false 
+  };
+
+  // Apply filters
+  if (status && status !== 'all') {
+    filter.status = status;
+  }
+
+  if (isObligated !== undefined && isObligated !== '') {
+    filter.isObligated = isObligated === 'true';
+  }
+
+  if (search) {
+    filter.$or = [
+      { email: { $regex: search, $options: 'i' } },
+      { firstName: { $regex: search, $options: 'i' } },
+      { lastName: { $regex: search, $options: 'i' } },
+      { phoneNumber: { $regex: search, $options: 'i' } }
+    ];
+  }
+
+  if (startDate || endDate) {
+    filter.signupDate = {};
+    if (startDate) filter.signupDate.$gte = new Date(startDate);
+    if (endDate) filter.signupDate.$lte = new Date(endDate);
+  }
+
+  // Build sort
+  const sort = {};
+  sort[sortBy] = sortOrder === 'desc' ? -1 : 1;
+
+  // Calculate pagination
+  const skip = (parseInt(page) - 1) * parseInt(limit);
+
+  // Execute queries - only select the fields we want
+  const [signups, total] = await Promise.all([
+    PreorderPledge.find(filter)
+      .select('firstName lastName email phoneNumber signupDate isObligated status') // Only select these fields
+      .sort(sort)
+      .limit(parseInt(limit))
+      .skip(skip),
+    PreorderPledge.countDocuments(filter)
+  ]);
+
+  // Map to return only the requested fields in the exact format
+  const simplifiedSignups = signups.map(signup => ({
+    firstName: signup.firstName || '',
+    lastName: signup.lastName || '',
+    email: signup.email || '',
+    phoneNumber: signup.phoneNumber || ''
+  }));
+
+  // Get summary counts
+  const summary = await PreorderPledge.aggregate([
+    { $match: { campaignId: campaign._id.toString(), isDeleted: false } },
+    {
+      $group: {
+        _id: null,
+        totalSignups: { $sum: 1 },
+        obligatedCount: { 
+          $sum: { $cond: ['$isObligated', 1, 0] } 
+        },
+        interestedCount: { 
+          $sum: { $cond: ['$isObligated', 0, 1] } 
+        },
+        uniqueEmails: { $addToSet: '$email' }
+      }
+    }
+  ]);
+
+  const summaryData = summary[0] || {
+    totalSignups: 0,
+    obligatedCount: 0,
+    interestedCount: 0,
+    uniqueEmails: []
+  };
+
+  res.json({
+    success: true,
+    data: {
+      campaign: {
+        id: campaign._id,
+        name: campaign.name,
+        type: campaign.campaignType,
+        status: campaign.status
+      },
+      signups: simplifiedSignups,
+      summary: {
+        totalSignups: total,
+        obligatedCount: summaryData.obligatedCount,
+        interestedCount: summaryData.interestedCount,
+        uniqueSignups: summaryData.uniqueEmails.length
+      },
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    }
+  });
+}));
+
+// Optional: Endpoint to get a single signup details if you need more information
+router.get('/:campaignId/signups/:signupId', validateClient, wrapRoute(async (req, res) => {
+  // Verify campaign belongs to client
+  const campaign = await Campaign.findOne({
+    _id: req.params.campaignId,
+    clientId: req.clientId,
+    isDeleted: false
   });
 
   if (!campaign) {
@@ -787,31 +920,102 @@ router.post('/:id/duplicate', validateClient, wrapRoute(async (req, res) => {
     });
   }
 
-  const campaignData = campaign.toObject();
-  delete campaignData._id;
-  delete campaignData.__v;
-  delete campaignData.campaignId;
-  delete campaignData.createdAt;
-  delete campaignData.updatedAt;
-  delete campaignData.views;
-  delete campaignData.backersCount;
-  delete campaignData.amountRaised;
-  delete campaignData.interestedCount;
-  delete campaignData.uniqueSignupsCount;
-  
-  campaignData.name = `${campaignData.name} (Copy)`;
-  campaignData.status = 'draft';
-  campaignData.startDate = new Date();
-  campaignData.endDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days from now
+  // Get the specific signup with only the fields we want
+  const signup = await PreorderPledge.findOne({
+    _id: req.params.signupId,
+    campaignId: campaign._id.toString(),
+    isDeleted: false
+  }).select('firstName lastName email phoneNumber signupDate isObligated status');
 
-  const newCampaign = new Campaign(campaignData);
-  await newCampaign.save();
+  if (!signup) {
+    return res.status(404).json({
+      success: false,
+      message: 'Signup not found'
+    });
+  }
 
-  res.status(201).json({
+  res.json({
     success: true,
-    data: newCampaign,
-    message: 'Campaign duplicated successfully'
+    data: {
+      campaign: {
+        id: campaign._id,
+        name: campaign.name
+      },
+      signup: {
+        firstName: signup.firstName || '',
+        lastName: signup.lastName || '',
+        email: signup.email || '',
+        phoneNumber: signup.phoneNumber || '',
+        signupDate: signup.signupDate,
+        isObligated: signup.isObligated,
+        status: signup.status
+      }
+    }
   });
+}));
+
+// Export signups as CSV (still includes all fields for export purposes)
+router.get('/:id/signups/export', validateClient, wrapRoute(async (req, res) => {
+  const campaign = await Campaign.findOne({
+    _id: req.params.id,
+    clientId: req.clientId,
+    isDeleted: false
+  });
+
+  if (!campaign) {
+    return res.status(404).json({
+      success: false,
+      message: 'Campaign not found'
+    });
+  }
+
+  // Get all signups for this campaign (unlimited for export)
+  const signups = await PreorderPledge.find({
+    campaignId: campaign._id.toString(),
+    isDeleted: false
+  }).select('firstName lastName email phoneNumber signupDate isObligated status')
+    .sort({ signupDate: -1 });
+
+  if (signups.length === 0) {
+    return res.status(404).json({
+      success: false,
+      message: 'No signups found to export'
+    });
+  }
+
+  // Define CSV headers
+  const headers = [
+    'First Name',
+    'Last Name',
+    'Email',
+    'Phone Number',
+    'Signup Date',
+    'Type',
+    'Status'
+  ];
+
+  // Convert signups to CSV rows
+  const rows = signups.map(signup => [
+    signup.firstName || '',
+    signup.lastName || '',
+    signup.email || '',
+    signup.phoneNumber || '',
+    new Date(signup.signupDate).toLocaleDateString(),
+    signup.isObligated ? 'Pre-order' : 'Interest',
+    signup.status || ''
+  ]);
+
+  // Create CSV content
+  const csvContent = [
+    headers.join(','),
+    ...rows.map(row => row.map(cell => `"${cell}"`).join(','))
+  ].join('\n');
+
+  // Set response headers for file download
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', `attachment; filename="${campaign.name.replace(/[^a-z0-9]/gi, '_')}_signups_${new Date().toISOString().split('T')[0]}.csv"`);
+  
+  res.send(csvContent);
 }));
 
 // Delete cover image
