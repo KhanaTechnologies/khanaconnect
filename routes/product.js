@@ -121,7 +121,7 @@ router.post(
         // Upload images to GitHub
         const imagePaths = await Promise.all(files.map(file => {
             if (!FILE_TYPE_MAP[file.mimetype]) throw new Error('Invalid file type');
-            const fileName = `${file.originalname.split(' ').join('-')}-${Date.now()}.${FILE_TYPE_MAP[file.mimetype]}`;
+            const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${FILE_TYPE_MAP[file.mimetype]}`;
             return uploadImageToGitHub(file, fileName);
         }));
 
