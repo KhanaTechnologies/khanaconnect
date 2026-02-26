@@ -24,52 +24,25 @@ const upload = multer({
     limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
 });
 
-const createFilePath = (fileName) => `public/uploads/${fileName}`;
-
 const uploadImageToGitHub = async (file, fileName) => {
-    const filePath = createFilePath(fileName);
+    const filePath = `public/uploads/${fileName}`;
     const content = file.buffer.toString('base64');
 
     const owner = process.env.GITHUB_REPO.split('/')[0];
     const repo = process.env.GITHUB_REPO.split('/')[1];
     const branch = process.env.GITHUB_BRANCH;
 
-    let sha;
-
-    try {
-        const existingFile = await octokit.repos.getContent({
-            owner,
-            repo,
-            path: filePath,
-            ref: branch
-        });
-
-        sha = existingFile.data.sha;
-    } catch (err) {
-        if (err.status !== 404) {
-            throw err;
-        }
-    }
-
-    try {
     const response = await octokit.repos.createOrUpdateFileContents({
         owner,
         repo,
         path: filePath,
         message: `Upload ${fileName}`,
         content,
-        branch,
-        ...(sha && { sha })
+        branch
+        // 🚨 NO SHA
     });
 
     return response.data.content.download_url;
-
-    } catch (err) {
-        console.log("GITHUB FULL ERROR:");
-        console.log("Status:", err.status);
-        console.log("Message:", err.response?.data);
-        throw err;
-    }
 };
 
 // Middleware to authenticate JWT and attach clientId
