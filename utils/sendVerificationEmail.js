@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const { decrypt } = require('../helpers/encryption'); // Add this import
 
 const failedAttempts = new Map(); // Tracks failed attempts per email
 const MAX_ATTEMPTS = 1;
@@ -29,19 +30,23 @@ function extractDomain(url) {
 
 async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass, websiteURL, clientName) {
 
+    // Decrypt the email credentials
+    const decryptedEmail = decrypt(bEmail);
+    const decryptedPass = decrypt(BEPass);
+
     const formattedClientName = clientName
         ? 'The ' + clientName.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase()).trim() + ' Team'
         : 'The Khana Connect Team';
 
-    if (isLockedOut(bEmail)) {
-        console.warn(`Email sending temporarily disabled for ${bEmail} due to repeated failures.`);
+    if (isLockedOut(decryptedEmail)) { // Check lockout with decrypted email
+        console.warn(`Email sending temporarily disabled for ${decryptedEmail} due to repeated failures.`);
         return;
     }
 
     // Extract clean domain from websiteURL
     const domain = extractDomain(websiteURL);
     console.log('Email configuration:', { 
-        bEmail, 
+        bEmail: decryptedEmail, // Log decrypted email for debugging
         websiteURL, 
         extractedDomain: domain,
         mailHost: `mail.${domain}`
@@ -52,8 +57,8 @@ async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass,
         port: 465,
         secure: true,
         auth: {
-            user: bEmail,
-            pass: BEPass
+            user: decryptedEmail, // Use decrypted email
+            pass: decryptedPass // Use decrypted password
         },
         tls: { rejectUnauthorized: false } // for cPanel certs
     });
@@ -85,19 +90,19 @@ async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass,
 
     try {
         await transporter.sendMail({
-            from: `"${formattedClientName}" <${bEmail}>`,
+            from: `"${formattedClientName}" <${decryptedEmail}>`, // Use decrypted email
             to: userEmail,
             subject: 'Verify Your Email Address',
             html: emailContent
         });
 
         console.log('Verification email sent successfully');
-        failedAttempts.delete(bEmail);
+        failedAttempts.delete(decryptedEmail); // Use decrypted email
     } catch (error) {
         console.error('Error sending verification email:', error);
 
-        const previous = failedAttempts.get(bEmail) || { count: 0, lastFailed: 0 };
-        failedAttempts.set(bEmail, {
+        const previous = failedAttempts.get(decryptedEmail) || { count: 0, lastFailed: 0 };
+        failedAttempts.set(decryptedEmail, {
             count: previous.count + 1,
             lastFailed: Date.now()
         });

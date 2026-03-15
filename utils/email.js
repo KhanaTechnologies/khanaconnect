@@ -1,5 +1,6 @@
 const nodemailer = require('nodemailer');
 const Product = require('../models/product');
+const { decrypt } = require('../helpers/encryption'); // Add this import
 
 async function sendWithRetry(transporter, mailOptions, retries = 3, delayMs = 2000) {
     for (let attempt = 1; attempt <= retries; attempt++) {
@@ -33,13 +34,19 @@ function getFormattedClientName(clientName) {
 }
 
 function createTransporter(bEmail, BEPass) {
+    // Decrypt the email and password before using them
+    const decryptedEmail = decrypt(bEmail);
+    const decryptedPass = decrypt(BEPass);
+    
+    console.log('Creating transporter with decrypted credentials'); // Debug log
+    
     return nodemailer.createTransport({
-        host: `mail.${bEmail.split('@')[1]}`, // Use the domain from the email
+        host: `mail.${decryptedEmail.split('@')[1]}`, // Use the domain from the decrypted email
         port: 465, // SSL port
         secure: true, // true for SSL
         auth: {
-            user: bEmail,
-            pass: BEPass
+            user: decryptedEmail,
+            pass: decryptedPass
         },
         tls: {
             rejectUnauthorized: false, // Allow self-signed certificates if needed
@@ -67,7 +74,7 @@ function formatBookingDate(date) {
 // Booking Confirmation Email
 // -----------------------------
 async function sendBookingConfirmationEmail(booking, bEmail, BEPass, clientName) {
-    console.log(booking, bEmail, BEPass, clientName)
+    console.log('Sending booking confirmation with decrypted credentials');
     const formattedClientName = getFormattedClientName(clientName);
     const transporter = createTransporter(bEmail, BEPass);
     const formattedDate = formatBookingDate(booking.date);
@@ -102,7 +109,7 @@ async function sendBookingConfirmationEmail(booking, bEmail, BEPass, clientName)
     `;
 
     await sendWithRetry(transporter, {
-        from: bEmail,
+        from: decrypt(bEmail), // Decrypt for the from field
         to: booking.customerEmail,
         subject: `Booking Confirmation - ${formattedDate}`,
         html: emailContent
@@ -110,8 +117,8 @@ async function sendBookingConfirmationEmail(booking, bEmail, BEPass, clientName)
 
     // Send notification to business
     await sendWithRetry(transporter, {
-        from: bEmail,
-        to: bEmail,
+        from: decrypt(bEmail), // Decrypt for the from field
+        to: decrypt(bEmail), // Decrypt for the to field
         subject: `New Booking - ${booking.customerName}`,
         html: emailContent
     });
@@ -156,7 +163,7 @@ async function sendBookingReminderEmail(booking, bEmail, BEPass, clientName) {
     `;
 
     await sendWithRetry(transporter, {
-        from: bEmail,
+        from: decrypt(bEmail), // Decrypt for the from field
         to: booking.customerEmail,
         subject: `Reminder: Your Booking Tomorrow - ${formattedDate}`,
         html: emailContent
@@ -199,7 +206,7 @@ async function sendPaymentConfirmationEmail(booking, bEmail, BEPass, clientName)
     `;
 
     await sendWithRetry(transporter, {
-        from: bEmail,
+        from: decrypt(bEmail), // Decrypt for the from field
         to: booking.customerEmail,
         subject: `Payment Confirmed - Booking ${formattedDate}`,
         html: emailContent
@@ -243,7 +250,7 @@ async function sendBookingCancellationEmail(booking, bEmail, BEPass, clientName,
     `;
 
     await sendWithRetry(transporter, {
-        from: bEmail,
+        from: decrypt(bEmail), // Decrypt for the from field
         to: booking.customerEmail,
         subject: `Booking Cancelled - ${formattedDate}`,
         html: emailContent
@@ -287,7 +294,7 @@ async function sendReschedulingEmail(booking, oldDetails, bEmail, BEPass, client
     `;
 
     await sendWithRetry(transporter, {
-        from: bEmail,
+        from: decrypt(bEmail), // Decrypt for the from field
         to: booking.customerEmail,
         subject: `Booking Rescheduled - ${newFormattedDate}`,
         html: emailContent
@@ -336,6 +343,8 @@ async function sendOrderConfirmationEmail(clientEmail, orderItems, bEmail, BEPas
     const subtotal = populatedOrderItems.reduce((total, item) => total + (item._doc.quantity * item._doc.variantPrice), 0);
     const total = subtotal + shipping;
 
+    const decryptedEmail = decrypt(bEmail); // Decrypt once for reuse
+
     const emailContent = `
         <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
             <h2 style="text-align: center; color: #444;">Thank You for Your Order!</h2>
@@ -382,8 +391,8 @@ async function sendOrderConfirmationEmail(clientEmail, orderItems, bEmail, BEPas
     `;
 
     // Send to client and business
-    await sendWithRetry(transporter, { from: bEmail, to: clientEmail, subject: 'Order Confirmation', html: emailContent });
-    await sendWithRetry(transporter, { from: bEmail, to: bEmail, subject: 'New Order Received', html: emailContent });
+    await sendWithRetry(transporter, { from: decryptedEmail, to: clientEmail, subject: 'Order Confirmation', html: emailContent });
+    await sendWithRetry(transporter, { from: decryptedEmail, to: decryptedEmail, subject: 'New Order Received', html: emailContent });
 
     console.log('Order confirmation email sent successfully');
 }
@@ -403,6 +412,7 @@ async function sendOrderStatusUpdateEmail(clientEmail, customerName, status, ord
     const { subject, message } = statusMessages[status.toLowerCase()] || { subject: 'Order Update', message: 'There\'s an update regarding your order.' };
 
     const transporter = createTransporter(bEmail, BEPass);
+    const decryptedEmail = decrypt(bEmail);
 
     const viewOrderLink = `${websiteURL}/login`;
     const trackOrderLink = `${trackingLink || viewOrderLink}`;
@@ -422,8 +432,8 @@ async function sendOrderStatusUpdateEmail(clientEmail, customerName, status, ord
         </div>
     `;
 
-    await sendWithRetry(transporter, { from: bEmail, to: clientEmail, subject, html: emailContent });
-    await sendWithRetry(transporter, { from: bEmail, to: bEmail, subject, html: emailContent });
+    await sendWithRetry(transporter, { from: decryptedEmail, to: clientEmail, subject, html: emailContent });
+    await sendWithRetry(transporter, { from: decryptedEmail, to: decryptedEmail, subject, html: emailContent });
 
     console.log(`Order status email (${status}) sent successfully`);
 }
@@ -434,6 +444,7 @@ async function sendOrderStatusUpdateEmail(clientEmail, customerName, status, ord
 async function sendAccommodationConfirmationEmail(booking, bEmail, BEPass, clientName) {
     const formattedClientName = getFormattedClientName(clientName);
     const transporter = createTransporter(bEmail, BEPass);
+    const decryptedEmail = decrypt(bEmail);
     
     const checkInDate = formatBookingDate(booking.accommodation.checkIn);
     const checkOutDate = formatBookingDate(booking.accommodation.checkOut);
@@ -475,7 +486,7 @@ async function sendAccommodationConfirmationEmail(booking, bEmail, BEPass, clien
     `;
 
     await sendWithRetry(transporter, {
-        from: bEmail,
+        from: decryptedEmail,
         to: booking.customerEmail,
         subject: `Accommodation Confirmation - ${checkInDate} to ${checkOutDate}`,
         html: emailContent
@@ -483,8 +494,8 @@ async function sendAccommodationConfirmationEmail(booking, bEmail, BEPass, clien
 
     // Send notification to business
     await sendWithRetry(transporter, {
-        from: bEmail,
-        to: bEmail,
+        from: decryptedEmail,
+        to: decryptedEmail,
         subject: `New Accommodation Booking - ${booking.customerName}`,
         html: emailContent
     });
@@ -498,6 +509,7 @@ async function sendAccommodationConfirmationEmail(booking, bEmail, BEPass, clien
 async function sendMixedBookingConfirmationEmail(booking, bEmail, BEPass, clientName) {
     const formattedClientName = getFormattedClientName(clientName);
     const transporter = createTransporter(bEmail, BEPass);
+    const decryptedEmail = decrypt(bEmail);
     
     const serviceDate = formatBookingDate(booking.date);
     const checkInDate = formatBookingDate(booking.accommodation.checkIn);
@@ -528,7 +540,7 @@ async function sendMixedBookingConfirmationEmail(booking, bEmail, BEPass, client
     `;
 
     await sendWithRetry(transporter, {
-        from: bEmail,
+        from: decryptedEmail,
         to: booking.customerEmail,
         subject: `Booking Confirmation - Services & Accommodation`,
         html: emailContent
@@ -543,6 +555,7 @@ async function sendMixedBookingConfirmationEmail(booking, bEmail, BEPass, client
 async function sendResetPasswordEmail(clientEmail, customerName, websiteURL, resetLink, bEmail, BEPass, clientName) {
     const formattedClientName = getFormattedClientName(clientName);
     const transporter = createTransporter(bEmail, BEPass);
+    const decryptedEmail = decrypt(bEmail);
 
     const emailContent = `
         <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
@@ -559,7 +572,7 @@ async function sendResetPasswordEmail(clientEmail, customerName, websiteURL, res
         </div>
     `;
 
-    await sendWithRetry(transporter, { from: bEmail, to: clientEmail, subject: 'Reset Password', html: emailContent });
+    await sendWithRetry(transporter, { from: decryptedEmail, to: clientEmail, subject: 'Reset Password', html: emailContent });
     console.log('Reset password email sent successfully');
 }
 
@@ -568,7 +581,10 @@ module.exports = {
     sendBookingReminderEmail,
     sendPaymentConfirmationEmail,
     sendBookingCancellationEmail,
+    sendReschedulingEmail,
     sendOrderConfirmationEmail,
     sendOrderStatusUpdateEmail,
+    sendAccommodationConfirmationEmail,
+    sendMixedBookingConfirmationEmail,
     sendResetPasswordEmail
 };

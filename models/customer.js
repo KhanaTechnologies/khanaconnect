@@ -1,14 +1,51 @@
-// models/customer.js
 const mongoose = require('mongoose');
 const Schema = mongoose.Schema;
+const { encrypt, decrypt } = require('../helpers/encryption');
+
+// Create a custom setter/getter for encrypted fields
+const encryptedString = {
+  type: String,
+  set: function(value) {
+    if (!value) return value;
+    // Only encrypt if it's not already encrypted
+    if (typeof value === 'string' && !value.includes(':')) {
+      return encrypt(value);
+    }
+    return value;
+  },
+  get: function(value) {
+    if (!value) return value;
+    return decrypt(value);
+  }
+};
+
+const encryptedNumber = {
+  type: Number,
+  set: function(value) {
+    if (!value) return value;
+    // Convert number to string for encryption
+    const valueStr = value.toString();
+    if (!valueStr.includes(':')) {
+      return encrypt(valueStr);
+    }
+    return value;
+  },
+  get: function(value) {
+    if (!value) return value;
+    const decrypted = decrypt(value.toString());
+    // Try to convert back to number if it's a number
+    const num = parseFloat(decrypted);
+    return isNaN(num) ? decrypted : num;
+  }
+};
 
 const cartItemSchema = new Schema({
   productId: { type: Schema.Types.ObjectId, ref: 'Product', required: true },
-  productName: { type: String, required: true },
+  productName: { type: String, required: true }, // Product name doesn't need encryption
   quantity: { type: Number, default: 1, min: 1 },
-  price: { type: Number, required: true },
-  image: { type: String, default: '' },
-  category: { type: String, default: '' },
+  price: { type: Number, required: true }, // Price doesn't need encryption
+  image: { type: String, default: '' }, // Image URL doesn't need encryption
+  category: { type: String, default: '' }, // Category doesn't need encryption
   variant: {
     name: { type: String, default: '' },
     value: { type: String, default: '' },
@@ -27,7 +64,7 @@ const orderHistorySchema = new Schema({
 }, { _id: false });
 
 const customerPreferencesSchema = new Schema({
-  favoriteCategories: [{ type: String }],
+  favoriteCategories: [{ type: String }], // Categories don't need encryption
   preferredPriceRange: {
     min: { type: Number, default: 0 },
     max: { type: Number, default: 10000 }
@@ -58,18 +95,21 @@ const cartReminderSchema = new Schema({
 }, { _id: false });
 
 const customerSchema = new Schema({
-  clientID: { type: String, required: true },
-  customerFirstName: { type: String, required: true },
-  customerLastName: { type: String, required: true },
-  emailAddress: { type: String, required: true },
-  phoneNumber: { type: Number, default: null },
-  passwordHash: { type: String, required: true },
-  address: { type: String, default: '' },
-  city: { type: String, default: '' },
-  postalCode: { type: String, default: '' },
+  clientID: { type: String, required: true }, 
+  customerFirstName: { type: String, required: true }, // Name doesn't need encryption
+  customerLastName: { type: String, required: true }, // Name doesn't need encryption
+  
+  // Encrypted fields
+  emailAddress: encryptedString, // Now encrypted
+  phoneNumber: encryptedNumber, // Now encrypted (as number)
+  address: encryptedString, // Now encrypted
+  city: encryptedString, // Now encrypted
+  postalCode: encryptedString, // Now encrypted
+  
+  passwordHash: { type: String, required: true }, // Already hashed with bcrypt
   isVerified: { type: Boolean, default: false },
   
-  // Cart and Order Data
+  // Cart and Order Data (these contain product references, not PII)
   cart: [cartItemSchema],
   orderHistory: [orderHistorySchema],
   wishlist: [{ type: Schema.Types.ObjectId, ref: 'Product' }],
@@ -78,7 +118,7 @@ const customerSchema = new Schema({
   preferences: { type: customerPreferencesSchema, default: () => ({}) },
   cartReminder: { type: cartReminderSchema, default: () => ({}) },
   
-  // Authentication fields
+  // Authentication fields (tokens don't need encryption as they're temporary)
   resetPasswordToken: { type: String, default: '' },
   resetPasswordExpires: { type: Date },
   emailVerificationToken: { type: String },
@@ -90,7 +130,9 @@ const customerSchema = new Schema({
   lastActivity: { type: Date, default: Date.now },
   customerSince: { type: Date, default: Date.now }
 }, {
-  timestamps: true
+  timestamps: true,
+  toJSON: { getters: true }, // Important: This ensures getters run when converting to JSON
+  toObject: { getters: true } // Important: This ensures getters run when converting to objects
 });
 
 // Indexes for better performance
@@ -104,6 +146,7 @@ customerSchema.virtual('id').get(function () {
 
 customerSchema.set('toJSON', {
   virtuals: true,
+  getters: true,
   transform: function(doc, ret) {
     delete ret.passwordHash;
     return ret;

@@ -12,7 +12,6 @@ const authJwt = () => {
      { url: /\/api\/v1\/emailsub(.*)/, methods: ['POST', 'OPTIONS'] },
      { url: /\/public\/uploads(.*)/, methods: ['GET', 'OPTIONS'] },
      { url: /\/api\/v1\/customer(.*)/, methods: ['GET', 'OPTIONS'] },
-    //  { url: /\/api\/v1\/notifications(.*)/, methods: ['GET', 'OPTIONS'] }, 
      { url: /\/api\/v1\/client(.*)/, methods: ['GET','POST', 'OPTIONS'] },
      { url: /\/api\/v1\/categories(.*)/, methods: ['GET', 'OPTIONS'] },
      { url: /\/api\/v1\/tradecation(.*)/, methods: ['GET', 'OPTIONS'] },
@@ -29,7 +28,12 @@ const authJwt = () => {
      { url: /\/api\/v1\/product(.*)/, methods: ['GET'] },
      { url: /\/api\/v1\/productsales(.*)/, methods: ['GET'] },
      { url: /\/api\/v1\/resource(.*)/, methods: ['GET'] },
-     //`${api}/emailsub/subscribe`,
+     { url: /\/api\/v1\/campaigns(.*)/, methods: ['GET','POST'] },
+     
+     // IMPORTANT: Add this regex for tracking events
+     { url: /\/api\/v1\/events(\/.*)?/, methods: ['POST', 'OPTIONS'] },
+     
+     // Keep your existing string paths
      `${api}/orders/update-order-payment`,
      `${api}/customer/reset-password`,
      `${api}/customer/reset-password/:token`,
@@ -43,13 +47,11 @@ const authJwt = () => {
      `${api}/client/login`,
      `${api}/client/register`,
      `${api}/discountcode/verify-discount-code`,
-      // { url: /(.*)/ } 
     ]
   })
 }
 
 async function isRevoked(req, token) {
-
   // Skip revocation check for password reset routes
   if (req.originalUrl.includes('/customer/reset-password/')) {
     return false;
@@ -63,11 +65,10 @@ async function isRevoked(req, token) {
     return false;
   }
 
-  if (!token.payload.isActive) {
+  if (token.payload.hasOwnProperty('isActive') && !token.payload.isActive) {
     return true;
   }
   return false;
 }
-
 
 module.exports = authJwt;

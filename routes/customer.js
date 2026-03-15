@@ -1,4 +1,3 @@
-// routes/customerRouter.js
 const express = require('express');
 const Customer = require('../models/customer');
 const Client = require('../models/client');
@@ -12,6 +11,8 @@ const { sendResetPasswordEmail } = require('../utils/email');
 const { sendCartReminderEmail } = require('../utils/cartReminderEmail');
 const { wrapRoute } = require('../helpers/failureEmail');
 const router = express.Router();
+const TrackingEvent = require('../models/TrackingEvent');
+const { encrypt, decrypt } = require('../helpers/encryption');
 
 // Rate limiter for login attempts
 const loginLimiter = rateLimit({
@@ -45,6 +46,30 @@ const validateTokenAndExtractClientID = (req, res, next) => {
   }
 };
 
+// Admin check middleware
+const requireAdmin = async (req, res, next) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'Unauthorized' });
+
+    jwt.verify(token, process.env.JWT_SECRET || process.env.secret, async (err, decoded) => {
+      if (err) return res.status(403).json({ error: 'Invalid token' });
+
+      const client = await Client.findOne({ clientID: decoded.clientID });
+      if (!client) return res.status(404).json({ error: 'Client not found' });
+
+      if (client.role !== 'admin') {
+        return res.status(403).json({ error: 'Admin access required' });
+      }
+
+      req.clientID = decoded.clientID;
+      next();
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // Input validation middleware
 const validateCustomerInput = (req, res, next) => {
   const { customerFirstName, customerLastName, emailAddress, password } = req.body;
@@ -75,6 +100,199 @@ const normalizeEmailDomain = (email) => {
     .replace(/@gmai\.com$/i, '@gmail.com')
     .replace(/@gmal\.com$/i, '@gmail.com');
 };
+
+// --------------------
+// CUSTOMER ENCRYPTION MIGRATION (Admin only)
+// --------------------
+
+/**
+ * Migration endpoint to encrypt existing customer data
+ * This should be run once when deploying encryption for the first time
+ * Only accessible by admin users
+ */
+router.post('/migrate/encrypt-existing-data', requireAdmin, wrapRoute(async (req, res) => {
+  try {
+    const customers = await Customer.find({ clientID: req.clientID });
+    const results = {
+      total: customers.length,
+      processed: 0,
+      failed: 0,
+      skipped: 0,
+      details: []
+    };
+
+    for (const customer of customers) {
+      try {
+        let modified = false;
+        const customerResult = {
+          customerId: customer._id,
+          email: customer.emailAddress, // This will show decrypted in logs - be careful!
+          fields: []
+        };
+
+        // Check each field and encrypt if not already encrypted
+        if (customer.emailAddress && !customer.emailAddress.includes(':')) {
+          customer.emailAddress = customer.emailAddress; // Trigger setter
+          modified = true;
+          customerResult.fields.push('emailAddress');
+        }
+
+        if (customer.phoneNumber && customer.phoneNumber.toString && !customer.phoneNumber.toString().includes(':')) {
+          customer.phoneNumber = customer.phoneNumber; // Trigger setter
+          modified = true;
+          customerResult.fields.push('phoneNumber');
+        }
+
+        if (customer.address && !customer.address.includes(':')) {
+          customer.address = customer.address; // Trigger setter
+          modified = true;
+          customerResult.fields.push('address');
+        }
+
+        if (customer.city && !customer.city.includes(':')) {
+          customer.city = customer.city; // Trigger setter
+          modified = true;
+          customerResult.fields.push('city');
+        }
+
+        if (customer.postalCode && !customer.postalCode.includes(':')) {
+          customer.postalCode = customer.postalCode; // Trigger setter
+          modified = true;
+          customerResult.fields.push('postalCode');
+        }
+
+        // Save if modified
+        if (modified) {
+          await customer.save();
+          results.processed++;
+          customerResult.status = 'processed';
+          customerResult.fieldsEncrypted = customerResult.fields.length;
+        } else {
+          results.skipped++;
+          customerResult.status = 'skipped';
+          customerResult.fieldsEncrypted = 0;
+        }
+
+        results.details.push(customerResult);
+      } catch (customerError) {
+        results.failed++;
+        results.details.push({
+          customerId: customer._id,
+          email: customer.emailAddress,
+          status: 'failed',
+          error: customerError.message
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Customer encryption migration completed',
+      results
+    });
+  } catch (error) {
+    console.error('Customer migration failed:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Migration failed',
+      details: error.message
+    });
+  }
+}));
+
+// --------------------
+// ENCRYPTION TESTING ENDPOINTS (Admin only)
+// --------------------
+
+// Test customer encryption (admin only)
+router.get('/debug/encryption-test/:customerId', requireAdmin, wrapRoute(async (req, res) => {
+  try {
+    // Get raw data (bypassing getters)
+    const customerRaw = await Customer.findOne({ 
+      _id: req.params.customerId, 
+      clientID: req.clientID 
+    }).lean();
+
+    // Get data with getters (automatically decrypted)
+    const customerDecrypted = await Customer.findOne({ 
+      _id: req.params.customerId, 
+      clientID: req.clientID 
+    });
+
+    if (!customerRaw) {
+      return res.status(404).json({ error: 'Customer not found' });
+    }
+
+    res.json({
+      success: true,
+      raw_data: {
+        emailAddress: customerRaw.emailAddress,
+        phoneNumber: customerRaw.phoneNumber,
+        address: customerRaw.address,
+        city: customerRaw.city,
+        postalCode: customerRaw.postalCode
+      },
+      decrypted_data: {
+        emailAddress: customerDecrypted.emailAddress,
+        phoneNumber: customerDecrypted.phoneNumber,
+        address: customerDecrypted.address,
+        city: customerDecrypted.city,
+        postalCode: customerDecrypted.postalCode
+      }
+    });
+  } catch (error) {
+    console.error('Encryption test failed:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+}));
+
+// Manual decrypt endpoint (admin only) - for debugging
+router.post('/debug/decrypt', requireAdmin, wrapRoute(async (req, res) => {
+  const { encryptedValue } = req.body;
+  
+  if (!encryptedValue) {
+    return res.status(400).json({ error: 'encryptedValue is required' });
+  }
+
+  try {
+    const decrypted = decrypt(encryptedValue);
+    res.json({
+      success: true,
+      encrypted: encryptedValue,
+      decrypted: decrypted
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      error: 'Decryption failed',
+      details: error.message
+    });
+  }
+}));
+
+// Manual encrypt endpoint (admin only) - for debugging
+router.post('/debug/encrypt', requireAdmin, wrapRoute(async (req, res) => {
+  const { value } = req.body;
+  
+  if (!value) {
+    return res.status(400).json({ error: 'value is required' });
+  }
+
+  try {
+    const encrypted = encrypt(value);
+    res.json({
+      success: true,
+      original: value,
+      encrypted: encrypted
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      error: 'Encryption failed',
+      details: error.message
+    });
+  }
+}));
 
 // --------------------
 // CART MANAGEMENT ROUTES
@@ -199,7 +417,7 @@ router.post('/:id/cart', validateTokenAndExtractClientID, wrapRoute(async (req, 
   }
 }));
 
-// UPDATE CART ITEM QUANTITY - FIXED VARIANT COMPARISON
+// UPDATE CART ITEM QUANTITY
 router.put('/:id/cart/:productId', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
@@ -268,7 +486,7 @@ router.put('/:id/cart/:productId', validateTokenAndExtractClientID, wrapRoute(as
   }
 }));
 
-// REMOVE FROM CART - FIXED VARIANT COMPARISON
+// REMOVE FROM CART
 router.delete('/:id/cart/:productId', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
@@ -688,11 +906,16 @@ router.post('/', validateTokenAndExtractClientID, validateCustomerInput, async (
     // Normalize email domain during registration
     const normalizedEmail = normalizeEmailDomain(req.body.emailAddress.toLowerCase());
 
-    // Check if customer already exists
-    const existingCustomer = await Customer.findOne({ 
-      emailAddress: normalizedEmail, 
-      clientID: req.clientID 
-    });
+    // Since email is encrypted, we need to get all customers and compare
+    const customers = await Customer.find({ clientID: req.clientID });
+    let existingCustomer = null;
+    
+    for (const c of customers) {
+      if (c.emailAddress.toLowerCase() === normalizedEmail) {
+        existingCustomer = c;
+        break;
+      }
+    }
     
     if (existingCustomer) {
       return res.status(409).json({ error: 'Customer with this email already exists' });
@@ -702,12 +925,12 @@ router.post('/', validateTokenAndExtractClientID, validateCustomerInput, async (
       clientID: req.clientID,
       customerFirstName: req.body.customerFirstName,
       customerLastName: req.body.customerLastName,
-      emailAddress: normalizedEmail, // Use normalized email
-      phoneNumber: req.body.phoneNumber,
+      emailAddress: normalizedEmail, // Will be automatically encrypted by schema
+      phoneNumber: req.body.phoneNumber, // Will be automatically encrypted by schema
       passwordHash: bcrypt.hashSync(req.body.password, 10),
-      address: req.body.street ? `${req.body.street}${req.body.apartment ? `, ${req.body.apartment}` : ''}` : undefined,
-      city: req.body.city,
-      postalCode: req.body.postalCode,
+      address: req.body.street ? `${req.body.street}${req.body.apartment ? `, ${req.body.apartment}` : ''}` : '',
+      city: req.body.city || '',
+      postalCode: req.body.postalCode || '',
       preferences: {
         notificationPreferences: {
           cartReminders: true,
@@ -739,10 +962,10 @@ router.post('/', validateTokenAndExtractClientID, validateCustomerInput, async (
 
     try {
       await sendVerificationEmail(
-        savedCustomer.emailAddress, 
+        savedCustomer.emailAddress, // This will be automatically decrypted by getter
         verifyUrl, 
-        client.businessEmail, 
-        client.businessEmailPassword, 
+        client.businessEmail, // This will be automatically decrypted
+        client.businessEmailPassword, // This will be automatically decrypted
         client.return_url, 
         client.companyName
       );
@@ -760,7 +983,7 @@ router.post('/', validateTokenAndExtractClientID, validateCustomerInput, async (
     res.status(201).json({
       success: true,
       message: 'Customer registered successfully',
-      customer: customerResponse
+      customer: customerResponse // All encrypted fields will be automatically decrypted by getters
     });
   } catch (error) {
     console.error('Error registering customer:', error);
@@ -768,7 +991,7 @@ router.post('/', validateTokenAndExtractClientID, validateCustomerInput, async (
   }
 });
 
-// LOGIN CUSTOMER - UPDATED WITH EMAIL NORMALIZATION AND AUTO-RESEND VERIFICATION
+// LOGIN CUSTOMER - Updated to handle encrypted email search
 router.post('/login', loginLimiter, validateTokenAndExtractClientID, async (req, res) => {
   try {
     const { emailAddress, password } = req.body;
@@ -780,10 +1003,16 @@ router.post('/login', loginLimiter, validateTokenAndExtractClientID, async (req,
     // Normalize email domain for login
     const normalizedEmail = normalizeEmailDomain(emailAddress.toLowerCase());
 
-    const customer = await Customer.findOne({ 
-      emailAddress: normalizedEmail, 
-      clientID: req.clientID 
-    });
+    // Since email is encrypted, we need to get all customers and compare
+    const customers = await Customer.find({ clientID: req.clientID });
+    
+    let customer = null;
+    for (const c of customers) {
+      if (c.emailAddress.toLowerCase() === normalizedEmail) {
+        customer = c;
+        break;
+      }
+    }
 
     if (!customer) {
       return res.status(401).json({ error: 'Invalid email address or password' });
@@ -843,6 +1072,30 @@ router.post('/login', loginLimiter, validateTokenAndExtractClientID, async (req,
     delete customerResponse.emailVerificationToken;
     delete customerResponse.resetPasswordToken;
 
+    // After successful authentication
+    const anonymousId = req.headers['x-anonymous-id'];
+    if (anonymousId && customer) {
+      // Convert anonymous user's events to authenticated
+      TrackingEvent.convertAnonymousToAuthenticated(
+        anonymousId,
+        customer._id,
+        req.clientID
+      ).catch(err => console.error('Error converting anonymous user:', err));
+    }
+
+    // Track login event
+    await TrackingEvent.create({
+      clientID: req.clientID,
+      customer: customer._id,
+      sessionId: req.trackingSessionId,
+      eventType: 'USER_LOGIN',
+      metadata: {
+        ip: req.ip,
+        userAgent: req.headers['user-agent']
+      },
+      source: 'api'
+    });
+
     res.json({ 
       success: true,
       message: 'Login successful',
@@ -894,10 +1147,16 @@ router.post('/resend-verification', validateTokenAndExtractClientID, async (req,
     // Normalize email domain
     const normalizedEmail = normalizeEmailDomain(emailAddress.toLowerCase());
 
-    const customer = await Customer.findOne({ 
-      emailAddress: normalizedEmail, 
-      clientID: req.clientID 
-    });
+    // Find customer by email (iterate through decrypted emails)
+    const customers = await Customer.find({ clientID: req.clientID });
+    let customer = null;
+    
+    for (const c of customers) {
+      if (c.emailAddress.toLowerCase() === normalizedEmail) {
+        customer = c;
+        break;
+      }
+    }
     
     if (!customer) {
       return res.status(404).json({ error: 'Customer not found' });
@@ -956,10 +1215,16 @@ router.post('/reset-password', validateTokenAndExtractClientID, async (req, res)
     // Normalize email domain
     const normalizedEmail = normalizeEmailDomain(emailAddress.toLowerCase());
 
-    const customer = await Customer.findOne({ 
-      emailAddress: normalizedEmail, 
-      clientID: req.clientID 
-    });
+    // Find customer by email (iterate through decrypted emails)
+    const customers = await Customer.find({ clientID: req.clientID });
+    let customer = null;
+    
+    for (const c of customers) {
+      if (c.emailAddress.toLowerCase() === normalizedEmail) {
+        customer = c;
+        break;
+      }
+    }
     
     if (!customer) {
       return res.status(404).json({ error: 'Customer not found with this email address' });
@@ -1051,7 +1316,7 @@ router.get('/:id', validateTokenAndExtractClientID, async (req, res) => {
     
     res.json({
       success: true,
-      customer
+      customer // All encrypted fields will be automatically decrypted by getters
     });
   } catch (error) {
     console.error('Error getting customer:', error);
@@ -1067,11 +1332,72 @@ router.get('/', validateTokenAndExtractClientID, async (req, res) => {
     
     res.json({
       success: true,
-      customers,
+      customers, // All encrypted fields will be automatically decrypted by getters
       count: customers.length
     });
   } catch (error) {
     console.error('Error getting customers:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// UPDATE CUSTOMER
+router.put('/:id', validateTokenAndExtractClientID, async (req, res) => {
+  try {
+    const updates = { ...req.body };
+    
+    // Remove fields that shouldn't be updated directly
+    delete updates._id;
+    delete updates.passwordHash;
+    delete updates.clientID;
+    delete updates.emailVerificationToken;
+    delete updates.resetPasswordToken;
+    delete updates.totalOrders;
+    delete updates.totalSpent;
+    delete updates.customerSince;
+    
+    // Handle email update specially (check for duplicates)
+    if (updates.emailAddress) {
+      const normalizedEmail = normalizeEmailDomain(updates.emailAddress.toLowerCase());
+      
+      // Check if email is already taken by another customer
+      const customers = await Customer.find({ 
+        clientID: req.clientID,
+        _id: { $ne: req.params.id }
+      });
+      
+      let emailExists = false;
+      for (const c of customers) {
+        if (c.emailAddress.toLowerCase() === normalizedEmail) {
+          emailExists = true;
+          break;
+        }
+      }
+      
+      if (emailExists) {
+        return res.status(409).json({ error: 'Email address is already in use' });
+      }
+      
+      updates.emailAddress = normalizedEmail; // Will be encrypted by schema
+    }
+
+    const updatedCustomer = await Customer.findOneAndUpdate(
+      { _id: req.params.id, clientID: req.clientID },
+      { $set: updates },
+      { new: true }
+    ).select('-passwordHash -emailVerificationToken -resetPasswordToken');
+
+    if (!updatedCustomer) {
+      return res.status(404).json({ error: 'Customer not found' });
+    }
+
+    res.json({
+      success: true,
+      message: 'Customer updated successfully',
+      customer: updatedCustomer
+    });
+  } catch (error) {
+    console.error('Error updating customer:', error);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
@@ -1162,7 +1488,7 @@ function generateCustomerAnalytics(customer) {
   return {
     basicInfo: {
       name: `${customer.customerFirstName} ${customer.customerLastName}`,
-      email: customer.emailAddress,
+      email: customer.emailAddress, // Will be automatically decrypted
       memberSince: customer.customerSince,
       lastActivity: customer.lastActivity,
       totalOrders: customer.totalOrders

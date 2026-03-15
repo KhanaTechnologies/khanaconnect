@@ -378,7 +378,7 @@ router.get('/', validateClient, wrapRoute(async (req, res) => {
     fundingCampaignInterests: preorders.filter(p => p.campaignType === 'funding' && !p.isObligated),
     fundingCampaignPledges: preorders.filter(p => p.campaignType === 'funding' && p.isObligated)
   };
-
+  
   res.json({
     success: true,
     data: grouped,

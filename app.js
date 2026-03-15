@@ -1,4 +1,3 @@
-// app.js
 const { config } = require('dotenv');
 var express = require('express');
 const app = express();
@@ -15,13 +14,21 @@ require('dotenv/config');
 const authJwt = require('./helpers/jwt');
 const errorHandler = require('./helpers/error-handler');
 
-// <-- NEW: failureEmail helper (single-file)
+// Tracking System Imports
+const trackingRoutes = require('./routes/trackingEvents');
+const eventProcessor = require('./services/eventProcessor');
+
+// Redis and Worker imports
+require('./config/redis');
+require('./workers/eventWorker');
+
+// failureEmail helper
 const failureEmail = require('./helpers/failureEmail');
 
-// <-- NEW: Booking Reminder Service
+// Booking Reminder Service
 const ReminderService = require('./helpers/reminderService');
 
-// <-- NEW: required for IMAP + Socket.IO integration
+// required for IMAP + Socket.IO integration
 const http = require('http');
 const { Server } = require('socket.io');
 const emailRouter = require('./routes/emailRouter');
@@ -33,7 +40,7 @@ const { startImap } = require('./helpers/imapService');
  * ========================
  */
 
-// Website Whitelist - Jason's specific domains
+// Website Whitelist
 const ALLOWED_ORIGINS = [
   'https://herbeauty.co.za',
   'https://www.herbeauty.co.za',
@@ -49,42 +56,42 @@ const ALLOWED_ORIGINS = [
   'http://localhost:8080'
 ];
 
-// IP Whitelist for sensitive endpoints (optional)
-const ALLOWED_IPS = [
-  '127.0.0.1',
-  '::1',
-  'localhost'
-];
-
 // Rate limiting configuration
 const generalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
-  message: {
-    error: 'Too many requests from this IP, please try again later.'
-  },
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: { error: 'Too many requests from this IP, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
 
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // Limit auth endpoints to 5 requests per windowMs
-  message: {
-    error: 'Too many authentication attempts, please try again later.'
-  },
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: { error: 'Too many authentication attempts, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
 
 const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 200, // Limit API endpoints to 200 requests per windowMs
-  message: {
-    error: 'Too many API requests, please try again later.'
-  },
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  message: { error: 'Too many API requests, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
+});
+
+// Tracking endpoint specific rate limiter
+const trackingLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 1000, // 1000 events per minute
+  message: { error: 'Too many tracking events, please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    const clientId = req.body.events?.[0]?.clientId || req.headers['x-client-id'];
+    return clientId || req.ip;
+  }
 });
 
 /**
@@ -96,22 +103,15 @@ const apiLimiter = rateLimit({
 // Enhanced CORS with whitelist
 app.use(cors({
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps, curl requests)
     if (!origin) return callback(null, true);
     
     if (ALLOWED_ORIGINS.indexOf(origin) === -1) {
-      const msg = `The CORS policy for this site does not allow access from the specified Origin: ${origin}`;
+      const msg = `The CORS policy does not allow access from: ${origin}`;
       console.warn(`🚫 Blocked CORS request from: ${origin}`);
       
-      // Log suspicious CORS attempts
       failureEmail.sendErrorEmail({
         subject: 'CORS Blocked Request',
-        html: `
-          <h3>CORS Blocked Request</h3>
-          <p><strong>Blocked Origin:</strong> ${origin}</p>
-          <p><strong>Time:</strong> ${new Date().toISOString()}</p>
-          <p><strong>Allowed Origins:</strong> ${ALLOWED_ORIGINS.join(', ')}</p>
-        `
+        html: `<h3>CORS Blocked Request</h3><p><strong>Origin:</strong> ${origin}</p>`
       }).catch(e => console.error('Failed to send CORS alert email:', e));
       
       return callback(new Error(msg), false);
@@ -120,10 +120,10 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Client-ID', 'X-Session-ID', 'X-Anonymous-ID']
 }));
 
-app.options('*', cors()); // Enable pre-flight for all routes
+app.options('*', cors());
 
 // Enhanced Helmet security
 app.use(helmet({
@@ -142,9 +142,7 @@ app.use(helmet({
 app.use(compression());
 
 // Trust proxy settings
-app.set('trust proxy', 1); // Trust first proxy
-
-// Remove X-Powered-By header
+app.set('trust proxy', 1);
 app.disable('x-powered-by');
 
 /**
@@ -153,35 +151,27 @@ app.disable('x-powered-by');
  * ========================
  */
 
-// Body parsing with limits to prevent DoS
+// Body parsing with limits
 app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ 
-  extended: true, 
-  limit: '10mb',
-  parameterLimit: 100
-}));
+app.use(express.urlencoded({ extended: true, limit: '10mb', parameterLimit: 100 }));
 
 app.use(cookieParser());
-
-// Enhanced logging
 app.use(logger('combined'));
 app.use(morgan('combined'));
 
-// Request size limiting middleware
+// Request size limiting
 app.use((req, res, next) => {
-  if (req.headers['content-length'] > 10 * 1024 * 1024) { // 10MB limit
+  if (req.headers['content-length'] > 10 * 1024 * 1024) {
     return res.status(413).json({ error: 'Request entity too large' });
   }
   next();
 });
 
-// <-- NEW: capture outgoing responses (must be mounted AFTER body parsers, BEFORE routers)
 app.use(failureEmail.captureResponse);
 
-// Static Files with security headers
+// Static Files
 app.use("/public/uploads", express.static(__dirname + "/public/uploads", {
-  setHeaders: (res, path) => {
-    // Security headers for static files
+  setHeaders: (res) => {
     res.set('X-Content-Type-Options', 'nosniff');
     res.set('X-Frame-Options', 'DENY');
   }
@@ -193,26 +183,23 @@ app.use("/public/uploads", express.static(__dirname + "/public/uploads", {
  * ========================
  */
 
-// Apply general rate limiting to all routes
 app.use(generalLimiter);
-
-// Apply stricter rate limiting to auth endpoints
 app.use('/api/v1/auth', authLimiter);
 app.use('/api/v1/client/login', authLimiter);
-
-// Apply API rate limiting
 app.use('/api/v1', apiLimiter);
 
 /**
  * ========================
- * JWT AUTH & ROUTES
+ * ROUTES
  * ========================
  */
 
-// JWT Auth (only for /api/v1)
+
+
+// JWT Auth for API routes
 app.use('/api/v1', authJwt());
 
-// Routers
+// Import all routers
 var customerRoutes = require('./routes/customer');
 var clientRoutes = require('./routes/client');
 var productRoutes = require('./routes/product');
@@ -232,13 +219,15 @@ var resourcesRouter = require('./routes/resources');
 var PreorderPledgeRouter = require('./routes/preorderPledges');
 var campaignsRouter = require('./routes/campaigns');
 var votingCampaignsRouter = require('./routes/votingCampaigns');
-
 const analyticsRoutes = require("./routes/analytics");
+
 app.use('/', indexRouter);
 
 const api = process.env.API_URL || '/api/v1';
 
-// Apply routes
+// Public tracking routes (no JWT required)
+app.use(`${api}/events`, trackingLimiter, trackingRoutes);
+// Apply API routes
 app.use(`${api}/wishlists`, wishListRouter);
 app.use(`${api}/categories`, categoriesRouter);
 app.use(`${api}/emailsub`, emailSubscriptionsRoutes);
@@ -258,10 +247,8 @@ app.use(`${api}/analytics`, analyticsRoutes);
 app.use(`${api}/preorderpledge`, PreorderPledgeRouter);
 app.use(`${api}/campaigns`, campaignsRouter);
 app.use(`${api}/votingcampaigns`, votingCampaignsRouter);
-
-
-// <-- NEW: mount email router under /api/v1/email
 app.use(`${api}/email`, emailRouter);
+
 
 /**
  * ========================
@@ -269,38 +256,46 @@ app.use(`${api}/email`, emailRouter);
  * ========================
  */
 
-// DB Connection with Pooling and enhanced security
 mongoose.connect(process.env.CONNECTION_STRING, {
     useNewUrlParser: true,
     useUnifiedTopology: true,
-     dbName: 'KhanaConnect_ProdDB',
     //dbName: 'KhanaConnect_DevDB',
+    dbName: 'KhanaConnect_ProdDB',
     maxPoolSize: 10,
     serverSelectionTimeoutMS: 5000,
     socketTimeoutMS: 45000,
-    autoIndex: false,
+    autoIndex: true,
     bufferCommands: false,
 })
 .then(() => {
-  console.log('DB Connected!');
+  console.log('✅ DB Connected!');
   
-  // <-- NEW: Start the Booking Reminder Service after DB connection is established
+  // Create indexes for tracking events
+  const TrackingEvent = require('./models/TrackingEvent');
+  TrackingEvent.createIndexes().catch(err => {
+    console.error('Failed to create tracking indexes:', err);
+  });
+  
+  // Start Booking Reminder Service
   try {
     const reminderService = new ReminderService();
-    console.log('✅ Booking Reminder Service started successfully');
+    console.log('✅ Booking Reminder Service started');
   } catch (error) {
     console.error('❌ Failed to start Booking Reminder Service:', error);
-    failureEmail.sendErrorEmail({
-      subject: 'Booking Reminder Service Failed to Start',
-      html: `<h3>Booking Reminder Service Startup Error</h3><pre>${error && error.stack ? error.stack : JSON.stringify(error)}</pre>`
-    }).catch(e => console.error('Failed to send reminder service error email:', e));
   }
+
+  console.log('📊 Tracking System initialized');
+  console.log('   - Event deduplication: Enabled');
+  console.log('   - Event processor: Running');
+  console.log('   - Batch endpoint: /api/events/batch');
+  console.log('   - Redis Queue: Connected');
+  console.log('   - Workers: Running');
 })
 .catch(err => {
-  console.log('DB Connection Error:', err);
+  console.log('❌ DB Connection Error:', err);
   failureEmail.sendErrorEmail({
     subject: 'DB Connection Error',
-    html: `<pre>${err && err.stack ? err.stack : JSON.stringify(err)}</pre>`
+    html: `<pre>${err.stack}</pre>`
   }).catch(e => console.error('Failed to send DB connection error email:', e));
 });
 
@@ -312,7 +307,7 @@ mongoose.connect(process.env.CONNECTION_STRING, {
 
 // 404 Handler
 app.use('*', (req, res) => {
-  console.warn(`🚫 404 - Path not found: ${req.originalUrl} from IP: ${req.ip}`);
+  console.warn(`🚫 404 - Path not found: ${req.originalUrl}`);
   res.status(404).json({ error: 'Route not found' });
 });
 
@@ -320,20 +315,19 @@ app.use('*', (req, res) => {
 process.on('uncaughtException', (err) => {
   console.error('💥 UNCAUGHT ERROR:', err);
   failureEmail.sendErrorEmail({
-    subject: 'UNCAUGHT EXCEPTION in KhanaConnect',
-    html: `<h3>Uncaught Exception</h3><pre>${err && err.stack ? err.stack : JSON.stringify(err)}</pre>`
+    subject: 'UNCAUGHT EXCEPTION',
+    html: `<pre>${err.stack}</pre>`
   }).catch(e => console.error('Failed to send uncaughtException email:', e));
 });
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('💥 UNHANDLED REJECTION:', reason);
   failureEmail.sendErrorEmail({
-    subject: 'UNHANDLED REJECTION in KhanaConnect',
-    html: `<h3>Unhandled Rejection</h3><pre>${reason && reason.stack ? reason.stack : JSON.stringify(reason)}</pre>`
+    subject: 'UNHANDLED REJECTION',
+    html: `<pre>${reason.stack || reason}</pre>`
   }).catch(e => console.error('Failed to send unhandledRejection email:', e));
 });
 
-// Mount the global error handler
 app.use(failureEmail.globalErrorHandler);
 
 /**
@@ -343,11 +337,9 @@ app.use(failureEmail.globalErrorHandler);
  */
 
 const PORT = process.env.PORT || 3000;
-
-// Create HTTP server
 const server = http.createServer(app);
 
-// Socket.IO with enhanced security
+// Socket.IO
 const io = new Server(server, { 
   cors: { 
     origin: ALLOWED_ORIGINS,
@@ -361,9 +353,8 @@ app.locals.io = io;
 
 io.on('connection', socket => {
   console.log('Socket connected:', socket.id);
-  
-  socket.on('disconnect', (reason) => {
-    console.log('Socket disconnected:', socket.id, 'Reason:', reason);
+  socket.on('disconnect', () => {
+    console.log('Socket disconnected:', socket.id);
   });
 });
 
@@ -372,12 +363,14 @@ server.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
   console.log(`🔒 Security features enabled:`);
   console.log(`   - CORS Whitelist: ${ALLOWED_ORIGINS.length} domains`);
-  console.log(`   - Protected Domains:`);
-  console.log(`     • HerBeauty: herbeauty.co.za`);
-  console.log(`     • Khana Technologies: khanatechnologies.co.za`);
-  console.log(`     • Gratiiam: gratiiam.co.za`);
   console.log(`   - Rate Limiting: Active`);
   console.log(`   - Helmet Security: Active`);
+  console.log(`📊 Tracking System:`);
+  console.log(`   - Endpoint: /api/events/batch`);
+  console.log(`   - Rate Limit: 1000 events/minute`);
+  console.log(`   - Deduplication: Enabled`);
+  console.log(`   - Redis Queue: Active`);
+  console.log(`📚 API Docs: http://localhost:${PORT}/api-docs`);
 });
 
 /**
@@ -389,6 +382,12 @@ server.listen(PORT, () => {
 const gracefulShutdown = async (signal) => {
   console.log(`\n${signal} received, shutting down gracefully...`);
   
+  // Wait for event processor to finish
+  if (eventProcessor && eventProcessor.stats?.queued > 0) {
+    console.log(`Waiting for ${eventProcessor.stats.queued} queued events...`);
+    await new Promise(resolve => setTimeout(resolve, 5000));
+  }
+  
   server.close(() => {
     console.log('HTTP server closed');
     mongoose.connection.close(false, () => {
@@ -397,9 +396,8 @@ const gracefulShutdown = async (signal) => {
     });
   });
 
-  // Force close after 10 seconds
   setTimeout(() => {
-    console.error('Could not close connections in time, forcefully shutting down');
+    console.error('Forcefully shutting down');
     process.exit(1);
   }, 10000);
 };

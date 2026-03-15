@@ -5,8 +5,7 @@ const jwt = require("jsonwebtoken");
 const Client = require("../models/client"); // Assuming you have a Client model
 const gaClient = require("../helpers/gaClient");
 const cache = new NodeCache({ stdTTL: 300 }); // 5 min cache
-
-
+const { decrypt } = require("../helpers/encryption"); // Add this import
 
 // ---------------- Middleware ---------------- //
 const validateClient = (req, res, next) => {
@@ -54,18 +53,6 @@ const aggregateVisits = (rows, period) => {
 
 // ---------------- /overview Route ---------------- //
 router.get("/overview", validateClient, async (req, res) => {
-  console.log(
-  "GA JSON exists:",
-  !!process.env.GA_SERVICE_ACCOUNT_JSON
-);
-
-    try {
-  const creds = JSON.parse(process.env.GA_SERVICE_ACCOUNT_JSON);
-  console.log("GA client email:", creds.client_email);
-} catch (e) {
-  console.error("GA JSON PARSE FAILED:", e.message);
-}
-
     try {
         const clientId = req.clientId;
         const cacheKey = `ga:${clientId}:overview`;
@@ -76,10 +63,37 @@ router.get("/overview", validateClient, async (req, res) => {
         // Fetch client from DB to get GA4 Property ID
         const client = await Client.findOne({ clientID: clientId });
         console.log(client);
-        if (!client || !client.ga4PropertyId) 
+        
+        if (!client) 
+            return res.status(404).json({ error: "Client not found" });
+
+        // Option 1: Let the schema getter handle decryption automatically (recommended)
+        // This will be automatically decrypted because ga4PropertyId uses encryptedString
+        const ga4PropertyId = client.ga4PropertyId; // Auto-decrypted by schema getter
+        
+        // Option 2: If you want to be explicit and add error handling:
+        // let ga4PropertyId = client.ga4PropertyId;
+        // 
+        // // If for some reason it's still encrypted, manually decrypt
+        // if (ga4PropertyId && ga4PropertyId.includes(':')) {
+        //     try {
+        //         ga4PropertyId = decrypt(ga4PropertyId);
+        //     } catch (decryptError) {
+        //         console.error('Failed to decrypt ga4PropertyId:', decryptError);
+        //         return res.status(400).json({ error: "Invalid GA4 property ID format" });
+        //     }
+        // }
+
+        if (!ga4PropertyId) 
             return res.status(400).json({ error: "GA4 property ID not configured for this client" });
 
-        const ga4PropertyId = client.ga4PropertyId;
+        // Validate that it's a proper GA4 property ID (numbers only)
+        if (!/^\d+$/.test(ga4PropertyId)) {
+            return res.status(400).json({ 
+                error: "Invalid GA4 property ID format",
+                message: "GA4 property ID should contain only numbers"
+            });
+        }
 
         // Fetch GA data for last ~5 years (for weekly/monthly/yearly aggregation)
         const [response] = await gaClient.runReport({

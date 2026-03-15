@@ -24,20 +24,25 @@ const upload = multer({
     limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
 });
 
-const createFilePath = (fileName) => `public/uploads/${fileName}`;
-
 const uploadImageToGitHub = async (file, fileName) => {
-    const filePath = createFilePath(fileName);
+    const filePath = `public/uploads/${fileName}`;
     const content = file.buffer.toString('base64');
-    const { data } = await octokit.repos.createOrUpdateFileContents({
-        owner: process.env.GITHUB_REPO.split('/')[0],
-        repo: process.env.GITHUB_REPO.split('/')[1],
+
+    const owner = process.env.GITHUB_REPO.split('/')[0];
+    const repo = process.env.GITHUB_REPO.split('/')[1];
+    const branch = process.env.GITHUB_BRANCH;
+
+    const response = await octokit.repos.createOrUpdateFileContents({
+        owner,
+        repo,
         path: filePath,
         message: `Upload ${fileName}`,
         content,
-        branch: process.env.GITHUB_BRANCH
+        branch
+        // 🚨 NO SHA
     });
-    return data.content.download_url;
+
+    return response.data.content.download_url;
 };
 
 // Middleware to authenticate JWT and attach clientId
@@ -95,11 +100,18 @@ router.post(
         }
 
         // Upload images to GitHub
-        const imagePaths = await Promise.all(files.map(file => {
-            if (!FILE_TYPE_MAP[file.mimetype]) throw new Error('Invalid file type');
-            const fileName = `${file.originalname.split(' ').join('-')}-${Date.now()}.${FILE_TYPE_MAP[file.mimetype]}`;
-            return uploadImageToGitHub(file, fileName);
-        }));
+        const imagePaths = [];
+
+            for (const file of files) {
+                if (!FILE_TYPE_MAP[file.mimetype]) {
+                    throw new Error('Invalid file type');
+                }
+
+                const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${FILE_TYPE_MAP[file.mimetype]}`;
+
+                const imageUrl = await uploadImageToGitHub(file, fileName);
+                imagePaths.push(imageUrl);
+            }
 
         const newProduct = new Product({
             productName: req.body.productName,
@@ -170,7 +182,7 @@ router.put(
         if (files.length > 0) {
             const newImagePaths = await Promise.all(files.map(file => {
                 if (!FILE_TYPE_MAP[file.mimetype]) throw new Error('Invalid file type');
-                const fileName = `${file.originalname.split(' ').join('-')}-${Date.now()}.${FILE_TYPE_MAP[file.mimetype]}`;
+                 const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${FILE_TYPE_MAP[file.mimetype]}`;
                 return uploadImageToGitHub(file, fileName);
             }));
             updatedImages = [...updatedImages, ...newImagePaths];
