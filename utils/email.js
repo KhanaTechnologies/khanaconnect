@@ -576,6 +576,86 @@ async function sendResetPasswordEmail(clientEmail, customerName, websiteURL, res
     console.log('Reset password email sent successfully');
 }
 
+// -----------------------------
+// Contact Us Email
+// -----------------------------
+async function sendContactUsEmail(contactData, bEmail, BEPass, clientName) {
+    const { name, email, phone, subject, message } = contactData;
+    const formattedClientName = getFormattedClientName(clientName);
+    const transporter = createTransporter(bEmail, BEPass);
+    const decryptedEmail = decrypt(bEmail);
+
+    // Email to the business/website owner
+    const businessEmailContent = `
+        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
+            <h2 style="text-align: center; color: #444;">New Contact Form Submission</h2>
+            <p>You have received a new message from your website contact form.</p>
+
+            <div style="margin: 20px 0; padding: 15px; background-color: #eef6fc; border-left: 4px solid #2196F3;">
+                <h3 style="margin-top: 0;">Contact Details</h3>
+                <p><strong>Name:</strong> ${name}</p>
+                <p><strong>Email:</strong> <a href="mailto:${email}">${email}</a></p>
+                <p><strong>Phone:</strong> ${phone || 'Not provided'}</p>
+                <p><strong>Subject:</strong> ${subject}</p>
+            </div>
+
+            <div style="margin: 20px 0; padding: 15px; background-color: #f9f9f9; border-left: 4px solid #4CAF50;">
+                <h3 style="margin-top: 0;">Message</h3>
+                <p style="white-space: pre-line;">${message}</p>
+            </div>
+
+            <p style="margin-top: 30px;">Please respond to this inquiry as soon as possible.</p>
+            <p>Warm regards,<br>Your Website System</p>
+            
+            <hr style="margin-top: 40px;">
+            <p style="font-size: 12px; color: #888;">This is an automated notification from your website contact form.</p>
+        </div>
+    `;
+
+    // Auto-reply email to the person who submitted the form
+    const autoReplyContent = `
+        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
+            <h2 style="text-align: center; color: #444;">Thank You for Contacting Us</h2>
+            <p>Hi ${name},</p>
+            <p>Thank you for reaching out to us. We have received your message and will get back to you as soon as possible.</p>
+
+            <div style="margin: 20px 0; padding: 15px; background-color: #eef6fc; border-left: 4px solid #2196F3;">
+                <h3 style="margin-top: 0;">Your Message Summary</h3>
+                <p><strong>Subject:</strong> ${subject}</p>
+                <p><strong>Message:</strong></p>
+                <p style="white-space: pre-line; background-color: #f5f5f5; padding: 10px; border-radius: 5px;">${message}</p>
+            </div>
+
+            <div style="margin: 20px 0; padding: 15px; background-color: #fff3cd; border-left: 4px solid #ffc107;">
+                <h4 style="margin-top: 0;">⏰ Response Time</h4>
+                <p>We typically respond within 24-48 hours during business days.</p>
+                <p>If your matter is urgent, please call us directly.</p>
+            </div>
+
+            <p>We appreciate your interest in our services!</p>
+            <p>Warm regards,<br>${formattedClientName}</p>
+        </div>
+    `;
+
+    // Send notification to business
+    await sendWithRetry(transporter, {
+        from: decryptedEmail,
+        to: decryptedEmail,
+        subject: `Contact Form: ${subject}`,
+        html: businessEmailContent
+    });
+
+    // Send auto-reply to the person who contacted
+    await sendWithRetry(transporter, {
+        from: decryptedEmail,
+        to: email,
+        subject: `Thank You for Contacting ${formattedClientName.replace('The ', '').replace(' Team', '')}`,
+        html: autoReplyContent
+    });
+
+    console.log('Contact us emails sent successfully');
+}
+
 module.exports = {
     sendBookingConfirmationEmail,
     sendBookingReminderEmail,
@@ -586,5 +666,6 @@ module.exports = {
     sendOrderStatusUpdateEmail,
     sendAccommodationConfirmationEmail,
     sendMixedBookingConfirmationEmail,
-    sendResetPasswordEmail
+    sendResetPasswordEmail,
+    sendContactUsEmail // Added the new function here
 };
