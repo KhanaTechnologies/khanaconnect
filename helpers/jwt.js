@@ -24,6 +24,7 @@ const authJwt = () => {
      { url: /\/api\/v1\/admin(.*)/, methods: ['GET', 'OPTIONS'] },
      { url: /\/api\/v1\/users(.*)/, methods:['GET','OPTIONS']},
      { url: /\/api\/v1\/email(.*)/, methods:['GET','OPTIONS','POST']},
+     { url: /\/api\/v1\/email\/contact/, methods: ['POST', 'OPTIONS'] },
      { url: /\/api\/v1\/orders(.*)/, methods:['GET','OPTIONS']},
      { url: /\/api\/v1\/product(.*)/, methods: ['GET'] },
      { url: /\/api\/v1\/productsales(.*)/, methods: ['GET'] },
@@ -47,6 +48,7 @@ const authJwt = () => {
      `${api}/client/login`,
      `${api}/client/register`,
      `${api}/discountcode/verify-discount-code`,
+     `${api}/email/contact`,
     ]
   })
 }
