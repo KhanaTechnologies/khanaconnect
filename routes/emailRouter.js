@@ -9,6 +9,7 @@ const { wrapRoute } = require('../helpers/failureEmail');
 const { fetchClientEmails, addFlags, removeFlags } = require('../helpers/imapService');
 const NewsletterService = require('../helpers/newsletterService');
 const Client = require('../models/client');
+const { sendContactUsEmail } = require('../utils/email');
 
 const router = express.Router();
 
@@ -1686,6 +1687,103 @@ router.get('/health', validateClient, wrapRoute(async (req, res) => {
             ok: false,
             message: 'Health check failed',
             error: error.message
+        });
+    }
+}));
+
+// ============================================================================
+// CONTACT FORM ENDPOINT - Uses validateClient (requires token)
+// ============================================================================
+
+// ============================================================================
+// CONTACT FORM ENDPOINT - Uses validateClient (requires token)
+// ============================================================================
+
+/**
+ * POST /contact
+ * Endpoint for contact forms from authenticated clients
+ * Sends email to business and auto-reply to customer
+ */
+router.post('/contact', validateClient, wrapRoute(async (req, res) => {
+    try {
+        const { 
+            name, 
+            email, 
+            phone, 
+            message,
+            business,
+            websiteType,
+            budget,
+            timeline,
+            features
+        } = req.body;
+
+        // Validate required fields
+        if (!name || !email || !message) {
+            return res.status(400).json({
+                ok: false,
+                message: 'Missing required fields. Name, email, and message are required.'
+            });
+        }
+
+        // Basic email validation
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+            return res.status(400).json({
+                ok: false,
+                message: 'Invalid email format'
+            });
+        }
+
+        // Build a comprehensive message including all fields
+        let enhancedMessage = message;
+        
+        // Add additional fields to the message if they exist
+        const additionalInfo = [];
+        if (business) additionalInfo.push(`Business: ${business}`);
+        if (websiteType) additionalInfo.push(`Website Type: ${websiteType}`);
+        if (budget) additionalInfo.push(`Budget: ${budget}`);
+        if (timeline) additionalInfo.push(`Timeline: ${timeline}`);
+        if (features && features.length > 0) additionalInfo.push(`Features: ${features.join(', ')}`);
+        
+        if (additionalInfo.length > 0) {
+            enhancedMessage = `${message}\n\n--- Additional Information ---\n${additionalInfo.join('\n')}`;
+        }
+
+        // Prepare contact data with default subject
+        const contactData = {
+            name,
+            email,
+            phone: phone || '',
+            subject: 'Contact Form',
+            message: enhancedMessage
+        };
+
+        // Send emails using the emailService
+        await sendContactUsEmail(
+            contactData,
+            req.client.businessEmail,
+            req.client.businessEmailPassword,
+            req.client.companyName
+        );
+
+        // Return success response
+        res.status(200).json({
+            ok: true,
+            message: 'Thank you for contacting us. We will get back to you soon.',
+            data: {
+                name,
+                email,
+                subject: 'Contact Form',
+                timestamp: new Date().toISOString()
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Contact form submission failed:', error.message);
+        res.status(500).json({
+            ok: false,
+            message: 'Failed to process your message. Please try again later.'
         });
     }
 }));
