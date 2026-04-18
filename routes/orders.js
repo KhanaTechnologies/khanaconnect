@@ -12,6 +12,9 @@ const { sendOrderConfirmationEmail, sendOrderStatusUpdateEmail } = require('../u
 const Client = require('../models/client');
 const { body, validationResult } = require('express-validator');
 const { wrapRoute } = require('../helpers/failureEmail');
+const { updateCustomerOrderHistory } = require('../helpers/orderCustomerHistory');
+const { fulfillGatewayPayment } = require('../helpers/fulfillGatewayPayment');
+const { orderPaymentWebhookOk } = require('../helpers/webhookAuth');
 
 // Middleware to authenticate JWT token and extract clientId
 const authenticateToken = (req, res, next) => {
@@ -31,106 +34,6 @@ const authenticateToken = (req, res, next) => {
 };
 
 // -------------------- HELPER FUNCTIONS -------------------- //
-
-/**
- * Update customer order history and shopping habits
- */
-async function updateCustomerOrderHistory(customerId, order, orderItems) {
-    try {
-        const customer = await Customer.findById(customerId);
-        if (!customer) return;
-
-        // Get detailed product information for order history
-        const populatedOrderItems = await Promise.all(
-            orderItems.map(async (item) => {
-                const product = await Product.findById(item.product).select('productName images category');
-                const orderItem = await OrderItem.findById(item._id || item);
-                
-                return {
-                    productId: item.product,
-                    productName: product?.productName || 'Unknown Product',
-                    quantity: item.quantity,
-                    price: orderItem?.variantPrice || product?.price || 0,
-                    image: product?.images?.[0] || '',
-                    category: product?.category?.name || '',
-                    variant: orderItem?.variant || {}
-                };
-            })
-        );
-
-        // Add order to customer history
-        customer.orderHistory.push({
-            orderId: order._id.toString(),
-            products: populatedOrderItems,
-            totalAmount: order.finalPrice,
-            orderDate: order.dateOrdered,
-            status: order.status
-        });
-
-        // Update customer analytics
-        customer.totalOrders += 1;
-        customer.totalSpent += order.finalPrice;
-        customer.lastActivity = new Date();
-        
-        // Initialize shopping habits if not exists
-        if (!customer.preferences.shoppingHabits) {
-            customer.preferences.shoppingHabits = {
-                averageOrderValue: 0,
-                favoriteProducts: [],
-                typicalOrderInterval: 0,
-                lastOrderDate: null
-            };
-        }
-
-        // Update shopping habits
-        const now = new Date();
-        if (customer.preferences.shoppingHabits.lastOrderDate) {
-            const lastOrder = new Date(customer.preferences.shoppingHabits.lastOrderDate);
-            const daysBetween = (now - lastOrder) / (1000 * 60 * 60 * 24);
-            
-            // Update typical order interval (moving average)
-            if (customer.preferences.shoppingHabits.typicalOrderInterval) {
-                customer.preferences.shoppingHabits.typicalOrderInterval = 
-                    (customer.preferences.shoppingHabits.typicalOrderInterval + daysBetween) / 2;
-            } else {
-                customer.preferences.shoppingHabits.typicalOrderInterval = daysBetween;
-            }
-        }
-        customer.preferences.shoppingHabits.lastOrderDate = now;
-        
-        // Update average order value
-        customer.preferences.shoppingHabits.averageOrderValue = 
-            customer.totalSpent / customer.totalOrders;
-        
-        // Update favorite products
-        populatedOrderItems.forEach(product => {
-            if (!customer.preferences.shoppingHabits.favoriteProducts.includes(product.productId)) {
-                customer.preferences.shoppingHabits.favoriteProducts.push(product.productId);
-            }
-        });
-
-        // Update favorite categories
-        const categoryCount = {};
-        populatedOrderItems.forEach(product => {
-            if (product.category) {
-                categoryCount[product.category] = (categoryCount[product.category] || 0) + 1;
-            }
-        });
-        
-        customer.preferences.favoriteCategories = Object.entries(categoryCount)
-            .sort(([,a], [,b]) => b - a)
-            .slice(0, 3)
-            .map(([category]) => category);
-
-        // Clear customer cart after successful order
-        customer.cart = [];
-
-        await customer.save();
-        console.log(`✅ Updated order history for customer ${customer.customerFirstName} ${customer.customerLastName}`);
-    } catch (error) {
-        console.error('Error updating customer order history:', error);
-    }
-}
 
 /**
  * Calculate next reminder date based on customer's shopping habits
@@ -353,49 +256,19 @@ router.put('/:id', authenticateToken, wrapRoute(async (req, res) => {
     res.json(order);
 }));
 
-// Update order payment
+// Update order payment (webhook auth only when ORDER_PAYMENT_WEBHOOK_ENABLED=true)
 router.post('/update-order-payment', wrapRoute(async (req, res) => {
+    if (!orderPaymentWebhookOk(req)) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+
     const { item_name, payment_status, totalPrice } = req.body;
     if (!item_name || payment_status !== 'COMPLETE') return res.status(400).json({ error: 'Invalid payment details' });
 
     const orderId = item_name.split('#')[1];
-    const order = await Order.findById(orderId).populate('orderItems').populate('customer');
-    if (!order) return res.status(404).json({ error: 'Order not found' });
-    if (order.paid) return res.json({ success: true, message: 'Order already processed.' });
-
-    order.paid = true;
-    order.totalPrice = totalPrice;
-    await order.save();
-
-    // Deduct stock
-    for (const orderItem of order.orderItems) {
-        const product = await Product.findById(orderItem.product);
-        if (!product) continue;
-        product.countInStock -= orderItem.quantity;
-        await product.save();
-    }
-
-    // Update customer order history and analytics
-    await updateCustomerOrderHistory(order.customer._id, order, order.orderItems);
-
-    const client = await Client.findOne({ clientID: order.clientID });
-    if (client) {
-        try {
-            await sendOrderConfirmationEmail(
-                order.customer.emailAddress,
-                order.orderItems,
-                client.businessEmail,
-                client.businessEmailPassword,
-                order.deliveryPrice,
-                order.clientID,
-                orderId
-            );
-        } catch (emailError) {
-            console.error('Email failed to send:', emailError.message);
-        }
-    }
-
-    res.json({ success: true });
+    const result = await fulfillGatewayPayment(orderId, totalPrice);
+    if (!result.ok) return res.status(404).json({ error: result.error || 'Order not found' });
+    res.json({ success: true, alreadyPaid: !!result.alreadyPaid });
 }));
 
 // Get total sales

@@ -66,7 +66,13 @@ const clientSchema = new Schema({
       price: { type: Number }
     }
   ],
-  emailSignature: {type: String},
+  emailSignature: { type: String },
+  /** Outgoing SMTP (optional). If empty, derived from imapHost or business email domain — not from return_url alone when email domain exists. */
+  smtpHost: { type: String, default: '' },
+  smtpPort: { type: Number, default: 587 },
+  /** Incoming IMAP (optional). If empty, derived from business email domain or return_url. */
+  imapHost: { type: String, default: '' },
+  imapPort: { type: Number, default: 993 },
   ga4PropertyId: encryptedString, // Now encrypted
   
   // Encrypted Google Analytics Configuration

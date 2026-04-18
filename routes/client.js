@@ -1399,7 +1399,11 @@ router.post('/', wrapRoute(async (req, res) => {
     permissions, 
     deliveryOptions,
     emailSignature,
-    ga4PropertyId
+    ga4PropertyId,
+    imapHost,
+    imapPort,
+    smtpHost,
+    smtpPort,
   } = req.body;
   
   const hashedPassword = bcrypt.hashSync(password, 10);
@@ -1432,6 +1436,10 @@ router.post('/', wrapRoute(async (req, res) => {
     },
     deliveryOptions: deliveryOptions || [],
     emailSignature: emailSignature || '',
+    imapHost: imapHost || '',
+    imapPort: imapPort != null && imapPort !== '' ? Number(imapPort) : 993,
+    smtpHost: smtpHost || '',
+    smtpPort: smtpPort != null && smtpPort !== '' ? Number(smtpPort) : 587,
     ga4PropertyId: ga4PropertyId || '',
     analyticsConfig: {
       googleAnalytics: {

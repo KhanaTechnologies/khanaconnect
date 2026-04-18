@@ -2,7 +2,8 @@ const { expressjwt } = require('express-jwt');
  
 const authJwt = () => {
   const secret = process.env.secret;
-  const api = process.env.API_URL;
+  const api = process.env.API_URL || '/api/v1';
+  const apiEsc = api.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return expressjwt({
     secret,
     algorithms: ['HS256'],
@@ -23,8 +24,11 @@ const authJwt = () => {
      { url: /\/api\/v1\/staff(.*)/, methods: ['GET', 'OPTIONS'] },
      { url: /\/api\/v1\/admin(.*)/, methods: ['GET', 'OPTIONS'] },
      { url: /\/api\/v1\/users(.*)/, methods:['GET','OPTIONS']},
-     { url: /\/api\/v1\/email(.*)/, methods:['GET','OPTIONS','POST']},
-     { url: /\/api\/v1\/email\/contact/, methods: ['POST', 'OPTIONS'] },
+     // Public email endpoints only (do not exempt all /email — that would skip JWT globally)
+     { url: new RegExp(`^${apiEsc}/email/subscribe/?$`), methods: ['POST', 'OPTIONS'] },
+     { url: new RegExp(`^${apiEsc}/email/unsubscribe/?$`), methods: ['POST', 'OPTIONS'] },
+     { url: new RegExp(`^${apiEsc}/email/newsletter/open\\.gif`), methods: ['GET', 'OPTIONS'] },
+     { url: new RegExp(`^${apiEsc}/email/newsletter/unsubscribe`), methods: ['GET', 'OPTIONS'] },
      { url: /\/api\/v1\/orders(.*)/, methods:['GET','OPTIONS']},
      { url: /\/api\/v1\/product(.*)/, methods: ['GET'] },
      { url: /\/api\/v1\/productsales(.*)/, methods: ['GET'] },
@@ -32,7 +36,8 @@ const authJwt = () => {
      { url: /\/api\/v1\/campaigns(.*)/, methods: ['GET','POST'] },
      
      // IMPORTANT: Add this regex for tracking events
-     { url: /\/api\/v1\/events(\/.*)?/, methods: ['POST', 'OPTIONS'] },
+     { url: new RegExp(`^${apiEsc}/events(/.*)?`), methods: ['POST', 'OPTIONS'] },
+     { url: new RegExp(`^${apiEsc}/payments/payfast/itn/?$`), methods: ['POST', 'OPTIONS'] },
      
      // Keep your existing string paths
      `${api}/orders/update-order-payment`,
@@ -48,7 +53,6 @@ const authJwt = () => {
      `${api}/client/login`,
      `${api}/client/register`,
      `${api}/discountcode/verify-discount-code`,
-     `${api}/email/contact`,
     ]
   })
 }

@@ -1,15 +1,21 @@
 // utils/cartReminderEmail.js
 const { sendMail } = require('../helpers/mailer');
 const { decrypt } = require('../helpers/encryption'); // Add this import
+const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../helpers/mailHost');
 
 async function sendCartReminderEmail(customer, client) {
   try {
     // Decrypt the email credentials
     const decryptedEmail = decrypt(client.businessEmail);
     const decryptedPass = decrypt(client.businessEmailPassword);
-    
-    const domain = client.return_url?.replace(/^https?:\/\//, '').split('/')[0];
-    const smtpHost = client.imapHost || `mail.${domain}`;
+
+    const smtpHost = resolveSmtpHost({
+      smtpHost: client.smtpHost,
+      imapHost: client.imapHost,
+      businessEmail: decryptedEmail,
+      return_url: client.return_url,
+    });
+    const smtpPort = resolveSmtpPort(client, smtpHost);
 
     const cartItems = customer.cart.map(item => `
       <tr>
@@ -82,8 +88,8 @@ This is an automated reminder. You can manage your cart reminder preferences in 
 
     await sendMail({
       host: smtpHost,
-      port: 465,
-      secure: true,
+      port: smtpPort,
+      secure: resolveSmtpSecure(smtpPort),
       user: decryptedEmail, // Use decrypted email
       pass: decryptedPass, // Use decrypted password
       from: `"${client.companyName}" <${decryptedEmail}>`, // Use decrypted email in from field

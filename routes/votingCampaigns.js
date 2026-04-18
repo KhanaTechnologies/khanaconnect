@@ -148,17 +148,6 @@ const validateCustomer = (req, res, next) => {
   });
 };
 
-// Admin check middleware
-const requireAdmin = (req, res, next) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ 
-      success: false,
-      error: 'Admin access required' 
-    });
-  }
-  next();
-};
-
 // Validation rules
 const campaignValidation = [
   body('title').notEmpty().withMessage('Campaign title is required'),
@@ -1037,7 +1026,7 @@ router.put('/:id/items/:itemId', validateClient, wrapRoute(async (req, res) => {
 }));
 
 // Delete item (only if no votes)
-router.delete('/:id/items/:itemId', validateClient, requireAdmin, wrapRoute(async (req, res) => {
+router.delete('/:id/items/:itemId', validateClient, wrapRoute(async (req, res) => {
   const campaign = await VotingCampaign.findOne({
     _id: req.params.id,
     clientId: req.clientId
@@ -1234,7 +1223,7 @@ router.post('/:id/duplicate', validateClient, wrapRoute(async (req, res) => {
 }));
 
 // Soft delete campaign
-router.delete('/:id', validateClient, requireAdmin, wrapRoute(async (req, res) => {
+router.delete('/:id', validateClient, wrapRoute(async (req, res) => {
   const campaign = await VotingCampaign.findOneAndUpdate(
     { 
       _id: req.params.id, 
@@ -1358,6 +1347,7 @@ router.post('/public/:id/vote', validateCustomer, wrapRoute(async (req, res) => 
       { _id: req.params.id },
       { campaignId: req.params.id }
     ],
+    clientId: req.clientId,
     campaignStatus: 'active',
     isDeleted: false
   });
@@ -1389,8 +1379,11 @@ router.post('/public/:id/vote', validateCustomer, wrapRoute(async (req, res) => 
     });
   }
 
-  // Get customer details
-  const customer = await Customer.findById(req.customerId);
+  // Get customer details (must belong to same tenant as the JWT)
+  const customer = await Customer.findOne({
+    _id: req.customerId,
+    clientID: req.clientId
+  });
   if (!customer) {
     return res.status(404).json({
       success: false,
@@ -1407,6 +1400,7 @@ router.post('/public/:id/vote', validateCustomer, wrapRoute(async (req, res) => 
       const existingVote = await Vote.findOne({
         campaignId: campaign._id,
         customerId: req.customerId,
+        clientId: req.clientId,
         isDeleted: false,
         status: 'active'
       });
@@ -1510,6 +1504,7 @@ router.get('/public/:id/my-vote', validateCustomer, wrapRoute(async (req, res) =
       { _id: req.params.id },
       { campaignId: req.params.id }
     ],
+    clientId: req.clientId,
     isDeleted: false
   });
 
@@ -1593,6 +1588,7 @@ router.delete('/public/:id/vote', validateCustomer, wrapRoute(async (req, res) =
       { _id: req.params.id },
       { campaignId: req.params.id }
     ],
+    clientId: req.clientId,
     campaignStatus: 'active',
     isDeleted: false
   });
@@ -1607,6 +1603,7 @@ router.delete('/public/:id/vote', validateCustomer, wrapRoute(async (req, res) =
   const vote = await Vote.findOne({
     campaignId: campaign._id,
     customerId: req.customerId,
+    clientId: req.clientId,
     isDeleted: false,
     status: 'active'
   });

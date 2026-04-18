@@ -1,19 +1,119 @@
 // helpers/mailer.js - COMPLETE FIXED VERSION
+const fs = require('fs');
+const path = require('path');
+const { URL } = require('url');
 const nodemailer = require('nodemailer');
+const MailComposer = require('nodemailer/lib/mail-composer');
 const { ImapFlow } = require('imapflow');
 const Email = require('../models/Email');
+const { smtpHostToImapForSent } = require('./mailHost');
+
+/** Uploaded dashboard signatures are stored here and referenced by absolute URL in Client.emailSignature */
+const SIGNATURES_UPLOAD_DIR = path.join(__dirname, '../public/uploads/signatures');
+
+function contentTypeForSignatureFile(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.png') return 'image/png';
+  if (ext === '.gif') return 'image/gif';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.svg') return 'image/svg+xml';
+  return 'image/jpeg';
+}
+
+/**
+ * Resolve dashboard signature image on disk from an <img src> (absolute URL or site-relative path).
+ * Returns null if not a known signature path or file missing.
+ */
+function resolveLocalSignatureFileFromImgSrc(src) {
+  if (!src || typeof src !== 'string') return null;
+  const trimmed = src.trim();
+  if (trimmed.startsWith('cid:')) return null;
+
+  const marker = '/public/uploads/signatures/';
+  try {
+    if (/^https?:\/\//i.test(trimmed)) {
+      const u = new URL(trimmed);
+      const idx = u.pathname.indexOf(marker);
+      if (idx === -1) return null;
+      const rel = u.pathname.slice(idx + marker.length);
+      const base = path.basename(rel);
+      if (!base || base.includes('..')) return null;
+      const full = path.join(SIGNATURES_UPLOAD_DIR, base);
+      return fs.existsSync(full) ? full : null;
+    }
+    if (trimmed.startsWith(marker)) {
+      const base = path.basename(trimmed.slice(marker.length));
+      if (!base || base.includes('..')) return null;
+      const full = path.join(SIGNATURES_UPLOAD_DIR, base);
+      return fs.existsSync(full) ? full : null;
+    }
+  } catch (_) {
+    return null;
+  }
+  return null;
+}
+
+/**
+ * Gmail and many clients do not load remote images from localhost or private hosts.
+ * Inline signature images that live on this server as MIME attachments (cid:) so they always render.
+ */
+function inlineSignatureImages(html, baseAttachments) {
+  const attachments = Array.isArray(baseAttachments) ? [...baseAttachments] : [];
+  if (!html || typeof html !== 'string') return { html, attachments };
+
+  const srcToCid = new Map();
+  let cidSeq = 0;
+
+  const newHtml = html.replace(
+    /<img\b([^>]*?)\bsrc\s*=\s*(["'])([^"']+)\2([^>]*)>/gi,
+    (full, pre, q, srcRaw, post) => {
+      const src = String(srcRaw || '').trim();
+      const filePath = resolveLocalSignatureFileFromImgSrc(src);
+      if (!filePath) return full;
+
+      let cid = srcToCid.get(src);
+      if (!cid) {
+        cid = `kcsig${cidSeq++}`;
+        srcToCid.set(src, cid);
+        try {
+          attachments.push({
+            filename: path.basename(filePath),
+            content: fs.readFileSync(filePath),
+            contentType: contentTypeForSignatureFile(filePath),
+            cid,
+          });
+        } catch (e) {
+          console.warn('Signature inline skipped:', e.message);
+          return full;
+        }
+      }
+      return `<img${pre}src=${q}cid:${cid}${q}${post}>`;
+    }
+  );
+
+  return { html: newHtml, attachments };
+}
 
 // Create a transporter pool to reuse connections
 const transporterPool = new Map();
 
 function getTransporter(config) {
-  const key = `${config.host}:${config.port}:${config.user}`;
-  
+  const secure =
+    typeof config.secure === 'boolean'
+      ? config.secure
+      : Number(config.port) === 465;
+  const requireTLS =
+    typeof config.requireTLS === 'boolean'
+      ? config.requireTLS
+      : Number(config.port) === 587;
+  const key = `${config.host}:${config.port}:${config.user}:${secure ? '1' : '0'}:${requireTLS ? 't' : 'f'}`;
+
   if (!transporterPool.has(key)) {
     const transporter = nodemailer.createTransport({
       host: config.host,
       port: config.port,
-      secure: config.port === 465 || config.port === 587,
+      secure,
+      requireTLS,
       auth: { 
         user: config.user, 
         pass: config.pass 
@@ -55,15 +155,24 @@ function extractCleanEmail(emailString) {
 /**
  * Save sent email to IMAP Sent folder
  */
-async function saveToSentFolder(clientConfig, emailContent) {
+function buildRawMime(mailLike) {
+  const composer = new MailComposer(mailLike);
+  return new Promise((resolve, reject) => {
+    composer.compile().build((err, message) => {
+      if (err) reject(err);
+      else resolve(message);
+    });
+  });
+}
+
+async function saveToSentFolder(clientConfig, mailLike) {
   const { host, port = 993, user, pass } = clientConfig;
   
   let imap;
   try {
     console.log('💾 Saving to IMAP Sent folder...');
     
-    // Convert SMTP host to IMAP host if needed
-    const imapHost = host.replace(/^smtp\./, 'mail.').replace(/^smtp/, 'imap');
+    const imapHost = smtpHostToImapForSent(host);
     
     imap = new ImapFlow({
       host: imapHost,
@@ -96,35 +205,7 @@ async function saveToSentFolder(clientConfig, emailContent) {
       sentFolder = 'INBOX';
     }
 
-    // Use HTML content if available, otherwise use text
-    const emailBody = emailContent.html || emailContent.text || 'No content';
-    
-    // Create proper RFC 822 message
-    const rfc822Message = `From: ${emailContent.from}
-To: ${emailContent.to}
-${emailContent.cc ? `Cc: ${emailContent.cc}\n` : ''}
-${emailContent.bcc ? `Bcc: ${emailContent.bcc}\n` : ''}
-Subject: ${emailContent.subject}
-Date: ${new Date().toUTCString()}
-Message-ID: ${emailContent.messageId}
-${emailContent.inReplyTo ? `In-Reply-To: ${emailContent.inReplyTo}\n` : ''}
-${emailContent.references ? `References: ${emailContent.references}\n` : ''}
-MIME-Version: 1.0
-Content-Type: multipart/alternative; boundary="boundary_${Date.now()}"
-
---boundary_${Date.now()}
-Content-Type: text/plain; charset=utf-8
-Content-Transfer-Encoding: 7bit
-
-${emailContent.text || emailContent.html?.replace(/<[^>]*>/g, '') || 'No text content'}
-
---boundary_${Date.now()}
-Content-Type: text/html; charset=utf-8
-Content-Transfer-Encoding: 7bit
-
-${emailContent.html || emailContent.text || 'No HTML content'}
-
---boundary_${Date.now()}--`;
+    const rfc822Message = await buildRawMime(mailLike);
 
     // Append to sent folder
     await imap.append(sentFolder, rfc822Message, ['\\Seen'], new Date());
@@ -149,7 +230,6 @@ async function sendMail(options) {
   const {
     host,
     port = 587,
-    secure = false,
     user,
     pass,
     from,
@@ -164,7 +244,10 @@ async function sendMail(options) {
     bcc = '',
     messageId = null,
     saveToSent = true,
-    clientID
+    clientID,
+    isNewsletter = false,
+    newsletterId = null,
+    newsletterRecipient = ''
   } = options;
 
   // Validate required fields
@@ -178,23 +261,32 @@ async function sendMail(options) {
   // Generate Message-ID if not provided
   const finalMessageId = messageId || Email.generateMessageId(domain);
 
+  const secureOpt = Object.prototype.hasOwnProperty.call(options, 'secure')
+    ? options.secure
+    : undefined;
+  const implicitTls =
+    typeof secureOpt === 'boolean' ? secureOpt : Number(port) === 465;
+
   // Use connection pooling
   const transporter = getTransporter({
-    host, 
-    port, 
-    secure: port === 465,
-    user, 
-    pass, 
-    tls: { rejectUnauthorized: false }
+    host,
+    port,
+    secure: implicitTls,
+    requireTLS: Number(port) === 587,
+    user,
+    pass,
+    tls: { rejectUnauthorized: false },
   });
+
+  const { html: htmlOut, attachments: attachmentsOut } = inlineSignatureImages(html, attachments);
 
   const mailOptions = {
     from: from,
     to: to,
     subject: subject || '(no subject)',
-    text: text || html?.replace(/<[^>]*>/g, '') || 'No content',
-    html: html || text || 'No content',
-    attachments: attachments.map(att => ({
+    text: text || htmlOut?.replace(/<[^>]*>/g, '') || 'No content',
+    html: htmlOut || text || 'No content',
+    attachments: attachmentsOut.map(att => ({
       filename: att.filename,
       content: att.content,
       contentType: att.contentType,
@@ -261,12 +353,12 @@ async function sendMail(options) {
           bcc: bcc || undefined,
           subject,
           text: text || '',
-          html: html || '',
+          html: htmlOut || '',
           messageId: finalMessageId,
           remoteId: finalMessageId,
           direction: 'outbound',
           flags: ['\\Seen'],
-          attachments: attachments.map(att => ({
+          attachments: attachmentsOut.map(att => ({
             filename: att.filename,
             contentType: att.contentType,
             size: att.content?.length || 0,
@@ -275,7 +367,10 @@ async function sendMail(options) {
           inReplyTo,
           references: Array.isArray(references) ? references : references?.split(' ') || [],
           threadId,
-          isThreadStarter: !inReplyTo && (!references || references.length === 0)
+          isThreadStarter: !inReplyTo && (!references || references.length === 0),
+          isNewsletter: !!isNewsletter,
+          newsletterId: newsletterId || undefined,
+          recipientName: newsletterRecipient || ''
         });
 
         await emailDoc.save();
@@ -293,25 +388,30 @@ async function sendMail(options) {
     // Save to IMAP Sent folder if requested
     if (saveToSent) {
       try {
+        const sentMime = {
+          from,
+          to,
+          cc: cc || undefined,
+          bcc: bcc || undefined,
+          subject: subject || '(no subject)',
+          text: text || htmlOut?.replace(/<[^>]*>/g, '') || '',
+          html: htmlOut || text || '',
+          messageId: finalMessageId,
+          inReplyTo: inReplyTo || undefined,
+          references: references && references.length
+            ? (Array.isArray(references) ? references.join(' ') : references)
+            : undefined,
+          attachments: attachmentsOut.map(att => ({
+            filename: att.filename,
+            content: att.content,
+            contentType: att.contentType,
+            cid: att.cid
+          })),
+          headers: { ...mailOptions.headers }
+        };
         await saveToSentFolder(
-          { 
-            host,
-            port: 993,
-            user, 
-            pass 
-          },
-          {
-            from,
-            to,
-            cc,
-            bcc,
-            subject,
-            text: text || html?.replace(/<[^>]*>/g, '') || '',
-            html: html || text || '',
-            messageId: finalMessageId,
-            inReplyTo,
-            references: Array.isArray(references) ? references.join(' ') : references
-          }
+          { host, port: 993, user, pass },
+          sentMime
         );
       } catch (sentError) {
         console.error('⚠️ Could not save to sent folder:', sentError.message);
@@ -327,8 +427,8 @@ async function sendMail(options) {
   } catch (error) {
     console.error('❌ SMTP failed:', error.message);
     
-    // Clean up transporter on error
-    const key = `${host}:${port}:${user}`;
+    // Clean up transporter on error (key must match getTransporter)
+    const key = `${host}:${port}:${user}:${implicitTls ? '1' : '0'}:${Number(port) === 587 ? 't' : 'f'}`;
     if (transporterPool.has(key)) {
       try {
         await transporterPool.get(key).close();

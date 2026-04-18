@@ -57,12 +57,22 @@ const ALLOWED_ORIGINS = [
 ];
 
 // Rate limiting configuration
+const _apiPathPrefix = (process.env.API_URL || '/api/v1').replace(/\/$/, '');
+function skipEmailMailboxReads(req) {
+  const p = typeof req.path === 'string' ? req.path : '';
+  return (
+    req.method === 'GET' &&
+    (p === `${_apiPathPrefix}/email` || p.startsWith(`${_apiPathPrefix}/email/`))
+  );
+}
+
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
   message: { error: 'Too many requests from this IP, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
+  skip: skipEmailMailboxReads,
 });
 
 const authLimiter = rateLimit({
@@ -79,6 +89,11 @@ const apiLimiter = rateLimit({
   message: { error: 'Too many API requests, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
+  // Mailbox UI issues parallel GETs (list + thread + stats). Exempt read-only /email routes from this global cap.
+  skip: (req) =>
+    req.method === 'GET' &&
+    typeof req.path === 'string' &&
+    (req.path === '/email' || req.path.startsWith('/email/')),
 });
 
 // Tracking endpoint specific rate limiter
@@ -131,7 +146,7 @@ app.use(helmet({
     directives: {
       defaultSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:", "https:"],
     },
   },
@@ -177,6 +192,24 @@ app.use("/public/uploads", express.static(__dirname + "/public/uploads", {
   }
 }));
 
+// OpenAPI / Swagger (export spec at /openapi.json?export=1)
+const swaggerUi = require('swagger-ui-express');
+const { spec: buildOpenApiSpec } = require('./config/openapi');
+const openApiDocument = buildOpenApiSpec();
+
+app.get('/openapi.json', (req, res) => {
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  if (req.query.export === '1' || req.query.download === '1') {
+    res.setHeader('Content-Disposition', 'attachment; filename="khana-connect-openapi.json"');
+  }
+  res.send(openApiDocument);
+});
+
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openApiDocument, {
+  customSiteTitle: 'KhanaConnect API',
+  swaggerOptions: { persistAuthorization: true },
+}));
+
 /**
  * ========================
  * RATE LIMITING APPLICATION
@@ -220,6 +253,7 @@ var PreorderPledgeRouter = require('./routes/preorderPledges');
 var campaignsRouter = require('./routes/campaigns');
 var votingCampaignsRouter = require('./routes/votingCampaigns');
 const analyticsRoutes = require("./routes/analytics");
+const paymentsRouter = require('./routes/payments');
 
 app.use('/', indexRouter);
 
@@ -227,6 +261,8 @@ const api = process.env.API_URL || '/api/v1';
 
 // Public tracking routes (no JWT required)
 app.use(`${api}/events`, trackingLimiter, trackingRoutes);
+// PayFast ITN (no JWT — validated with PayFast server-side /eng/query/validate)
+app.use(`${api}/payments`, paymentsRouter);
 // Apply API routes
 app.use(`${api}/wishlists`, wishListRouter);
 app.use(`${api}/categories`, categoriesRouter);

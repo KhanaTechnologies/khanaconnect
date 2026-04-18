@@ -1,15 +1,20 @@
 // routes/emailRouter.js
 const express = require('express');
 const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
 const Email = require('../models/Email');
 const EmailSubscriber = require('../models/emailSubscriber');
 const { sendMail, sendMailWithRetry } = require('../helpers/mailer');
 const { wrapRoute } = require('../helpers/failureEmail');
-const { fetchClientEmails, addFlags, removeFlags } = require('../helpers/imapService');
+const { fetchClientEmails, addFlags, removeFlags, normalizeMessageId } = require('../helpers/imapService');
 const NewsletterService = require('../helpers/newsletterService');
+const { mergeEmailSignature } = require('../helpers/signatureHtml');
 const Client = require('../models/client');
 const { sendContactUsEmail } = require('../utils/email');
+const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../helpers/mailHost');
 
 const router = express.Router();
 
@@ -28,9 +33,222 @@ function extractCleanEmail(emailString) {
     return trimmed.replace(/"/g, '').toLowerCase();
 }
 
+function normalizeIdList(val) {
+    if (val == null || val === '') return [];
+    if (Array.isArray(val)) return val.map(String).map(s => s.trim()).filter(Boolean);
+    return String(val).split(',').map(s => s.trim()).filter(Boolean);
+}
+
+/** Split RFC-style comma-separated address list (simple; does not handle nested quotes). */
+function splitRecipientList(str) {
+    if (!str || typeof str !== 'string') return [];
+    return str
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+}
+
+function addrsEq(a, b) {
+    return extractCleanEmail(a) === extractCleanEmail(b);
+}
+
+/**
+ * Who should receive a single "Reply"? If we're replying to our own outbound, use the external To/Cc
+ * instead of From (which is us). Otherwise use From (the person who wrote the message we're on).
+ */
+async function resolveReplyRecipient(clientID, businessEmail, originalEmail) {
+    const selfClean = extractCleanEmail(businessEmail);
+    const fromClean = extractCleanEmail(originalEmail.from || '');
+    const weAreSender = originalEmail.direction === 'outbound' || (fromClean && fromClean === selfClean);
+
+    if (!weAreSender && originalEmail.from) {
+        return String(originalEmail.from).trim();
+    }
+
+    const merged = [...splitRecipientList(originalEmail.to), ...splitRecipientList(originalEmail.cc)];
+    for (const raw of merged) {
+        const c = extractCleanEmail(raw);
+        if (c && c !== selfClean) return raw.trim();
+    }
+
+    if (originalEmail.threadId) {
+        const prev = await Email.findOne({
+            clientID,
+            threadId: originalEmail.threadId,
+            direction: 'inbound',
+        })
+            .sort({ date: -1 })
+            .select('from')
+            .lean();
+        if (prev?.from) return String(prev.from).trim();
+    }
+
+    return (originalEmail.from || '').trim();
+}
+
+/** Merge reply-all recipients keyed by normalized email; To wins over Cc for the same address. */
+function collectReplyAllRecipients(originalEmail, businessEmail, extraCcFromRequest) {
+    const selfClean = extractCleanEmail(businessEmail);
+    const toRawByClean = new Map();
+    const ccRawByClean = new Map();
+
+    const putTo = (raw) => {
+        const c = extractCleanEmail(raw);
+        if (!c || c === selfClean) return;
+        ccRawByClean.delete(c);
+        if (!toRawByClean.has(c)) toRawByClean.set(c, raw.trim());
+    };
+    const putCc = (raw) => {
+        const c = extractCleanEmail(raw);
+        if (!c || c === selfClean) return;
+        if (toRawByClean.has(c)) return;
+        if (!ccRawByClean.has(c)) ccRawByClean.set(c, raw.trim());
+    };
+
+    splitRecipientList(originalEmail.to).forEach((p) => {
+        if (!addrsEq(p, businessEmail)) putTo(p);
+    });
+    splitRecipientList(originalEmail.cc).forEach((p) => {
+        if (!addrsEq(p, businessEmail)) putCc(p);
+    });
+
+    const fromClean = extractCleanEmail(originalEmail.from || '');
+    const weAreSender = originalEmail.direction === 'outbound' || (fromClean && fromClean === selfClean);
+    if (originalEmail.from && !addrsEq(originalEmail.from, businessEmail) && !weAreSender) {
+        putTo(originalEmail.from);
+    }
+
+    if (extraCcFromRequest) {
+        splitRecipientList(extraCcFromRequest).forEach((p) => {
+            if (!addrsEq(p, businessEmail)) putCc(p);
+        });
+    }
+
+    return {
+        finalTo: Array.from(toRawByClean.values()).join(', '),
+        finalCc: Array.from(ccRawByClean.values()).join(', '),
+    };
+}
+
+/** clientID -> last successful IMAP fetch (epoch ms) */
+const imapSyncLastAt = new Map();
+
+/** Serialize IMAP work per tenant so parallel GETs cannot open two full inbox syncs. */
+const imapOpQueues = new Map();
+
+function enqueueImapForClient(clientID, task) {
+    const prev = imapOpQueues.get(clientID) || Promise.resolve();
+    const next = prev.then(() => task()).catch((err) => {
+        console.error('IMAP queue error:', err?.message || err);
+    });
+    imapOpQueues.set(clientID, next);
+    return next;
+}
+
+/**
+ * Pull INBOX (and related) from IMAP into Mongo so list/search matches the real mailbox.
+ * - ?refresh=false — skip IMAP on this request (DB-only).
+ * - ?refresh=true — force sync.
+ * - default / omitted — sync if outside cooldown (EMAIL_IMAP_SYNC_COOLDOWN_MS; default 120000). Set to 0 to sync on every list GET.
+ *
+ * Note: do not default `refresh` to boolean `false` in route destructuring — Express leaves the query undefined when omitted;
+ * boolean false only matches skip when callers explicitly send JSON; for query, use the string 'false'.
+ */
+async function maybeSyncImapMailbox(client, refreshParam) {
+    await enqueueImapForClient(client.clientID, async () => {
+        if (refreshParam === false || refreshParam === 'false' || refreshParam === '0') return;
+
+        const force = refreshParam === 'true' || refreshParam === true;
+        const raw = process.env.EMAIL_IMAP_SYNC_COOLDOWN_MS;
+        const cooldownMs =
+            raw === undefined || raw === ''
+                ? 120000
+                : Math.max(0, parseInt(String(raw), 10) || 0);
+
+        const now = Date.now();
+        const last = imapSyncLastAt.get(client.clientID) || 0;
+        if (!force && cooldownMs > 0 && now - last < cooldownMs) return;
+
+        try {
+            const imapEmails = await fetchClientEmails(client);
+            imapSyncLastAt.set(client.clientID, Date.now());
+            console.log(
+                `✅ IMAP sync: ${Array.isArray(imapEmails) ? imapEmails.length : 0} message(s) processed for ${client.clientID}`
+            );
+        } catch (error) {
+            console.error('❌ IMAP sync failed:', error.message);
+        }
+    });
+}
+
+async function findOriginalMessageForThreading(clientID, inReplyTo, threadId) {
+    if (inReplyTo) {
+        const or = [];
+        if (mongoose.Types.ObjectId.isValid(inReplyTo)) {
+            or.push({ _id: new mongoose.Types.ObjectId(inReplyTo) });
+        }
+        const norm = normalizeMessageId(inReplyTo);
+        const strip = inReplyTo.replace(/[<>]/g, '').trim();
+        if (norm) {
+            or.push({ remoteId: norm }, { messageId: norm });
+        }
+        if (strip) {
+            or.push({ remoteId: strip }, { messageId: strip }, { remoteId: inReplyTo }, { messageId: inReplyTo });
+        }
+        const found = await Email.findOne({ clientID, $or: or }).sort({ date: -1 });
+        if (found) return found;
+    }
+    if (threadId) {
+        const tid = String(threadId).trim();
+        const strip = tid.replace(/[<>]/g, '').trim();
+        // Thread IDs in DB are often bare message-id (no <>); UI may send encoded <id@host>
+        const or = [{ threadId: tid }, { threadId: strip }];
+        if (strip.includes('@')) {
+            const bracketed = tid.startsWith('<') && tid.endsWith('>') ? tid : `<${strip}>`;
+            if (bracketed !== tid) or.push({ threadId: bracketed });
+            or.push(
+                { remoteId: strip },
+                { messageId: strip },
+                { remoteId: bracketed },
+                { messageId: bracketed },
+                { remoteId: tid },
+                { messageId: tid }
+            );
+        }
+        return Email.findOne({ clientID, $or: or }).sort({ date: -1 });
+    }
+    return null;
+}
+
 // --- Multer setup for attachments ---
 const storage = multer.memoryStorage();
 const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } }); // 10MB limit
+
+const signatureUploadDir = path.join(__dirname, '../public/uploads/signatures');
+const signatureStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    try {
+      fs.mkdirSync(signatureUploadDir, { recursive: true });
+      cb(null, signatureUploadDir);
+    } catch (e) {
+      cb(e);
+    }
+  },
+  filename: (req, file, cb) => {
+    const ext = (path.extname(file.originalname) || '.png').toLowerCase();
+    const safeExt = ['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext) ? ext : '.png';
+    const id = String(req.client?.clientID || 'client').replace(/[^a-zA-Z0-9_-]/g, '_');
+    cb(null, `${id}-${Date.now()}${safeExt}`);
+  },
+});
+const signatureUpload = multer({
+  storage: signatureStorage,
+  limits: { fileSize: 3 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ok = /\.(png|jpg|jpeg|gif|webp)$/i.test(file.originalname);
+    cb(ok ? null : new Error('Only PNG, JPG, GIF, or WebP images allowed'), ok);
+  },
+});
 
 // --- JWT Middleware ---
 async function validateClient(req, res, next) {
@@ -46,7 +264,6 @@ async function validateClient(req, res, next) {
         if (!payload.clientID) {
             return res.status(403).json({ ok: false, message: 'Forbidden - Invalid token' });
         }
-        console.log('here is the clientID:',payload.clientID);
         // Lookup client in MongoDB
         const client = await Client.findOne({ clientID: payload.clientID });
         if (!client) {
@@ -62,7 +279,9 @@ async function validateClient(req, res, next) {
             emailSignature: client.emailSignature || '',
             imapHost: client.imapHost,
             imapPort: client.imapPort,
-            return_url: client.return_url
+            smtpHost: client.smtpHost,
+            smtpPort: client.smtpPort,
+            return_url: client.return_url,
         };
 
         next();
@@ -101,7 +320,7 @@ router.route('/')
                 search = '',
                 label = '',
                 threadId: specificThreadId = '',
-                refresh = false,
+                refresh, // undefined when omitted — do not default to boolean false (breaks skip vs debounced sync)
                 includeSpamTrash = false,
                 maxResults = 50
             } = req.query;
@@ -118,16 +337,11 @@ router.route('/')
                 clientID: req.client.clientID
             });
 
-            // Refresh emails from IMAP if requested
-            if (refresh === 'true' || refresh === true) {
-                console.log('🔄 Refreshing emails from IMAP...');
-                try {
-                    const imapEmails = await fetchClientEmails(req.client);
-                    console.log(`✅ Fetched ${Array.isArray(imapEmails) ? imapEmails.length : 0} new emails from IMAP`);
-                } catch (error) {
-                    console.error('❌ IMAP refresh failed:', error.message);
-                    // Continue with database retrieval
-                }
+            // Opening a single thread is DB-only unless the client explicitly asks to refresh the mailbox.
+            const threadOnly = Boolean(specificThreadId && String(specificThreadId).trim());
+            const forceMailboxSync = refresh === 'true' || refresh === true;
+            if (!threadOnly || forceMailboxSync) {
+                await maybeSyncImapMailbox(req.client, refresh);
             }
 
             // Prepare base query
@@ -300,8 +514,8 @@ router.route('/')
         const { 
             to, 
             subject, 
-            html, 
-            text,
+            html: reqHtml, 
+            text: reqText,
             inReplyTo, 
             threadId, 
             references = [],
@@ -311,6 +525,9 @@ router.route('/')
             bcc = ''
         } = req.body;
 
+        let bodyHtml = reqHtml;
+        let bodyText = reqText;
+
         console.log(`📧 Email action: ${action}`, {
             to,
             subject: subject?.substring(0, 50),
@@ -319,22 +536,9 @@ router.route('/')
             attachmentsCount: attachments?.length || 0
         });
 
-        // Validate required fields
-        if (!to) {
-            return res.status(400).json({
-                ok: false,
-                message: 'Recipient (to) is required'
-            });
-        }
+        // Do not require `to` / `subject` here — reply and replyAll fill them from the original message.
 
-        if (!subject && action !== 'reply' && action !== 'replyAll') {
-            return res.status(400).json({
-                ok: false,
-                message: 'Subject is required'
-            });
-        }
-
-        if (!html && !text) {
+        if (!bodyHtml && !bodyText) {
             return res.status(400).json({
                 ok: false,
                 message: 'Email content (html or text) is required'
@@ -351,21 +555,11 @@ router.route('/')
 
         // Handle different actions
         if (action === 'reply' || action === 'replyAll') {
-            // Find original email
-            if (inReplyTo) {
-                originalEmail = await Email.findOne({
-                    $or: [
-                        { remoteId: inReplyTo },
-                        { _id: inReplyTo }
-                    ],
-                    clientID: req.client.clientID
-                });
-            } else if (threadId) {
-                originalEmail = await Email.findOne({
-                    threadId,
-                    clientID: req.client.clientID
-                }).sort({ date: -1 });
-            }
+            originalEmail = await findOriginalMessageForThreading(
+                req.client.clientID,
+                inReplyTo,
+                threadId
+            );
 
             if (!originalEmail) {
                 return res.status(404).json({
@@ -374,66 +568,38 @@ router.route('/')
                 });
             }
 
-            // Set recipient(s)
+            // Set recipient(s): replying to our own outbound must target the external party (To/Cc), not From (us).
             if (action === 'reply') {
-                finalTo = originalEmail.from;
+                finalTo = await resolveReplyRecipient(
+                    req.client.clientID,
+                    req.client.businessEmail,
+                    originalEmail
+                );
                 finalCc = '';
                 finalBcc = '';
             } else if (action === 'replyAll') {
-                // Combine original to, cc, and from (excluding current user)
-                const recipients = {
-                    to: new Set(),
-                    cc: new Set(),
-                    bcc: new Set()
-                };
-                
-                // Parse original recipients
-                if (originalEmail.to) {
-                    originalEmail.to.split(',').forEach(email => recipients.to.add(email.trim()));
-                }
-                if (originalEmail.cc) {
-                    originalEmail.cc.split(',').forEach(email => recipients.cc.add(email.trim()));
-                }
-                if (originalEmail.from) {
-                    recipients.to.add(originalEmail.from.trim());
-                }
-                
-                // Remove current user
-                const currentUserEmail = req.client.businessEmail;
-                recipients.to.delete(currentUserEmail);
-                recipients.cc.delete(currentUserEmail);
-                recipients.bcc.delete(currentUserEmail);
-                
-                // Convert to strings
-                finalTo = Array.from(recipients.to).join(', ');
-                finalCc = Array.from(recipients.cc).join(', ');
-                finalBcc = Array.from(recipients.bcc).join(', ');
-                
-                // If we have cc from the request, add it
-                if (cc) {
-                    cc.split(',').forEach(email => {
-                        const trimmedEmail = email.trim();
-                        if (trimmedEmail && trimmedEmail !== currentUserEmail) {
-                            recipients.cc.add(trimmedEmail);
-                        }
-                    });
-                    finalCc = Array.from(recipients.cc).join(', ');
-                }
+                const merged = collectReplyAllRecipients(originalEmail, req.client.businessEmail, cc);
+                finalTo = merged.finalTo;
+                finalCc = merged.finalCc;
+                finalBcc = '';
             }
 
             // Set subject
-            finalSubject = originalEmail.subject.startsWith('Re:') 
-                ? originalEmail.subject 
-                : `Re: ${originalEmail.subject}`;
+            const origSubj = (originalEmail.subject && String(originalEmail.subject).trim()) || '(no subject)';
+            finalSubject = /^re:\s/i.test(origSubj) ? origSubj : `Re: ${origSubj}`;
 
-            // Build references
-            finalReferences = [
-                ...(originalEmail.references || []),
-                originalEmail.remoteId || originalEmail.messageId
-            ].filter(Boolean);
+            // Build References chain (normalized Message-IDs)
+            const refNorms = (originalEmail.references || [])
+                .map(r => normalizeMessageId(r))
+                .filter(Boolean);
+            const parentNorm = normalizeMessageId(originalEmail.remoteId || originalEmail.messageId);
+            finalReferences = [...refNorms];
+            if (parentNorm && !finalReferences.includes(parentNorm)) {
+                finalReferences.push(parentNorm);
+            }
 
             // Set thread ID
-            finalThreadId = originalEmail.threadId || originalEmail.remoteId;
+            finalThreadId = originalEmail.threadId || parentNorm || originalEmail.remoteId;
 
             console.log(`📨 Replying to: "${originalEmail.subject}"`, {
                 threadId: finalThreadId,
@@ -444,17 +610,16 @@ router.route('/')
         } else if (action === 'forward') {
             // Handle forward action
             if (inReplyTo || threadId) {
-                originalEmail = await Email.findOne({
-                    $or: [
-                        { remoteId: inReplyTo },
-                        { _id: inReplyTo },
-                        { threadId: threadId }
-                    ],
-                    clientID: req.client.clientID
-                });
+                originalEmail = await findOriginalMessageForThreading(
+                    req.client.clientID,
+                    inReplyTo,
+                    threadId
+                );
 
                 if (originalEmail) {
-                    finalSubject = `Fwd: ${originalEmail.subject}`;
+                    finalSubject = subject && String(subject).trim()
+                        ? (subject.toLowerCase().startsWith('fwd:') ? subject : `Fwd: ${subject}`)
+                        : `Fwd: ${originalEmail.subject}`;
                     finalThreadId = `fwd-${Date.now()}`; // New thread for forwarded emails
                     
                     // Include original content in forward
@@ -466,49 +631,85 @@ router.route('/')
                     
                     const forwardCc = originalEmail.cc ? `<br>Cc: ${originalEmail.cc}` : '';
                     
-                    html = forwardHeader + forwardCc + `<br><br>` + (html || '');
+                    bodyHtml = forwardHeader + forwardCc + `<br><br>` + (bodyHtml || '');
                 }
             }
         }
 
+        const toTrim = finalTo != null ? String(finalTo).trim() : '';
+        if (!toTrim) {
+            return res.status(400).json({
+                ok: false,
+                message:
+                    action === 'reply' || action === 'replyAll'
+                        ? 'Could not determine reply recipient. Ensure inReplyTo or threadId matches a stored message, and the original has a From address.'
+                        : 'Recipient (to) is required',
+            });
+        }
+        finalTo = toTrim;
+
+        const subjTrim = finalSubject != null ? String(finalSubject).trim() : '';
+        if (!subjTrim) {
+            return res.status(400).json({
+                ok: false,
+                message: 'Subject is required',
+            });
+        }
+        finalSubject = subjTrim;
+
         // Process attachments from base64
         const processedAttachments = [];
         if (Array.isArray(attachments)) {
-            attachments.forEach((att, index) => {
+            attachments.forEach((att) => {
                 if (att.filename && att.content) {
-                    // Convert base64 to buffer
-                    const contentBuffer = Buffer.from(att.content, 'base64');
-                    processedAttachments.push({
-                        filename: att.filename,
-                        content: contentBuffer,
-                        contentType: att.contentType || 'application/octet-stream'
-                    });
+                    let b64 = att.content;
+                    if (typeof b64 === 'string' && b64.includes(',')) {
+                        b64 = b64.split(',').pop().trim();
+                    }
+                    try {
+                        const contentBuffer = Buffer.from(b64, 'base64');
+                        processedAttachments.push({
+                            filename: att.filename,
+                            content: contentBuffer,
+                            contentType: att.contentType || 'application/octet-stream'
+                        });
+                    } catch (e) {
+                        console.warn('Skipping invalid attachment:', att.filename, e.message);
+                    }
                 }
             });
         }
 
-        // Add email signature
         const clientSignature = req.client.emailSignature || '';
-        const finalHtml = html + (clientSignature ? `<br><br>${clientSignature}` : '');
+        const { html: finalHtml, text: finalText } = mergeEmailSignature(bodyHtml, bodyText, clientSignature);
 
-        // Generate plain text fallback
-        const finalText = text || finalHtml
-            .replace(/<br\s*\/?>/gi, '\n')
-            .replace(/<[^>]*>/g, '')
-            .replace(/\n{3,}/g, '\n\n')
-            .trim();
-
-        // Get SMTP configuration
-        const domain = req.client.return_url?.replace(/^https?:\/\//, '').split('/')[0];
-        const host = req.client.imapHost?.replace(/^mail\./, 'smtp.')?.replace(/^imap\./, 'smtp.') || `smtp.${domain}`;
+        const host = resolveSmtpHost(req.client);
+        const smtpPort = resolveSmtpPort(req.client, host);
+        if (!host) {
+            return res.status(500).json({
+                ok: false,
+                message:
+                    'Could not determine SMTP server. In cPanel use the same host as Roundcube (usually mail.yourdomain.com). Set GLOBAL_SMTP_HOST in .env and/or Client.smtpHost to the full hostname from Email → Connect Devices.',
+            });
+        }
 
         // Send email using the updated sendMailWithRetry
         let result;
         try {
+            const replyParentId = originalEmail
+                ? normalizeMessageId(originalEmail.remoteId || originalEmail.messageId)
+                : normalizeMessageId(inReplyTo);
+            const headerInReplyTo = action === 'send' || action === 'forward'
+                ? undefined
+                : replyParentId || undefined;
+            const refList = (finalReferences || [])
+                .map(r => normalizeMessageId(r))
+                .filter(Boolean);
+
             const mailOptions = {
-                host: host,
-                port: 587,
-                secure: false,
+                host,
+                port: smtpPort,
+                secure: resolveSmtpSecure(smtpPort),
                 user: req.client.businessEmail,
                 pass: req.client.businessEmailPassword,
                 from: `"${req.client.companyName}" <${req.client.businessEmail}>`,
@@ -517,8 +718,8 @@ router.route('/')
                 text: finalText,
                 html: finalHtml,
                 attachments: processedAttachments,
-                inReplyTo: action === 'send' ? undefined : (originalEmail?.remoteId || inReplyTo),
-                references: finalReferences,
+                inReplyTo: headerInReplyTo,
+                references: refList,
                 cc: finalCc || undefined,
                 bcc: finalBcc || undefined,
                 clientID: req.client.clientID,
@@ -598,21 +799,15 @@ router.route('/')
                 removeLabel
             } = req.body;
 
-            console.log(`✏️ Email UPDATE action: ${action}`, {
-                emailIds: ids.length,
-                threadIds: threadIds.length,
-                label,
-                labels
-            });
-
             let result = { modifiedCount: 0 };
-            let emailIdsToUpdate = [...ids];
+            let emailIdsToUpdate = normalizeIdList(ids).filter((id) => mongoose.Types.ObjectId.isValid(id));
 
             // If thread IDs are provided, get all email IDs in those threads
-            if (threadIds.length > 0) {
+            const threadIdList = normalizeIdList(threadIds);
+            if (threadIdList.length > 0) {
                 const emailsInThreads = await Email.find({
                     clientID: req.client.clientID,
-                    threadId: { $in: threadIds }
+                    threadId: { $in: threadIdList }
                 }).select('_id uid');
                 
                 emailIdsToUpdate = [
@@ -623,6 +818,13 @@ router.route('/')
 
             // Remove duplicates
             emailIdsToUpdate = [...new Set(emailIdsToUpdate)];
+
+            console.log(`✏️ Email UPDATE action: ${action}`, {
+                emailIds: emailIdsToUpdate.length,
+                threadIds: threadIdList.length,
+                label,
+                labels
+            });
 
             if (emailIdsToUpdate.length === 0) {
                 return res.status(400).json({
@@ -748,24 +950,27 @@ router.route('/')
     .delete(validateClient, wrapRoute(async (req, res) => {
         try {
             const { 
-                ids = [], // Array of email IDs
-                threadIds = [], // Array of thread IDs
+                ids, // comma-separated or repeated query param
+                threadIds,
                 permanent = false // If true, delete from database; if false, move to trash
             } = req.query;
 
+            const idList = normalizeIdList(ids);
+            const threadIdListDel = normalizeIdList(threadIds);
+
             console.log(`🗑️ Email DELETE request:`, {
-                emailIds: ids.length,
-                threadIds: threadIds.length,
+                emailIds: idList.length,
+                threadIds: threadIdListDel.length,
                 permanent
             });
 
-            let emailIdsToProcess = [...ids];
+            let emailIdsToProcess = idList.filter((id) => mongoose.Types.ObjectId.isValid(id));
 
             // If thread IDs are provided, get all email IDs in those threads
-            if (threadIds.length > 0) {
+            if (threadIdListDel.length > 0) {
                 const emailsInThreads = await Email.find({
                     clientID: req.client.clientID,
-                    threadId: { $in: threadIds }
+                    threadId: { $in: threadIdListDel }
                 }).select('_id uid');
                 
                 emailIdsToProcess = [
@@ -1126,55 +1331,66 @@ router.post('/batch', validateClient, wrapRoute(async (req, res) => {
                 let result;
                 
                 switch (op.action) {
-                    case 'markRead':
+                    case 'markRead': {
+                        const validIds = normalizeIdList(op.ids).filter((id) => mongoose.Types.ObjectId.isValid(id));
+                        if (!validIds.length) throw new Error('markRead requires valid MongoDB ids');
                         result = await Email.updateMany(
                             {
-                                _id: { $in: op.ids },
+                                _id: { $in: validIds },
                                 clientID: req.client.clientID
                             },
                             { $addToSet: { flags: '\\Seen' } }
                         );
                         break;
-                        
-                    case 'markUnread':
+                    }
+                    case 'markUnread': {
+                        const validIds = normalizeIdList(op.ids).filter((id) => mongoose.Types.ObjectId.isValid(id));
+                        if (!validIds.length) throw new Error('markUnread requires valid MongoDB ids');
                         result = await Email.updateMany(
                             {
-                                _id: { $in: op.ids },
+                                _id: { $in: validIds },
                                 clientID: req.client.clientID
                             },
                             { $pull: { flags: '\\Seen' } }
                         );
                         break;
-                        
-                    case 'addLabel':
+                    }
+                    case 'addLabel': {
+                        const validIds = normalizeIdList(op.ids).filter((id) => mongoose.Types.ObjectId.isValid(id));
+                        if (!validIds.length) throw new Error('addLabel requires valid MongoDB ids');
                         result = await Email.updateMany(
                             {
-                                _id: { $in: op.ids },
+                                _id: { $in: validIds },
                                 clientID: req.client.clientID
                             },
                             { $addToSet: { flags: { $each: op.labels || [op.label] } } }
                         );
                         break;
-                        
-                    case 'removeLabel':
+                    }
+                    case 'removeLabel': {
+                        const validIds = normalizeIdList(op.ids).filter((id) => mongoose.Types.ObjectId.isValid(id));
+                        if (!validIds.length) throw new Error('removeLabel requires valid MongoDB ids');
                         result = await Email.updateMany(
                             {
-                                _id: { $in: op.ids },
+                                _id: { $in: validIds },
                                 clientID: req.client.clientID
                             },
                             { $pull: { flags: { $in: op.labels || [op.label] } } }
                         );
                         break;
-                        
-                    case 'trash':
+                    }
+                    case 'trash': {
+                        const validIds = normalizeIdList(op.ids).filter((id) => mongoose.Types.ObjectId.isValid(id));
+                        if (!validIds.length) throw new Error('trash requires valid MongoDB ids');
                         result = await Email.updateMany(
                             {
-                                _id: { $in: op.ids },
+                                _id: { $in: validIds },
                                 clientID: req.client.clientID
                             },
                             { $addToSet: { flags: '\\Trash' } }
                         );
                         break;
+                    }
                         
                     default:
                         throw new Error(`Unknown action: ${op.action}`);
@@ -1227,18 +1443,34 @@ router.post('/batch', validateClient, wrapRoute(async (req, res) => {
 
 // SEND NEWSLETTER TO SUBSCRIBERS
 router.post('/newsletter/send', validateClient, upload.array('attachments', 5), wrapRoute(async (req, res) => {
-    const { 
-        subject, 
-        text, 
-        html, 
-        useSubscribers = true,
-        customRecipients = [],
-        segment = 'all'
+    const parseMaybeJson = (val, fallback) => {
+        if (val == null || val === '') return fallback;
+        if (Array.isArray(val)) return val;
+        if (typeof val === 'object') return val;
+        if (typeof val === 'string') {
+            try {
+                return JSON.parse(val);
+            } catch {
+                return val;
+            }
+        }
+        return fallback;
+    };
+
+    const {
+        subject,
+        text,
+        html
     } = req.body;
+
+    const useSubscribers = req.body.useSubscribers !== 'false' && req.body.useSubscribers !== false;
+    const enableTracking = req.body.enableTracking !== 'false' && req.body.enableTracking !== false;
+    const customRecipients = parseMaybeJson(req.body.customRecipients, []);
 
     const attachments = (req.files || []).map(file => ({
         filename: file.originalname,
-        content: file.buffer
+        content: file.buffer,
+        contentType: file.mimetype || 'application/octet-stream'
     }));
 
     // Validate required fields
@@ -1254,30 +1486,32 @@ router.post('/newsletter/send', validateClient, upload.array('attachments', 5), 
             subject,
             text: text || html.replace(/<[^>]*>/g, '').substring(0, 500),
             html,
-            attachments
+            attachments,
+            enableTracking
         };
 
         const options = {
-            useSubscribers: useSubscribers !== false,
-            customRecipients: customRecipients || [],
-            segment
+            useSubscribers,
+            customRecipients: Array.isArray(customRecipients) ? customRecipients : []
         };
 
-        // Get subscriber count for response
-        const subscriberCount = await NewsletterService.getSubscriberCount(req.client.clientID);
+        let recipientEstimate = await NewsletterService.getSubscriberCount(req.client.clientID);
+        if (!useSubscribers) {
+            recipientEstimate = NewsletterService.parseRecipients(options.customRecipients).length;
+        }
 
-        // Send immediate response
         const rateLimit = NewsletterService.checkRateLimit(req.client.clientID);
-        const totalBatches = Math.ceil(subscriberCount / 50);
+        const totalBatches = Math.max(1, Math.ceil((recipientEstimate || 1) / 50));
 
         res.json({
             ok: true,
             message: 'Newsletter sending started',
             data: {
                 recipientSource: useSubscribers ? 'subscribers' : 'custom',
-                totalSubscribers: subscriberCount,
+                totalRecipients: recipientEstimate,
                 totalBatches,
                 estimatedTime: `${Math.ceil((totalBatches * 1000) / 1000 / 60)} minutes`,
+                enableTracking,
                 rateLimit: {
                     currentHour: rateLimit.hourly,
                     currentDay: rateLimit.daily
@@ -1285,7 +1519,6 @@ router.post('/newsletter/send', validateClient, upload.array('attachments', 5), 
             }
         });
 
-        // Process in background
         (async () => {
             try {
                 const results = await NewsletterService.sendNewsletter(
@@ -1506,6 +1739,67 @@ router.get('/newsletter/stats', validateClient, wrapRoute(async (req, res) => {
     }
 }));
 
+// Newsletter open tracking stats (requires Bearer — same as other /email routes)
+router.get('/newsletter/opens/stats', validateClient, wrapRoute(async (req, res) => {
+    try {
+        const data = await NewsletterService.getOpenStatsSummary(req.client.clientID, req.query);
+        res.json({ ok: true, data, clientID: req.client.clientID });
+    } catch (error) {
+        res.status(500).json({
+            ok: false,
+            message: 'Failed to load newsletter open stats',
+            error: error.message
+        });
+    }
+}));
+
+router.get('/newsletter/opens', validateClient, wrapRoute(async (req, res) => {
+    try {
+        const data = await NewsletterService.listNewsletterOpens(req.client.clientID, req.query);
+        res.json({ ok: true, data, clientID: req.client.clientID });
+    } catch (error) {
+        res.status(500).json({
+            ok: false,
+            message: 'Failed to list newsletter opens',
+            error: error.message
+        });
+    }
+}));
+
+// Public: 1×1 tracking pixel (signed)
+const NEWSLETTER_PIXEL_GIF = Buffer.from(
+    'R0lGODlhAQABAIABAP///wAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==',
+    'base64'
+);
+
+router.get('/newsletter/open.gif', wrapRoute(async (req, res) => {
+    const { c, n, e, s } = req.query;
+    const ok = NewsletterService.verifyOpenToken(c, n, e, s);
+    if (ok) {
+        try {
+            await NewsletterService.recordOpen(c, n, e, req.get('user-agent') || '');
+        } catch (err) {
+            console.warn('Newsletter open log failed:', err.message);
+        }
+    }
+    res.set('Content-Type', 'image/gif');
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.send(NEWSLETTER_PIXEL_GIF);
+}));
+
+// Public: one-click unsubscribe (signed GET link from newsletter footer)
+router.get('/newsletter/unsubscribe', wrapRoute(async (req, res) => {
+    const { email, clientID, sig } = req.query;
+    if (!email || !clientID || !sig || !NewsletterService.verifyUnsubscribeToken(clientID, email, sig)) {
+        return res.status(400).type('html').send('<html><body><p>Invalid or expired unsubscribe link.</p></body></html>');
+    }
+    await EmailSubscriber.updateOne(
+        { email: String(email).toLowerCase().trim(), clientID: String(clientID) },
+        { $set: { isActive: false } }
+    );
+    return res.type('html').send('<html><body><p>You have been unsubscribed from this mailing list.</p></body></html>');
+}));
+
 // ============================================================================
 // SUBSCRIBER MANAGEMENT ROUTES
 // ============================================================================
@@ -1637,6 +1931,45 @@ router.get('/subscribers/export', validateClient, wrapRoute(async (req, res) => 
         });
     }
 }));
+
+/**
+ * POST /signature/image — multipart field `signature` (image). Saves HTML on Client.emailSignature
+ * with a public `<img src>` URL for previews; outbound mail inlines the file from disk as a `cid:` attachment so Gmail always shows it (no fetch to localhost/private URLs).
+ * Query: mode=append to keep existing HTML and add the image below it.
+ */
+router.post(
+    '/signature/image',
+    validateClient,
+    signatureUpload.single('signature'),
+    wrapRoute(async (req, res) => {
+        if (!req.file) {
+            return res.status(400).json({
+                ok: false,
+                message: 'Missing file field "signature" (multipart/form-data, max 3MB)',
+            });
+        }
+
+        const base = (process.env.BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
+        const publicPath = `/public/uploads/signatures/${req.file.filename}`;
+        const imgUrl = `${base}${publicPath}`;
+
+        const block = `<div class="crm-signature" style="margin-top:1em"><img src="${imgUrl}" alt="Signature" style="max-width:100%;height:auto" /></div>`;
+
+        const doc = await Client.findOne({ clientID: req.client.clientID }).select('emailSignature');
+        const prev = (doc?.emailSignature || '').trim();
+        const append = String(req.query.mode || '').toLowerCase() === 'append' && prev;
+        const emailSignature = append ? `${prev}\n${block}` : block;
+
+        await Client.updateOne({ clientID: req.client.clientID }, { $set: { emailSignature } });
+
+        res.json({
+            ok: true,
+            message: 'Signature saved on client profile; it will be appended to outgoing mail automatically.',
+            emailSignature,
+            imageUrl: imgUrl,
+        });
+    })
+);
 
 // ============================================================================
 // HEALTH CHECK ROUTE

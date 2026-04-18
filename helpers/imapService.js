@@ -2,6 +2,7 @@
 const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
 const Email = require('../models/Email');
+const { resolveImapHost, resolveImapPort } = require('./mailHost');
 
 /**
  * Normalize message ID format
@@ -46,18 +47,8 @@ async function fetchClientEmails(client) {
 
   let imap;
   try {
-    // Extract domain from return_url
-    let domain = 'example.com';
-    if (client.return_url) {
-      try {
-        domain = client.return_url.replace(/^https?:\/\//, '').split('/')[0];
-      } catch (e) {
-        console.warn('Failed to parse domain from return_url:', client.return_url);
-      }
-    }
-
-    const host = client.imapHost || `mail.${domain}`;
-    const port = client.imapPort || 993;
+    const host = resolveImapHost(client);
+    const port = resolveImapPort(client);
     
     console.log(`🔌 IMAP Connection: ${host}:${port} as ${client.businessEmail}`);
 
@@ -245,13 +236,8 @@ async function testImapConnection(client) {
 
   let imap;
   try {
-    let domain = 'example.com';
-    if (client.return_url) {
-      domain = client.return_url.replace(/^https?:\/\//, '').split('/')[0];
-    }
-
-    const host = client.imapHost || `mail.${domain}`;
-    const port = client.imapPort || 993;
+    const host = resolveImapHost(client);
+    const port = resolveImapPort(client);
 
     console.log('Testing connection to:', { host, port, user: client.businessEmail });
 
@@ -299,8 +285,8 @@ async function testImapConnection(client) {
     return {
       success: false,
       error: error.message,
-      host: client.imapHost || `mail.${domain}`,
-      port: client.imapPort || 993
+      host: resolveImapHost(client),
+      port: resolveImapPort(client),
     };
   } finally {
     if (imap) {
@@ -321,21 +307,13 @@ async function addFlags(client, uid, flags) {
 
   let imap;
   try {
-    let domain = 'example.com';
-    if (client.return_url) {
-      try {
-        domain = client.return_url.replace(/^https?:\/\//, '').split('/')[0];
-      } catch (e) {
-        console.warn('Failed to parse domain from return_url:', client.return_url);
-      }
-    }
-
-    const host = client.imapHost || `mail.${domain}`;
+    const host = resolveImapHost(client);
+    const port = resolveImapPort(client);
     console.log(`🏷️ Adding flags to email UID ${uid}: ${flags.join(', ')}`);
 
     imap = new ImapFlow({
       host: host,
-      port: client.imapPort || 993,
+      port,
       secure: true,
       auth: { 
         user: client.businessEmail, 
@@ -379,21 +357,13 @@ async function removeFlags(client, uid, flags) {
 
   let imap;
   try {
-    let domain = 'example.com';
-    if (client.return_url) {
-      try {
-        domain = client.return_url.replace(/^https?:\/\//, '').split('/')[0];
-      } catch (e) {
-        console.warn('Failed to parse domain from return_url:', client.return_url);
-      }
-    }
-
-    const host = client.imapHost || `mail.${domain}`;
+    const host = resolveImapHost(client);
+    const port = resolveImapPort(client);
     console.log(`🏷️ Removing flags from email UID ${uid}: ${flags.join(', ')}`);
 
     imap = new ImapFlow({
       host: host,
-      port: client.imapPort || 993,
+      port,
       secure: true,
       auth: { 
         user: client.businessEmail, 
@@ -437,21 +407,13 @@ async function setFlags(client, uid, flags) {
 
   let imap;
   try {
-    let domain = 'example.com';
-    if (client.return_url) {
-      try {
-        domain = client.return_url.replace(/^https?:\/\//, '').split('/')[0];
-      } catch (e) {
-        console.warn('Failed to parse domain from return_url:', client.return_url);
-      }
-    }
-
-    const host = client.imapHost || `mail.${domain}`;
+    const host = resolveImapHost(client);
+    const port = resolveImapPort(client);
     console.log(`🏷️ Setting flags for email UID ${uid}: ${flags.join(', ')}`);
 
     imap = new ImapFlow({
       host: host,
-      port: client.imapPort || 993,
+      port,
       secure: true,
       auth: { 
         user: client.businessEmail, 
@@ -566,5 +528,6 @@ module.exports = {
   updateThreadMetadata,
   testImapConnection,
   debugThreading,
-  recalculateAllThreads
+  recalculateAllThreads,
+  normalizeMessageId
 };

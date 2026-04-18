@@ -1,6 +1,7 @@
 const nodemailer = require('nodemailer');
 const Product = require('../models/product');
 const { decrypt } = require('../helpers/encryption'); // Add this import
+const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../helpers/mailHost');
 
 async function sendWithRetry(transporter, mailOptions, retries = 3, delayMs = 2000) {
     for (let attempt = 1; attempt <= retries; attempt++) {
@@ -34,25 +35,26 @@ function getFormattedClientName(clientName) {
 }
 
 function createTransporter(bEmail, BEPass) {
-    // Decrypt the email and password before using them
     const decryptedEmail = decrypt(bEmail);
     const decryptedPass = decrypt(BEPass);
-    
-    console.log('Creating transporter with decrypted credentials'); // Debug log
-    
+
+    const host = resolveSmtpHost({ businessEmail: decryptedEmail });
+    const port = resolveSmtpPort({ businessEmail: decryptedEmail }, host);
+    const secure = resolveSmtpSecure(port);
+
     return nodemailer.createTransport({
-        host: `mail.${decryptedEmail.split('@')[1]}`, // Use the domain from the decrypted email
-        port: 465, // SSL port
-        secure: true, // true for SSL
+        host,
+        port,
+        secure,
+        requireTLS: port === 587,
         auth: {
             user: decryptedEmail,
             pass: decryptedPass
         },
         tls: {
-            rejectUnauthorized: false, // Allow self-signed certificates if needed
-            minVersion: 'TLSv1.2' // Force modern TLS
+            rejectUnauthorized: false,
+            minVersion: 'TLSv1.2'
         },
-        // Connection pooling to prevent "too many connections"
         pool: true,
         maxConnections: 1,
         maxMessages: 5,

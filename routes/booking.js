@@ -7,12 +7,15 @@ const Waitlist = require('../models/waitlist');
 const Staff = require('../models/staff');
 const Resource = require('../models/resource'); // Add this line
 const { wrapRoute } = require('../helpers/failureEmail');
+const { bookingPaymentWebhookOk } = require('../helpers/webhookAuth');
 const Client = require('../models/client');
 const {
     sendBookingConfirmationEmail,
     sendBookingReminderEmail,
     sendPaymentConfirmationEmail,
-    sendBookingCancellationEmail
+    sendBookingCancellationEmail,
+    sendAccommodationConfirmationEmail,
+    sendMixedBookingConfirmationEmail
 } = require('../utils/email');
 
 // Middleware to authenticate JWT and attach clientId
@@ -54,67 +57,232 @@ router.get('/', validateClient, wrapRoute(async (req, res) => {
     res.json(bookings);
 }));
 
-// POST: Create a new booking (supports both services and accommodation)
-// POST: Create a new booking
+// POST: Create a new booking (service, accommodation, or mixed)
 router.post('/', validateClient, wrapRoute(async (req, res) => {
     const clientId = req.clientId;
     const client = await Client.findOne({ clientID: clientId });
-    
+
     if (!client) {
         return res.status(404).json({ error: 'Client not found' });
     }
 
-    // ... all your existing validation and booking creation code ...
-    
+    const bookingType = req.body.bookingType || 'service';
+    const {
+        customerName,
+        customerEmail,
+        customerPhone,
+        services,
+        date,
+        time,
+        duration,
+        assignedTo,
+        resourceId,
+        notes,
+        accommodation,
+        payment,
+        guestInfo,
+        status,
+    } = req.body;
+
+    if (!customerName || !customerEmail || !customerPhone) {
+        return res.status(400).json({ error: 'customerName, customerEmail, and customerPhone are required' });
+    }
+
+    let servicesList = Array.isArray(services) ? services : services ? [services] : [];
+    if (bookingType === 'accommodation' && servicesList.length === 0) {
+        servicesList = ['Accommodation'];
+    }
+    if (servicesList.length === 0) {
+        return res.status(400).json({ error: 'At least one service (or accommodation) is required' });
+    }
+
+    let assignedToId = null;
+    if (assignedTo) {
+        let staffId = assignedTo;
+        if (typeof assignedTo === 'object' && assignedTo._id) staffId = assignedTo._id;
+        if (!mongoose.Types.ObjectId.isValid(staffId)) {
+            return res.status(400).json({ error: 'Invalid staff ID format' });
+        }
+        const staff = await Staff.findOne({ _id: staffId, clientID: clientId });
+        if (!staff) {
+            return res.status(400).json({ error: 'Staff member not found or does not belong to your client' });
+        }
+        assignedToId = staffId;
+    }
+
+    let resourceObjectId = null;
+    if (resourceId) {
+        let rid = resourceId;
+        if (typeof resourceId === 'object' && resourceId._id) rid = resourceId._id;
+        if (!mongoose.Types.ObjectId.isValid(rid)) {
+            return res.status(400).json({ error: 'Invalid resource ID format' });
+        }
+        const resource = await Resource.findOne({ _id: rid, clientID: clientId });
+        if (!resource) {
+            return res.status(400).json({ error: 'Resource not found or does not belong to your client' });
+        }
+        resourceObjectId = rid;
+    }
+
+    let bookingDate;
+    let bookingTime;
+    let bookingDuration;
+    let endTime = req.body.endTime;
+    let reminders = [];
+
+    if (bookingType === 'accommodation' || bookingType === 'mixed') {
+        if (!accommodation?.checkIn || !accommodation?.checkOut) {
+            return res.status(400).json({ error: 'accommodation.checkIn and accommodation.checkOut are required' });
+        }
+        const checkIn = new Date(accommodation.checkIn);
+        const checkOut = new Date(accommodation.checkOut);
+        if (checkIn >= checkOut) {
+            return res.status(400).json({ error: 'Check-out must be after check-in' });
+        }
+        bookingDate = checkIn;
+        reminders.push(
+            {
+                type: 'email',
+                scheduledTime: new Date(checkIn.getTime() - 24 * 60 * 60 * 1000),
+                sent: false,
+                reminderType: 'checkin',
+            },
+            {
+                type: 'email',
+                scheduledTime: new Date(checkOut.getTime() - 24 * 60 * 60 * 1000),
+                sent: false,
+                reminderType: 'checkout',
+            }
+        );
+    }
+
+    if (bookingType === 'service' || bookingType === 'mixed') {
+        if (!date || !time || !duration) {
+            return res.status(400).json({ error: 'date, time, and duration are required for service bookings' });
+        }
+        const timeRegex = /^([0-1]?[0-9]|2[0-3]):([0-5][0-9])$/;
+        if (!timeRegex.test(time)) {
+            return res.status(400).json({ error: 'Invalid time format. Use HH:MM' });
+        }
+        bookingDate = new Date(date);
+        bookingTime = time;
+        bookingDuration = parseInt(duration, 10);
+        if (Number.isNaN(bookingDuration) || bookingDuration <= 0) {
+            return res.status(400).json({ error: 'duration must be a positive number (minutes)' });
+        }
+        if (!endTime) {
+            const [hours, minutes] = bookingTime.split(':').map(Number);
+            const startDateTime = new Date(bookingDate);
+            startDateTime.setHours(hours, minutes, 0, 0);
+            const endDateTime = new Date(startDateTime.getTime() + bookingDuration * 60000);
+            endTime = `${endDateTime.getHours().toString().padStart(2, '0')}:${endDateTime.getMinutes().toString().padStart(2, '0')}`;
+        }
+        const appointmentDate = new Date(bookingDate);
+        const [h, m] = bookingTime.split(':').map(Number);
+        appointmentDate.setHours(h, m, 0, 0);
+        const now = new Date();
+        const isToday = appointmentDate.toDateString() === now.toDateString();
+        let reminderTime = isToday
+            ? new Date(appointmentDate.getTime() - 2 * 60 * 60 * 1000)
+            : new Date(appointmentDate.getTime() - 24 * 60 * 60 * 1000);
+        if (reminderTime < now) {
+            reminderTime = new Date(now.getTime() + 60 * 1000);
+        }
+        reminders.push({
+            type: 'email',
+            scheduledTime: reminderTime,
+            sent: false,
+            reminderType: 'service',
+        });
+    }
+
+    const accPayload =
+        bookingType === 'accommodation' || bookingType === 'mixed'
+            ? {
+                  checkIn: new Date(accommodation.checkIn),
+                  checkOut: new Date(accommodation.checkOut),
+                  numberOfNights: Math.ceil(
+                      (new Date(accommodation.checkOut) - new Date(accommodation.checkIn)) / (1000 * 60 * 60 * 24)
+                  ),
+                  numberOfGuests: accommodation.numberOfGuests || 1,
+                  numberOfRooms: accommodation.numberOfRooms || 1,
+                  roomType: accommodation.roomType || 'double',
+                  specialRequests: accommodation.specialRequests || '',
+                  amenities: accommodation.amenities || [],
+              }
+            : undefined;
+
+    const bookingData = {
+        customerName,
+        customerEmail: String(customerEmail).toLowerCase().trim(),
+        customerPhone,
+        services: servicesList,
+        date: bookingDate,
+        time: bookingType === 'accommodation' ? undefined : bookingTime,
+        endTime: bookingType === 'accommodation' ? undefined : endTime,
+        duration: bookingType === 'accommodation' ? undefined : bookingDuration,
+        assignedTo: assignedToId,
+        resourceId: resourceObjectId,
+        notes: notes || '',
+        clientID: clientId,
+        bookingType,
+        status: status || 'pending',
+        payment: payment || { status: 'pending' },
+        guestInfo: guestInfo || {},
+        reminders,
+        accommodation: accPayload,
+    };
+
     const booking = new Booking(bookingData);
     await booking.save();
-    
-    // Populate the response
-    const populatedBooking = await Booking.findById(booking._id)
-        .populate('assignedTo')
-        .populate('resourceId');
-    
-    // SEND RESPONSE IMMEDIATELY - DON'T WAIT FOR EMAILS
+
+    const populatedBooking = await Booking.findById(booking._id).populate('assignedTo').populate('resourceId');
+
     res.status(201).json({
         message: 'Booking created successfully',
         booking: populatedBooking,
         reminderSchedule: {
-            type: bookingType === 'accommodation' ? '24 hours before check-in/out' : 
-                  (new Date(booking.date).toDateString() === new Date().toDateString() ? '2 hours before' : '24 hours before'),
-            scheduledTime: booking.reminders[0]?.scheduledTime
-        }
+            type:
+                bookingType === 'accommodation'
+                    ? '24 hours before check-in/out'
+                    : new Date(booking.date).toDateString() === new Date().toDateString()
+                      ? '2 hours before'
+                      : '24 hours before',
+            scheduledTime: booking.reminders[0]?.scheduledTime,
+        },
     });
 
-    // ============ BACKGROUND EMAIL PROCESSING ============
-    // Process confirmation email after response is sent
+    const displayName = client.companyName || client.clientName || clientId;
+
     setImmediate(async () => {
         try {
-            const hasValidEmail = client.businessEmail && 
-                                 client.businessEmailPassword && 
-                                 !client.businessEmail.includes('company.com') &&
-                                 client.businessEmail !== 'your-email@gmail.com';
-            
+            const hasValidEmail =
+                client.businessEmail &&
+                client.businessEmailPassword &&
+                !String(client.businessEmail).includes('company.com') &&
+                client.businessEmail !== 'your-email@gmail.com';
+
             if (hasValidEmail) {
                 if (bookingType === 'accommodation') {
                     await sendAccommodationConfirmationEmail(
-                        populatedBooking, 
-                        client.businessEmail, 
-                        client.businessEmailPassword, 
-                        client.clientName || clientId
+                        populatedBooking,
+                        client.businessEmail,
+                        client.businessEmailPassword,
+                        displayName
                     );
                 } else if (bookingType === 'mixed') {
                     await sendMixedBookingConfirmationEmail(
-                        populatedBooking, 
-                        client.businessEmail, 
-                        client.businessEmailPassword, 
-                        client.clientName || clientId
+                        populatedBooking,
+                        client.businessEmail,
+                        client.businessEmailPassword,
+                        displayName
                     );
                 } else {
                     await sendBookingConfirmationEmail(
-                        populatedBooking, 
-                        client.businessEmail, 
-                        client.businessEmailPassword, 
-                        client.clientName || clientId
+                        populatedBooking,
+                        client.businessEmail,
+                        client.businessEmailPassword,
+                        displayName
                     );
                 }
                 console.log('✅ Background confirmation email sent successfully');
@@ -375,8 +543,12 @@ router.put('/:id', validateClient, wrapRoute(async (req, res) => {
     
 }));
 
-// POST: Payment Confirmation Webhook
+// POST: Payment confirmation (webhook auth only when BOOKING_PAYMENT_WEBHOOK_ENABLED=true)
 router.post('/:id/payment-confirmation', wrapRoute(async (req, res) => {
+    if (!bookingPaymentWebhookOk(req)) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+
     const { id } = req.params;
     const { transactionId, amount, paymentMethod, status } = req.body;
 

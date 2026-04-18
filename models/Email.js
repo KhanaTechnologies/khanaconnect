@@ -69,7 +69,12 @@ const EmailSchema = new mongoose.Schema({
   lastMessageAt: { 
     type: Date, 
     default: Date.now 
-  }
+  },
+
+  // Newsletter / campaign (optional)
+  isNewsletter: { type: Boolean, default: false, index: true },
+  newsletterId: { type: String, index: true, sparse: true },
+  recipientName: { type: String, default: '' }
 }, { timestamps: true });
 
 // Compound index only applies when uid is not null
@@ -685,51 +690,50 @@ EmailSchema.statics.getFullThread = async function(clientID, threadId) {
         const threadStarter = processedMessages.find(m => m.isThreadStarter) || processedMessages[0];
         const lastMessage = processedMessages[processedMessages.length - 1];
         
-        // Collect all unique participants with their display names
-        const participantDetails = [];
-        const seenParticipants = new Set();
-        
-        processedMessages.forEach(msg => {
-            // Add sender
-            if (msg.from && !seenParticipants.has(`${msg.from}|from`)) {
-                seenParticipants.add(`${msg.from}|from`);
-                participantDetails.push({
-                    email: msg.from,
-                    displayName: msg.fromDisplay,
-                    type: 'from'
-                });
-            }
-            
-            // Add recipient
-            if (msg.to && !seenParticipants.has(`${msg.to}|to`)) {
-                seenParticipants.add(`${msg.to}|to`);
-                participantDetails.push({
-                    email: msg.to,
-                    displayName: msg.toDisplay,
-                    type: 'to'
-                });
-            }
-            
-            // Add CC recipients if present
-            if (msg.cc) {
-                const ccEmails = msg.cc.split(',').map(e => e.trim()).filter(e => e);
-                ccEmails.forEach(ccEmail => {
-                    if (!seenParticipants.has(`${ccEmail}|cc`)) {
-                        seenParticipants.add(`${ccEmail}|cc`);
-                        participantDetails.push({
-                            email: ccEmail,
-                            displayName: this.extractDisplayName(ccEmail),
-                            type: 'cc'
-                        });
+        // One row per mailbox (case-insensitive); split To/Cc lists so duplicates and combined headers collapse
+        const participantByKey = new Map();
+
+        const addRawAddresses = (field, typ) => {
+            if (!field) return;
+            this.splitAddressList(field).forEach((raw) => {
+                const clean = this.extractCleanEmail(raw);
+                if (!clean) return;
+                const disp = this.extractDisplayName(raw);
+                const displayName = disp && disp !== clean ? disp : clean;
+                const prev = participantByKey.get(clean);
+                if (!prev) {
+                    participantByKey.set(clean, {
+                        email: clean,
+                        displayName,
+                        types: new Set([typ]),
+                    });
+                } else {
+                    prev.types.add(typ);
+                    if (displayName && displayName !== clean && prev.displayName === prev.email) {
+                        prev.displayName = displayName;
                     }
-                });
-            }
+                }
+            });
+        };
+
+        messages.forEach((msg) => {
+            addRawAddresses(msg.from, 'from');
+            addRawAddresses(msg.to, 'to');
+            addRawAddresses(msg.cc, 'cc');
         });
 
-        // Sort participants: from first, then to, then cc
+        const participantDetails = Array.from(participantByKey.values()).map((p) => ({
+            email: p.email,
+            displayName: p.displayName,
+            roles: Array.from(p.types),
+            type: p.types.has('from') ? 'from' : p.types.has('to') ? 'to' : 'cc',
+        }));
+
         participantDetails.sort((a, b) => {
-            const order = { 'from': 1, 'to': 2, 'cc': 3 };
-            return (order[a.type] || 4) - (order[b.type] || 4);
+            const order = { from: 1, to: 2, cc: 3 };
+            const t = (order[a.type] || 4) - (order[b.type] || 4);
+            if (t !== 0) return t;
+            return a.displayName.localeCompare(b.displayName);
         });
 
         // Get the original thread subject (without "Re: ")
@@ -795,11 +799,20 @@ EmailSchema.statics.extractCleanEmail = function(emailString) {
     // Extract email from "Name <email@domain.com>" format
     const emailMatch = trimmed.match(/<([^>]+)>/);
     if (emailMatch && emailMatch[1]) {
-        return emailMatch[1].trim();
+        return emailMatch[1].trim().toLowerCase();
     }
     
     // Return as is if no angle brackets
-    return trimmed;
+    return trimmed.replace(/"/g, '').toLowerCase();
+};
+
+/** Split a comma-separated address header into parts (simple; each part is one mailbox). */
+EmailSchema.statics.splitAddressList = function (str) {
+    if (!str || typeof str !== 'string') return [];
+    return str
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
 };
 
 /**
