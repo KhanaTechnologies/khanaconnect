@@ -12,7 +12,7 @@ const SaasWhatsAppAccount = require('../models/SaasWhatsAppAccount');
 const SaasBillingAccount = require('../models/SaasBillingAccount');
 const SaasTransaction = require('../models/SaasTransaction');
 const SaasPricingRule = require('../models/SaasPricingRule');
-const Client = require('../models/Client');
+const Client = require('../models/client');
 
 const router = express.Router();
 
