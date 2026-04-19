@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const EmailSubscriber = require('../models/emailSubscriber');
 const createCsvWriter = require('csv-writer').createObjectCsvWriter;
 const { wrapRoute } = require('../helpers/failureEmail'); // ✅ Import wrapRoute
+const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 
 // Middleware to validate token
 const validateToken = (req, res, next) => {
@@ -12,13 +13,13 @@ const validateToken = (req, res, next) => {
         return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
     }
     const tokenValue = token.split(' ')[1];
-    jwt.verify(tokenValue, process.env.secret, (err, decoded) => {
-        if (err) {
-            return res.status(403).json({ error: 'Forbidden - Invalid token', err });
-        }
+    try {
+        const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
         req.clientID = decoded.clientID;
         next();
-    });
+    } catch (_err) {
+        return res.status(403).json({ error: 'Forbidden - Invalid token' });
+    }
 };
 
 // POST route for subscribing

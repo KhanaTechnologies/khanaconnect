@@ -7,9 +7,13 @@ const MailComposer = require('nodemailer/lib/mail-composer');
 const { ImapFlow } = require('imapflow');
 const Email = require('../models/Email');
 const { smtpHostToImapForSent } = require('./mailHost');
+const { enqueueOutboundEmail } = require('../queues/outboundEmailQueue');
+const { serializeMailOptions } = require('./mailQueueSerialize');
+const { isNonRetryableSmtpError, isRetryableSmtpError } = require('./smtpErrors');
 
 /** Uploaded dashboard signatures are stored here and referenced by absolute URL in Client.emailSignature */
 const SIGNATURES_UPLOAD_DIR = path.join(__dirname, '../public/uploads/signatures');
+const PROMOTIONS_UPLOAD_DIR = path.join(__dirname, '../public/uploads/promotions');
 
 function contentTypeForSignatureFile(filePath) {
   const ext = path.extname(filePath).toLowerCase();
@@ -24,33 +28,38 @@ function contentTypeForSignatureFile(filePath) {
  * Resolve dashboard signature image on disk from an <img src> (absolute URL or site-relative path).
  * Returns null if not a known signature path or file missing.
  */
+function resolveUnderPublicUpload(trimmed, marker, uploadDir) {
+  if (/^https?:\/\//i.test(trimmed)) {
+    const u = new URL(trimmed);
+    const idx = u.pathname.indexOf(marker);
+    if (idx === -1) return null;
+    const rel = u.pathname.slice(idx + marker.length);
+    const base = path.basename(rel);
+    if (!base || base.includes('..')) return null;
+    const full = path.join(uploadDir, base);
+    return fs.existsSync(full) ? full : null;
+  }
+  if (trimmed.startsWith(marker)) {
+    const base = path.basename(trimmed.slice(marker.length));
+    if (!base || base.includes('..')) return null;
+    const full = path.join(uploadDir, base);
+    return fs.existsSync(full) ? full : null;
+  }
+  return null;
+}
+
 function resolveLocalSignatureFileFromImgSrc(src) {
   if (!src || typeof src !== 'string') return null;
   const trimmed = src.trim();
   if (trimmed.startsWith('cid:')) return null;
 
-  const marker = '/public/uploads/signatures/';
   try {
-    if (/^https?:\/\//i.test(trimmed)) {
-      const u = new URL(trimmed);
-      const idx = u.pathname.indexOf(marker);
-      if (idx === -1) return null;
-      const rel = u.pathname.slice(idx + marker.length);
-      const base = path.basename(rel);
-      if (!base || base.includes('..')) return null;
-      const full = path.join(SIGNATURES_UPLOAD_DIR, base);
-      return fs.existsSync(full) ? full : null;
-    }
-    if (trimmed.startsWith(marker)) {
-      const base = path.basename(trimmed.slice(marker.length));
-      if (!base || base.includes('..')) return null;
-      const full = path.join(SIGNATURES_UPLOAD_DIR, base);
-      return fs.existsSync(full) ? full : null;
-    }
+    const sig = resolveUnderPublicUpload(trimmed, '/public/uploads/signatures/', SIGNATURES_UPLOAD_DIR);
+    if (sig) return sig;
+    return resolveUnderPublicUpload(trimmed, '/public/uploads/promotions/', PROMOTIONS_UPLOAD_DIR);
   } catch (_) {
     return null;
   }
-  return null;
 }
 
 /**
@@ -442,39 +451,106 @@ async function sendMail(options) {
   }
 }
 
+function buildNodemailerPayloadForQueue(options, htmlOut, attachmentsOut) {
+  const {
+    from,
+    to,
+    subject,
+    text,
+    cc,
+    bcc,
+    inReplyTo,
+    references,
+  } = options;
+  const mailOptions = {
+    from,
+    to,
+    subject: subject || '(no subject)',
+    text: text || htmlOut?.replace(/<[^>]*>/g, '') || 'No content',
+    html: htmlOut || text || 'No content',
+    attachments: (attachmentsOut || []).map((att) => ({
+      filename: att.filename,
+      content: att.content,
+      contentType: att.contentType,
+      cid: att.cid,
+    })),
+  };
+  if (cc) mailOptions.cc = cc;
+  if (bcc) mailOptions.bcc = bcc;
+  if (inReplyTo) mailOptions.inReplyTo = inReplyTo;
+  if (references && references.length) {
+    mailOptions.references = Array.isArray(references) ? references.join(' ') : references;
+  }
+  return mailOptions;
+}
+
 /**
- * Send email with retry logic
+ * Send email with retry logic. After retries, optional enqueue to outbound-email (newsletter / no Sent sync).
  */
 async function sendMailWithRetry(options, maxRetries = 3) {
+  const legacyConnectionRetry =
+    (err) =>
+      err &&
+      (String(err.message || '').includes('Too many concurrent') ||
+        String(err.message || '').includes('421') ||
+        String(err.message || '').includes('connection') ||
+        String(err.message || '').includes('ECONNREFUSED') ||
+        err.code === 'ECONNECTION');
+
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       console.log(`🔄 SMTP attempt ${attempt}/${maxRetries}`);
-      const result = await sendMail(options);
-      return result;
+      return await sendMail(options);
     } catch (error) {
-      const isConnectionError = 
-        error.message.includes('Too many concurrent') ||
-        error.message.includes('421') ||
-        error.message.includes('connection') ||
-        error.message.includes('ECONNREFUSED') ||
-        error.code === 'ECONNECTION';
-      
-      if (isConnectionError && attempt < maxRetries) {
-        // Wait before retrying (exponential backoff)
-        const waitTime = Math.min(1000 * Math.pow(2, attempt), 10000);
-        console.log(`⏳ Waiting ${waitTime}ms before retry...`);
-        await new Promise(resolve => setTimeout(resolve, waitTime));
+      if (isNonRetryableSmtpError(error)) {
+        console.error(`💥 SMTP error (not retrying):`, error.message);
+        throw error;
+      }
+
+      const retryable = isRetryableSmtpError(error) || legacyConnectionRetry(error);
+      if (retryable && attempt < maxRetries) {
+        const waitTime = Math.min(1000 * Math.pow(2, attempt - 1), 10000);
+        console.log(`⏳ Waiting ${waitTime}ms before retry (${error.message})...`);
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
         continue;
       }
-      
+
+      const outboxEligible =
+        options.clientID &&
+        options.saveToSent === false &&
+        retryable &&
+        process.env.EMAIL_OUTBOX_DISABLED !== '1' &&
+        process.env.EMAIL_OUTBOX_DISABLED !== 'true';
+
+      if (outboxEligible) {
+        try {
+          const { html: htmlOut, attachments: attachmentsOut } = inlineSignatureImages(
+            options.html || '',
+            options.attachments || []
+          );
+          const mailOptions = buildNodemailerPayloadForQueue(options, htmlOut, attachmentsOut);
+          await enqueueOutboundEmail({
+            clientID: String(options.clientID),
+            mailOptions: serializeMailOptions(mailOptions),
+            label: options.isNewsletter ? `newsletter:${options.newsletterId || ''}` : 'saveToSent:false',
+            lastError: error.message,
+          });
+          console.log(`📬 Newsletter/outbox: deferred send for ${options.to} after SMTP failure`);
+          return { success: true, queuedToOutbox: true, messageId: null };
+        } catch (qErr) {
+          console.error('Failed to enqueue outbound email:', qErr.message);
+        }
+      }
+
       console.error(`❌ SMTP failed on attempt ${attempt}:`, error.message);
       throw error;
     }
   }
 }
 
-module.exports = { 
-  sendMail, 
-  saveToSentFolder, 
-  sendMailWithRetry 
+module.exports = {
+  sendMail,
+  saveToSentFolder,
+  sendMailWithRetry,
+  inlineSignatureImages,
 };

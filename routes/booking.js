@@ -15,8 +15,23 @@ const {
     sendPaymentConfirmationEmail,
     sendBookingCancellationEmail,
     sendAccommodationConfirmationEmail,
-    sendMixedBookingConfirmationEmail
+    sendMixedBookingConfirmationEmail,
+    sendBookingUpdateNotificationEmail,
+    sendBookingEmailReassignedNotice,
+    sendBookingStatementEmail,
 } = require('../utils/email');
+const { diffBookingForCustomer, normalizeCustomerNotifyChanges } = require('../utils/bookingEmailHelpers');
+const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
+
+function clientCanSendMail(client) {
+    return Boolean(
+        client &&
+        client.businessEmail &&
+        client.businessEmailPassword &&
+        !String(client.businessEmail).includes('company.com') &&
+        client.businessEmail !== 'your-email@gmail.com'
+    );
+}
 
 // Middleware to authenticate JWT and attach clientId
 const validateClient = (req, res, next) => {
@@ -24,11 +39,14 @@ const validateClient = (req, res, next) => {
     if (!token || !token.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
 
     const tokenValue = token.split(' ')[1];
-    jwt.verify(tokenValue, process.env.secret, (err, user) => {
-        if (err || !user.clientID) return res.status(403).json({ error: 'Forbidden - Invalid token' });
-        req.clientId = user.clientID;
+    try {
+        const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
+        if (!decoded.clientID) return res.status(403).json({ error: 'Forbidden - Invalid token' });
+        req.clientId = decoded.clientID;
         next();
-    });
+    } catch (_err) {
+        return res.status(403).json({ error: 'Forbidden - Invalid token' });
+    }
 };
 
 // GET: Get all bookings with filters
@@ -253,6 +271,7 @@ router.post('/', validateClient, wrapRoute(async (req, res) => {
     });
 
     const displayName = client.companyName || client.clientName || clientId;
+    const emailSig = client.emailSignature || '';
 
     setImmediate(async () => {
         try {
@@ -268,21 +287,24 @@ router.post('/', validateClient, wrapRoute(async (req, res) => {
                         populatedBooking,
                         client.businessEmail,
                         client.businessEmailPassword,
-                        displayName
+                        displayName,
+                        emailSig
                     );
                 } else if (bookingType === 'mixed') {
                     await sendMixedBookingConfirmationEmail(
                         populatedBooking,
                         client.businessEmail,
                         client.businessEmailPassword,
-                        displayName
+                        displayName,
+                        emailSig
                     );
                 } else {
                     await sendBookingConfirmationEmail(
                         populatedBooking,
                         client.businessEmail,
                         client.businessEmailPassword,
-                        displayName
+                        displayName,
+                        emailSig
                     );
                 }
                 console.log('✅ Background confirmation email sent successfully');
@@ -309,6 +331,8 @@ router.put('/:id', validateClient, wrapRoute(async (req, res) => {
     if (!booking) {
         return res.status(404).json({ error: 'Booking not found or unauthorized' });
     }
+
+    const previousSnapshot = booking.toObject();
 
     // Don't allow updating accommodation bookings to service or mixed
     if (booking.bookingType === 'accommodation' && req.body.bookingType && req.body.bookingType !== 'accommodation') {
@@ -486,6 +510,22 @@ router.put('/:id', validateClient, wrapRoute(async (req, res) => {
     const updatedBooking = await Booking.findById(booking._id)
         .populate('assignedTo')
         .populate('resourceId');
+
+    const notifyCustomer =
+        req.query.notifyCustomer !== 'false' &&
+        req.body.notifyCustomer !== false &&
+        req.body.notifyCustomer !== 'false';
+
+    const rawNotifyChanges = req.body.customerNotifyChanges ?? req.body.notifyCustomerChanges;
+    let changeRows;
+    if (Array.isArray(rawNotifyChanges)) {
+        changeRows = normalizeCustomerNotifyChanges(rawNotifyChanges);
+    } else {
+        changeRows = diffBookingForCustomer(previousSnapshot, updatedBooking.toObject());
+    }
+    const customerNotifyReason =
+        typeof req.body.customerNotifyReason === 'string' ? req.body.customerNotifyReason.trim() : '';
+    const emailSig = client.emailSignature || '';
     
     // ============ ASYNC EMAIL SENDING - NON BLOCKING ============
     // Send response immediately, then handle emails in the background
@@ -497,6 +537,42 @@ router.put('/:id', validateClient, wrapRoute(async (req, res) => {
 
     // ============ BACKGROUND EMAIL PROCESSING ============
     // This runs AFTER the response is sent, so frontend doesn't wait
+
+    if (notifyCustomer && changeRows.length > 0 && clientCanSendMail(client)) {
+        const displayName = client.clientName || client.companyName || clientId;
+        const prevEmailRaw = (previousSnapshot.customerEmail || '').trim();
+        const newEmailRaw = (updatedBooking.customerEmail || '').trim();
+        const prevNorm = prevEmailRaw.toLowerCase();
+        const newNorm = newEmailRaw.toLowerCase();
+        setImmediate(async () => {
+            try {
+                if (prevNorm && newNorm && prevNorm !== newNorm) {
+                    await sendBookingEmailReassignedNotice(
+                        prevEmailRaw,
+                        updatedBooking,
+                        client.businessEmail,
+                        client.businessEmailPassword,
+                        displayName,
+                        emailSig
+                    );
+                    const gapMs = Math.max(0, parseInt(String(process.env.SMTP_BETWEEN_MESSAGES_MS || '450'), 10) || 450);
+                    if (gapMs > 0 && newEmailRaw) await new Promise((r) => setTimeout(r, gapMs));
+                }
+                if (newEmailRaw) {
+                    await sendBookingUpdateNotificationEmail(
+                        updatedBooking,
+                        changeRows,
+                        client.businessEmail,
+                        client.businessEmailPassword,
+                        displayName,
+                        { reason: customerNotifyReason, toEmail: newEmailRaw, emailSignature: emailSig }
+                    );
+                }
+            } catch (emailError) {
+                console.error('⚠️ Booking update notification email failed:', emailError.message);
+            }
+        });
+    }
     
     // Check if this is a service booking that was moved to today
     if (booking.bookingType === 'service' && req.body.date) {
@@ -509,12 +585,7 @@ router.put('/:id', validateClient, wrapRoute(async (req, res) => {
             setImmediate(async () => {
                 try {
                     // Check if client has valid email configuration
-                    const hasValidEmail = client.businessEmail && 
-                                         client.businessEmailPassword && 
-                                         !client.businessEmail.includes('company.com') &&
-                                         client.businessEmail !== 'your-email@gmail.com';
-                    
-                    if (hasValidEmail) {
+                    if (clientCanSendMail(client)) {
                         const [hours, minutes] = booking.time.split(':').map(Number);
                         const appointmentTime = new Date(booking.date);
                         appointmentTime.setHours(hours, minutes, 0, 0);
@@ -528,7 +599,8 @@ router.put('/:id', validateClient, wrapRoute(async (req, res) => {
                                 booking,
                                 client.businessEmail,
                                 client.businessEmailPassword,
-                                client.clientName || booking.clientID
+                                client.clientName || booking.clientID,
+                                client.emailSignature || ''
                             );
                             console.log(`✅ Background notification sent for booking ${booking._id}`);
                         }
@@ -541,6 +613,49 @@ router.put('/:id', validateClient, wrapRoute(async (req, res) => {
         }
     }
     
+}));
+
+// POST: Email customer a booking/payment record (for their records — not a payment request)
+router.post('/:id/send-statement', validateClient, wrapRoute(async (req, res) => {
+    const { id } = req.params;
+    const clientId = req.clientId;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ error: 'Invalid booking ID format' });
+    }
+
+    const booking = await Booking.findOne({ _id: id, clientID: clientId });
+    if (!booking) {
+        return res.status(404).json({ error: 'Booking not found or unauthorized' });
+    }
+
+    if (!booking.customerEmail) {
+        return res.status(400).json({ error: 'Booking has no customer email' });
+    }
+
+    const client = await Client.findOne({ clientID: clientId });
+    if (!client) {
+        return res.status(404).json({ error: 'Client not found' });
+    }
+
+    if (!clientCanSendMail(client)) {
+        return res.status(503).json({ error: 'Business email is not configured for sending' });
+    }
+
+    const displayName = client.clientName || client.companyName || clientId;
+    await sendBookingStatementEmail(
+        booking,
+        client.businessEmail,
+        client.businessEmailPassword,
+        displayName,
+        client.emailSignature || ''
+    );
+
+    res.json({
+        ok: true,
+        message: 'Statement email sent',
+        to: booking.customerEmail,
+    });
 }));
 
 // POST: Payment confirmation (webhook auth only when BOOKING_PAYMENT_WEBHOOK_ENABLED=true)
@@ -575,7 +690,13 @@ router.post('/:id/payment-confirmation', wrapRoute(async (req, res) => {
         
         // Send payment confirmation email
         try {
-            await sendPaymentConfirmationEmail(booking, client.businessEmail, client.businessEmailPassword, client.clientName || booking.clientID);
+            await sendPaymentConfirmationEmail(
+                booking,
+                client.businessEmail,
+                client.businessEmailPassword,
+                client.clientName || booking.clientID,
+                client.emailSignature || ''
+            );
         } catch (emailError) {
             console.error('Failed to send payment confirmation email:', emailError);
         }
@@ -642,7 +763,14 @@ router.delete('/:id', validateClient, wrapRoute(async (req, res) => {
 
     // Send cancellation email
     try {
-        await sendBookingCancellationEmail(booking, client.businessEmail, client.businessEmailPassword, client.clientName || clientId, reason);
+        await sendBookingCancellationEmail(
+            booking,
+            client.businessEmail,
+            client.businessEmailPassword,
+            client.clientName || clientId,
+            reason,
+            client.emailSignature || ''
+        );
     } catch (emailError) {
         console.error('Failed to send cancellation email:', emailError);
     }
@@ -935,7 +1063,13 @@ router.post('/waitlist/:id/convert-to-booking', validateClient, wrapRoute(async 
     
     // Send confirmation email
     try {
-        await sendBookingConfirmationEmail(booking, client.businessEmail, client.businessEmailPassword, client.clientName || clientId);
+        await sendBookingConfirmationEmail(
+            booking,
+            client.businessEmail,
+            client.businessEmailPassword,
+            client.clientName || clientId,
+            client.emailSignature || ''
+        );
     } catch (emailError) {
         console.error('Failed to send confirmation email:', emailError);
     }

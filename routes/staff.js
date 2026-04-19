@@ -3,6 +3,7 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 const Staff = require('../models/staff');
 const { wrapRoute } = require('../helpers/failureEmail'); // ✅ Import wrapRoute
+const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 
 // Middleware for client validation
 const validateClient = async (req, res, next) => {
@@ -12,16 +13,16 @@ const validateClient = async (req, res, next) => {
             return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
         }
         const tokenValue = token.split(' ')[1];
-        jwt.verify(tokenValue, process.env.secret, (err, user) => {
-            if (err) {
-                return res.status(403).json({ error: 'Forbidden - Invalid token', err });
-            }
-            if (!user.clientID) {
+        try {
+            const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
+            if (!decoded.clientID) {
                 return res.status(403).json({ error: 'Forbidden - Invalid token payload' });
             }
-            req.clientId = user.clientID; // Attach client ID to request
+            req.clientId = decoded.clientID; // Attach client ID to request
             next();
-        });
+        } catch (_err) {
+            return res.status(403).json({ error: 'Forbidden - Invalid token' });
+        }
     } catch (error) {
         console.error('Error in client validation:', error);
         res.status(500).json({ error: 'Internal Server Error' });

@@ -12,6 +12,7 @@ const Vote = require('../models/Vote');
 const Customer = require('../models/customer');
 const { body, validationResult } = require('express-validator');
 const { wrapRoute } = require('../helpers/failureEmail');
+const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 
 // Ensure upload directories exist
 const uploadDirs = ['uploads/voting', 'uploads/voting/temp', 'uploads/voting/items'];
@@ -117,17 +118,20 @@ const validateClient = (req, res, next) => {
   }
 
   const tokenValue = token.split(' ')[1];
-  jwt.verify(tokenValue, process.env.secret, (err, user) => {
-    if (err || !user.clientID) {
+  try {
+    const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
+    if (!decoded.clientID) {
       return res.status(403).json({ error: 'Forbidden - Invalid token' });
     }
-    req.clientId = user.clientID;
+    req.clientId = decoded.clientID;
     req.user = {
-      id: user.clientID,
-      role: user.role || 'user'
+      id: decoded.clientID,
+      role: decoded.role || 'user'
     };
     next();
-  });
+  } catch (_err) {
+    return res.status(403).json({ error: 'Forbidden - Invalid token' });
+  }
 };
 
 // Middleware to authenticate customer (for voting)
@@ -138,14 +142,17 @@ const validateCustomer = (req, res, next) => {
   }
 
   const tokenValue = token.split(' ')[1];
-  jwt.verify(tokenValue, process.env.JWT_SECRET || process.env.secret, (err, decoded) => {
-    if (err || !decoded.customerID) {
+  try {
+    const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
+    if (!decoded.customerID) {
       return res.status(403).json({ error: 'Forbidden - Invalid customer token' });
     }
     req.customerId = decoded.customerID;
     req.clientId = decoded.clientID;
     next();
-  });
+  } catch (_err) {
+    return res.status(403).json({ error: 'Forbidden - Invalid customer token' });
+  }
 };
 
 // Validation rules

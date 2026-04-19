@@ -2,6 +2,7 @@ const express = require('express');
 const Customer = require('../models/customer');
 const Client = require('../models/client');
 const Product = require('../models/product');
+const WishList = require('../models/wishList');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
@@ -10,6 +11,7 @@ const { sendVerificationEmail } = require('../utils/sendVerificationEmail');
 const { sendResetPasswordEmail } = require('../utils/email');
 const { sendCartReminderEmail } = require('../utils/cartReminderEmail');
 const { wrapRoute } = require('../helpers/failureEmail');
+const { getJwtSecret, verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const router = express.Router();
 const TrackingEvent = require('../models/TrackingEvent');
 const { encrypt, decrypt } = require('../helpers/encryption');
@@ -32,14 +34,14 @@ const validateTokenAndExtractClientID = (req, res, next) => {
     }
 
     const tokenValue = token.split(' ')[1];
-    jwt.verify(tokenValue, process.env.JWT_SECRET || process.env.secret, (err, decoded) => {
-      if (err) {
-        console.error('Token verification error:', err);
-        return res.status(403).json({ error: 'Forbidden - Invalid token' });
-      }
+    try {
+      const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
       req.clientID = decoded.clientID;
       next();
-    });
+    } catch (err) {
+      console.error('Token verification error:', err);
+      return res.status(403).json({ error: 'Forbidden - Invalid token' });
+    }
   } catch (error) {
     console.error('Token validation error:', error);
     return res.status(401).json({ error: 'Unauthorized - Token validation failed' });
@@ -52,20 +54,21 @@ const requireAdmin = async (req, res, next) => {
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Unauthorized' });
 
-    jwt.verify(token, process.env.JWT_SECRET || process.env.secret, async (err, decoded) => {
-      if (err) return res.status(403).json({ error: 'Invalid token' });
+    const { decoded } = verifyJwtWithAnySecret(jwt, token);
 
-      const client = await Client.findOne({ clientID: decoded.clientID });
-      if (!client) return res.status(404).json({ error: 'Client not found' });
+    const client = await Client.findOne({ clientID: decoded.clientID });
+    if (!client) return res.status(404).json({ error: 'Client not found' });
 
-      if (client.role !== 'admin') {
-        return res.status(403).json({ error: 'Admin access required' });
-      }
+    if (client.role !== 'admin') {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
 
-      req.clientID = decoded.clientID;
-      next();
-    });
+    req.clientID = decoded.clientID;
+    next();
   } catch (error) {
+    if (error && (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError')) {
+      return res.status(403).json({ error: 'Invalid token' });
+    }
     next(error);
   }
 };
@@ -100,6 +103,38 @@ const normalizeEmailDomain = (email) => {
     .replace(/@gmai\.com$/i, '@gmail.com')
     .replace(/@gmal\.com$/i, '@gmail.com');
 };
+
+/**
+ * Get wish lists for a specific customer inside the authenticated tenant.
+ * Endpoint: GET /api/v1/customer/wishlists?customerID=<mongoId>
+ */
+router.get('/wishlists', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
+  const customerID = String(req.query.customerID || '').trim();
+  if (!customerID) {
+    return res.status(400).json({ error: 'customerID query parameter is required' });
+  }
+
+  const customer = await Customer.findOne({ _id: customerID, clientID: req.clientID }).lean();
+  if (!customer) {
+    return res.status(404).json({ error: 'Customer not found for this client' });
+  }
+
+  const wishlists = await WishList.find({
+    clientID: req.clientID,
+    customerID,
+  })
+    .sort({ sortOrder: 1, updatedAt: -1 })
+    .populate('items.product', 'name image countInStock price salePercentage saleEndDate')
+    .lean();
+
+  return res.json({
+    success: true,
+    clientID: req.clientID,
+    customerID,
+    count: wishlists.length,
+    wishlists,
+  });
+}));
 
 // --------------------
 // CUSTOMER ENCRYPTION MIGRATION (Admin only)
@@ -967,7 +1002,8 @@ router.post('/', validateTokenAndExtractClientID, validateCustomerInput, async (
         client.businessEmail, // This will be automatically decrypted
         client.businessEmailPassword, // This will be automatically decrypted
         client.return_url, 
-        client.companyName
+        client.companyName,
+        client.emailSignature || ''
       );
     } catch (emailError) {
       console.error('Email failed to send:', emailError.message);
@@ -1042,7 +1078,8 @@ router.post('/login', loginLimiter, validateTokenAndExtractClientID, async (req,
             client.businessEmail, 
             client.businessEmailPassword, 
             client.return_url, 
-            client.companyName
+            client.companyName,
+            client.emailSignature || ''
           );
         } catch (emailError) {
           console.error('Verification email failed to send:', emailError.message);
@@ -1058,7 +1095,7 @@ router.post('/login', loginLimiter, validateTokenAndExtractClientID, async (req,
       customerID: customer._id, 
       clientID: customer.clientID, 
       isActive: true 
-    }, process.env.JWT_SECRET || process.env.secret, { 
+    }, getJwtSecret(), { 
       expiresIn: '1d' 
     });
 
@@ -1083,17 +1120,21 @@ router.post('/login', loginLimiter, validateTokenAndExtractClientID, async (req,
       ).catch(err => console.error('Error converting anonymous user:', err));
     }
 
-    // Track login event
+    // Track login event (sessionId must exist — storefront may omit x-session-id)
+    const loginSessionId =
+      (req.headers['x-session-id'] && String(req.headers['x-session-id']).trim()) ||
+      (req.trackingSessionId && String(req.trackingSessionId).trim()) ||
+      `login_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
     await TrackingEvent.create({
       clientID: req.clientID,
       customer: customer._id,
-      sessionId: req.trackingSessionId,
+      sessionId: loginSessionId,
       eventType: 'USER_LOGIN',
       metadata: {
         ip: req.ip,
-        userAgent: req.headers['user-agent']
+        userAgent: req.headers['user-agent'],
       },
-      source: 'api'
+      source: 'api',
     });
 
     res.json({ 
@@ -1186,7 +1227,8 @@ router.post('/resend-verification', validateTokenAndExtractClientID, async (req,
         client.businessEmail, 
         client.businessEmailPassword, 
         client.return_url, 
-        client.companyName
+        client.companyName,
+        client.emailSignature || ''
       );
     } catch (emailError) {
       console.error('Verification email failed to send:', emailError.message);
@@ -1250,7 +1292,9 @@ router.post('/reset-password', validateTokenAndExtractClientID, async (req, res)
         resetUrl, 
         client.businessEmail, 
         client.businessEmailPassword, 
-        client.companyName
+        client.companyName,
+        client.emailSignature || '',
+        req.clientID
       );
     } catch (emailError) {
       console.error('Error sending reset password email:', emailError);

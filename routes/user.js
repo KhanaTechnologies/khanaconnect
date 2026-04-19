@@ -7,12 +7,13 @@ const authJwt = require('../helpers/jwt'); // Import the authJwt middleware
 const router = express.Router();
 const { sendVerificationEmail } = require('../utils/email');
 const { wrapRoute } = require('../helpers/failureEmail'); // ✅ Import wrapRoute
+const { getJwtSecret } = require('../helpers/jwtSecret');
 
 router.use(authJwt());
 
 // Helper function to generate a JWT token
 function generateToken(client) {
-    const secret = process.env.secret;
+    const secret = getJwtSecret();
     const payload = {
         clientID: client.clientID,
         companyName: client.companyName,

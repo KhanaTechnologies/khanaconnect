@@ -224,6 +224,148 @@ async function fetchClientEmails(client) {
   }
 }
 
+const SENT_MAILBOX_CANDIDATES = ['Sent', 'Sent Items', 'Sent Messages', 'INBOX.Sent'];
+
+function resolveSentMailboxPath(mailboxes) {
+  if (!Array.isArray(mailboxes) || mailboxes.length === 0) return null;
+  const bySpecial = mailboxes.find((m) => m.specialUse === '\\Sent');
+  if (bySpecial && bySpecial.path) return bySpecial.path;
+  for (const name of SENT_MAILBOX_CANDIDATES) {
+    const exact = mailboxes.find((m) => m.path === name);
+    if (exact) return exact.path;
+  }
+  const fuzzy = mailboxes.find(
+    (m) =>
+      /(^|\.)(sent|sent items|sent messages)$/i.test((m.name || '').trim()) &&
+      !/draft|trash|spam|junk|deleted/i.test(m.path || '')
+  );
+  return fuzzy ? fuzzy.path : null;
+}
+
+/**
+ * Import Sent folder from IMAP as outbound messages (no UID stored — avoids collisions with INBOX UIDs).
+ */
+async function fetchClientSentEmails(client) {
+  if (!client.businessEmail || !client.businessEmailPassword) {
+    throw new Error('Client email or password not set');
+  }
+
+  let imap;
+  try {
+    const host = resolveImapHost(client);
+    const port = resolveImapPort(client);
+
+    imap = new ImapFlow({
+      host,
+      port,
+      secure: true,
+      auth: {
+        user: client.businessEmail,
+        pass: client.businessEmailPassword,
+      },
+      tls: { rejectUnauthorized: false, minVersion: 'TLSv1.2' },
+      connectionTimeout: 30000,
+      greetingTimeout: 30000,
+      logger: {
+        debug: () => {},
+        info: console.log,
+        warn: console.warn,
+        error: console.error,
+      },
+      disableAutoIdle: true,
+      disableCompression: true,
+    });
+
+    await imap.connect();
+    const mailboxes = await imap.list();
+    const sentPath = resolveSentMailboxPath(mailboxes);
+    if (!sentPath) {
+      console.warn('📭 No Sent folder found for IMAP; skipping Sent import');
+      return [];
+    }
+
+    await imap.mailboxOpen(sentPath);
+    const totalMessages = imap.mailbox.exists || 0;
+    if (totalMessages === 0) {
+      return [];
+    }
+
+    const emails = [];
+    const lock = await imap.getMailboxLock(sentPath);
+    try {
+      let processedCount = 0;
+      for await (const msg of imap.fetch(`1:${totalMessages}`, { source: true, flags: true, uid: true })) {
+        try {
+          const parsed = await simpleParser(msg.source);
+          const remoteId = normalizeMessageId(parsed.messageId);
+          if (!remoteId) continue;
+
+          const inReplyTo = normalizeMessageId(parsed.inReplyTo);
+          const references = Email.parseReferences(parsed.references).map(normalizeMessageId);
+
+          const threadId = await Email.computeThreadId({
+            messageId: remoteId,
+            inReplyTo,
+            references,
+            clientID: client.clientID,
+          });
+
+          const emailData = {
+            remoteId,
+            messageId: remoteId,
+            from: parsed.from?.text || '',
+            to: parsed.to?.text || '',
+            cc: parsed.cc?.text || '',
+            bcc: parsed.bcc?.text || '',
+            subject: parsed.subject || '(no subject)',
+            text: parsed.text || '',
+            html: parsed.html || '',
+            date: parsed.date || new Date(),
+            flags: Array.isArray(msg.flags) ? msg.flags : [],
+            attachments: (parsed.attachments || []).map((a) => ({
+              filename: a.filename || 'unnamed',
+              contentType: a.contentType,
+              size: a.size,
+              contentId: a.contentId,
+            })),
+            direction: 'outbound',
+            clientID: client.clientID,
+            inReplyTo,
+            references,
+            threadId,
+          };
+
+          await Email.findOneAndUpdate(
+            { remoteId: emailData.remoteId, clientID: client.clientID },
+            emailData,
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+          );
+
+          await updateThreadMetadata(client.clientID, threadId);
+          emails.push(emailData);
+          processedCount++;
+        } catch (parseError) {
+          console.error('❌ Error parsing Sent message:', parseError.message);
+        }
+      }
+      console.log(`✅ Sent folder IMAP: processed ${processedCount} message(s)`);
+    } finally {
+      lock.release();
+    }
+
+    return emails;
+  } catch (error) {
+    console.error('❌ IMAP Sent fetch failed:', error.message);
+    throw error;
+  } finally {
+    if (imap) {
+      try {
+        await imap.logout();
+      } catch (_) {}
+    }
+  }
+}
+
 /**
  * SIMPLE TEST - Basic connection test
  */
@@ -521,7 +663,8 @@ async function recalculateAllThreads(clientID) {
 
 // Export all functions
 module.exports = { 
-  fetchClientEmails, 
+  fetchClientEmails,
+  fetchClientSentEmails,
   addFlags,
   removeFlags,
   setFlags,

@@ -6,6 +6,7 @@ const Client = require("../models/client"); // Assuming you have a Client model
 const gaClient = require("../helpers/gaClient");
 const cache = new NodeCache({ stdTTL: 300 }); // 5 min cache
 const { decrypt } = require("../helpers/encryption"); // Add this import
+const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 
 // ---------------- Middleware ---------------- //
 const validateClient = (req, res, next) => {
@@ -14,11 +15,14 @@ const validateClient = (req, res, next) => {
         return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
 
     const tokenValue = token.split(' ')[1];
-    jwt.verify(tokenValue, process.env.secret, (err, user) => {
-        if (err || !user.clientID) return res.status(403).json({ error: 'Forbidden - Invalid token' });
-        req.clientId = user.clientID;
+    try {
+        const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
+        if (!decoded.clientID) return res.status(403).json({ error: 'Forbidden - Invalid token' });
+        req.clientId = decoded.clientID;
         next();
-    });
+    } catch (_err) {
+        return res.status(403).json({ error: 'Forbidden - Invalid token' });
+    }
 };
 
 // ---------------- Helper: Aggregate Visits ---------------- //

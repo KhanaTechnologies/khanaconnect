@@ -43,7 +43,9 @@ async function fulfillGatewayPayment(orderId, totalPrice) {
         client.businessEmailPassword,
         order.deliveryPrice,
         order.clientID,
-        String(orderId)
+        String(orderId),
+        client.emailSignature || '',
+        order.clientID
       );
     } catch (emailError) {
       console.error('Order confirmation email failed:', emailError.message);

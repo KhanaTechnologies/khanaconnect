@@ -8,6 +8,8 @@ const { Octokit } = require("@octokit/rest");
 const { body, validationResult } = require('express-validator');
 const { SalesItem } = require('../models/salesItem');
 const { wrapRoute } = require('../helpers/failureEmail'); // ✅ Import wrapRoute
+const wishlistNotifyService = require('../services/wishlistNotifyService');
+const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 require('dotenv').config();
 
 const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
@@ -51,11 +53,14 @@ const validateClient = (req, res, next) => {
     if (!token || !token.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
 
     const tokenValue = token.split(' ')[1];
-    jwt.verify(tokenValue, process.env.secret, (err, user) => {
-        if (err || !user.clientID) return res.status(403).json({ error: 'Forbidden - Invalid token' });
-        req.clientId = user.clientID;
+    try {
+        const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
+        if (!decoded.clientID) return res.status(403).json({ error: 'Forbidden - Invalid token' });
+        req.clientId = decoded.clientID;
         next();
-    });
+    } catch (_err) {
+        return res.status(403).json({ error: 'Forbidden - Invalid token' });
+    }
 };
 
 // -------------------- ROUTES -------------------- //
@@ -188,6 +193,8 @@ router.put(
             updatedImages = [...updatedImages, ...newImagePaths];
         }
 
+        const prevSnapshot = product.toObject({ depopulate: true });
+
         const updatedProduct = await Product.findByIdAndUpdate(req.params.id, {
             productName: req.body.productName || product.productName,
             description: req.body.description || product.description,
@@ -196,7 +203,8 @@ router.put(
             brand: req.body.brand || product.brand,
             price: req.body.price || product.price,
             category: category._id,
-            countInStock: req.body.countInStock || product.countInStock,
+            countInStock: req.body.countInStock !== undefined ? req.body.countInStock : product.countInStock,
+            salePercentage: req.body.salePercentage !== undefined ? req.body.salePercentage : product.salePercentage,
             rating: req.body.rating || product.rating,
             numReviews: req.body.numReviews || product.numReviews,
             isFeatured: req.body.isFeatured || product.isFeatured,
@@ -204,6 +212,10 @@ router.put(
             usage: req.body.usage || product.usage,
             variants
         }, { new: true });
+
+        wishlistNotifyService
+          .handleProductUpdate(prevSnapshot, updatedProduct.toObject({ depopulate: true }))
+          .catch((err) => console.error('wishlist notify (product update):', err.message));
 
         res.json(updatedProduct);
     })

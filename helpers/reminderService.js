@@ -88,26 +88,30 @@ class ReminderService {
                 console.log(`✉️ Sending reminder for booking ${booking._id}`);
 
                 // Send appropriate email based on reminder type
+                const emailSig = client.emailSignature || '';
                 if (unsentReminder.reminderType === 'checkin') {
                     await sendCheckInReminderEmail(
                         booking,
                         client.businessEmail,
                         client.businessEmailPassword,
-                        client.clientName || booking.clientID
+                        client.clientName || booking.clientID,
+                        emailSig
                     );
                 } else if (unsentReminder.reminderType === 'checkout') {
                     await sendCheckOutReminderEmail(
                         booking,
                         client.businessEmail,
                         client.businessEmailPassword,
-                        client.clientName || booking.clientID
+                        client.clientName || booking.clientID,
+                        emailSig
                     );
                 } else {
                     await sendBookingReminderEmail(
                         booking,
                         client.businessEmail,
                         client.businessEmailPassword,
-                        client.clientName || booking.clientID
+                        client.clientName || booking.clientID,
+                        emailSig
                     );
                 }
 
@@ -175,7 +179,8 @@ class ReminderService {
                     booking,
                     client.businessEmail,
                     client.businessEmailPassword,
-                    client.clientName || booking.clientID
+                    client.clientName || booking.clientID,
+                    client.emailSignature || ''
                 );
 
                 await this.markReminderSent(booking, 'service');
@@ -201,7 +206,8 @@ class ReminderService {
                         booking,
                         client.businessEmail,
                         client.businessEmailPassword,
-                        client.clientName || booking.clientID
+                        client.clientName || booking.clientID,
+                        client.emailSignature || ''
                     );
 
                     await this.markReminderSent(booking, 'checkin');
@@ -228,7 +234,8 @@ class ReminderService {
                         booking,
                         client.businessEmail,
                         client.businessEmailPassword,
-                        client.clientName || booking.clientID
+                        client.clientName || booking.clientID,
+                        client.emailSignature || ''
                     );
 
                     await this.markReminderSent(booking, 'checkout');
@@ -287,19 +294,22 @@ class ReminderService {
             });
 
             // Test appropriate reminder based on booking type
+            const emailSig = client.emailSignature || '';
             if (booking.bookingType === 'accommodation') {
                 await sendCheckInReminderEmail(
                     booking,
                     client.businessEmail,
                     client.businessEmailPassword,
-                    client.clientName
+                    client.clientName,
+                    emailSig
                 );
             } else {
                 await sendBookingReminderEmail(
                     booking,
                     client.businessEmail,
                     client.businessEmailPassword,
-                    client.clientName
+                    client.clientName,
+                    emailSig
                 );
             }
 

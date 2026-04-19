@@ -7,10 +7,17 @@ const NewsletterOpen = require('../models/NewsletterOpen');
 const { mergeEmailSignature, escapeHtml } = require('./signatureHtml');
 const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('./mailHost');
 
+function envInt(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return fallback;
+  const n = parseInt(String(raw), 10);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
 const RATE_LIMITS = {
-  BATCH_SIZE: 50,
-  BATCH_DELAY: 1000,
-  EMAIL_DELAY: 100,
+  BATCH_SIZE: Math.min(500, Math.max(1, envInt('NEWSLETTER_BATCH_SIZE', 50))),
+  BATCH_DELAY: envInt('NEWSLETTER_BATCH_DELAY_MS', 1000),
+  EMAIL_DELAY: envInt('NEWSLETTER_EMAIL_DELAY_MS', 100),
   HOURLY_LIMIT: 500,
   DAILY_LIMIT: 2000,
 };
@@ -294,7 +301,7 @@ class NewsletterService {
   }
 
   static async processBatch(emails, client, newsletterData, batchNumber, totalBatches) {
-    const results = { sent: 0, failed: 0, errors: [] };
+    const results = { sent: 0, failed: 0, queued: 0, errors: [] };
     const host = resolveSmtpHost(client);
     const smtpPort = resolveSmtpPort(client, host);
     const enableTracking = newsletterData.enableTracking !== false;
@@ -350,7 +357,7 @@ class NewsletterService {
           contentType: att.contentType || 'application/octet-stream',
         }));
 
-        await sendMailWithRetry(
+        const mailResult = await sendMailWithRetry(
           {
             host,
             port: smtpPort,
@@ -372,7 +379,8 @@ class NewsletterService {
           3
         );
 
-        results.sent++;
+        if (mailResult && mailResult.queuedToOutbox) results.queued++;
+        else results.sent++;
         await this.sleep(RATE_LIMITS.EMAIL_DELAY);
       } catch (error) {
         results.failed++;
@@ -411,6 +419,7 @@ class NewsletterService {
 
     let totalSent = 0;
     let totalFailed = 0;
+    let totalQueued = 0;
     const allErrors = [];
 
     for (let i = 0; i < totalBatches; i++) {
@@ -427,18 +436,20 @@ class NewsletterService {
 
       totalSent += batchResults.sent;
       totalFailed += batchResults.failed;
+      totalQueued += batchResults.queued || 0;
       allErrors.push(...batchResults.errors);
 
       if (i < totalBatches - 1) await this.sleep(RATE_LIMITS.BATCH_DELAY);
     }
 
-    this.updateRateLimit(client.clientID, totalSent);
-    console.log(`✅ Newsletter completed: ${totalSent} sent, ${totalFailed} failed`);
+    this.updateRateLimit(client.clientID, totalSent + totalQueued);
+    console.log(`✅ Newsletter completed: ${totalSent} sent, ${totalQueued} queued for retry, ${totalFailed} failed`);
 
     return {
       newsletterId,
       totalRecipients,
       totalSent,
+      totalQueued,
       totalFailed,
       errors: allErrors,
       rateLimit: {
@@ -454,6 +465,15 @@ class NewsletterService {
       current: { hourly: rateLimit.hourly, daily: rateLimit.daily },
       maximum: { hourly: RATE_LIMITS.HOURLY_LIMIT, daily: RATE_LIMITS.DAILY_LIMIT },
       remaining: rateLimit.remaining,
+    };
+  }
+
+  /** Batch size and delays (env: NEWSLETTER_BATCH_SIZE, NEWSLETTER_BATCH_DELAY_MS, NEWSLETTER_EMAIL_DELAY_MS). */
+  static getDeliveryPacing() {
+    return {
+      batchSize: RATE_LIMITS.BATCH_SIZE,
+      batchDelayMs: RATE_LIMITS.BATCH_DELAY,
+      emailDelayMs: RATE_LIMITS.EMAIL_DELAY,
     };
   }
 

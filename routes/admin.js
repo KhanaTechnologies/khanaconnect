@@ -11,6 +11,7 @@ const Service = require("../models/service");
 const Staff = require("../models/staff");
 const { SalesItem } = require('../models/salesItem');
 const DiscountCode = require("../models/discountCode");
+const { getJwtSecret } = require('../helpers/jwtSecret');
 
 const { wrapRoute } = require('../helpers/failureEmail'); // <- wrapRoute for automatic emails
 
@@ -29,7 +30,7 @@ async function getClientIDFromParams(clientIdParam) {
 
 // Helper function to generate a JWT token
 function generateToken(client) {
-  const secret = process.env.secret;
+  const secret = getJwtSecret();
   const payload = {
     clientID: client.clientID,
     companyName: client.companyName,

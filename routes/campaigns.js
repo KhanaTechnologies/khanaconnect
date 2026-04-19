@@ -10,6 +10,7 @@ const Campaign = require('../models/Campaign');
 const PreorderPledge = require('../models/PreorderPledge');
 const { body, validationResult } = require('express-validator');
 const { wrapRoute } = require('../helpers/failureEmail');
+const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -51,17 +52,20 @@ const validateClient = (req, res, next) => {
   }
 
   const tokenValue = token.split(' ')[1];
-  jwt.verify(tokenValue, process.env.secret, (err, user) => {
-    if (err || !user.clientID) {
+  try {
+    const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
+    if (!decoded.clientID) {
       return res.status(403).json({ error: 'Forbidden - Invalid token' });
     }
-    req.clientId = user.clientID;
+    req.clientId = decoded.clientID;
     req.user = {
-      id: user.clientID,
-      role: user.role || 'user'
+      id: decoded.clientID,
+      role: decoded.role || 'user'
     };
     next();
-  });
+  } catch (_err) {
+    return res.status(403).json({ error: 'Forbidden - Invalid token' });
+  }
 };
 
 // Admin check middleware

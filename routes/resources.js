@@ -2,8 +2,10 @@
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
+const jwt = require('jsonwebtoken');
 const Resource = require('../models/resource');
 const { wrapRoute } = require('../helpers/failureEmail');
+const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 
 // Middleware to authenticate JWT and attach clientId
 const validateClient = (req, res, next) => {
@@ -11,11 +13,14 @@ const validateClient = (req, res, next) => {
     if (!token || !token.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
 
     const tokenValue = token.split(' ')[1];
-    jwt.verify(tokenValue, process.env.secret, (err, user) => {
-        if (err || !user.clientID) return res.status(403).json({ error: 'Forbidden - Invalid token' });
-        req.clientId = user.clientID;
+    try {
+        const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
+        if (!decoded.clientID) return res.status(403).json({ error: 'Forbidden - Invalid token' });
+        req.clientId = decoded.clientID;
         next();
-    });
+    } catch (_err) {
+        return res.status(403).json({ error: 'Forbidden - Invalid token' });
+    }
 };
 
 // GET: Get all resources for client

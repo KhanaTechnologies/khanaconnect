@@ -338,12 +338,18 @@ EmailSchema.statics.updateThreadMetadata = async function(clientID, threadId) {
 /**
  * Get Gmail-style threads for a client - FIXED VERSION
  */
-EmailSchema.statics.getGmailStyleThreads = async function(clientID, page = 1, limit = 50, search = '') {
+EmailSchema.statics.getGmailStyleThreads = async function(clientID, page = 1, limit = 10, search = '', folder = 'inbox') {
     try {
         const skip = (page - 1) * limit;
-        
-        // Build match conditions
+        const folderNorm = String(folder || 'inbox').toLowerCase();
+
+        // Build match conditions (folder: inbox = inbound only, sent = outbound, all = both)
         const matchConditions = { clientID };
+        if (folderNorm === 'sent') {
+            matchConditions.direction = 'outbound';
+        } else if (folderNorm === 'inbox') {
+            matchConditions.direction = 'inbound';
+        }
         if (search) {
             matchConditions.$or = [
                 { subject: { $regex: search, $options: 'i' } },
@@ -597,9 +603,9 @@ EmailSchema.statics.getGmailStyleThreads = async function(clientID, page = 1, li
             delete thread.toEmails;
         });
 
-        // Get total thread count
+        // Get total thread count (same filters as list, including search + folder)
         const totalThreads = await this.aggregate([
-            { $match: { clientID } },
+            { $match: matchConditions },
             { $group: { _id: '$threadId' } },
             { $count: 'total' }
         ]);

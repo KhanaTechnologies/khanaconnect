@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const Product = require('../models/product');
 const { SalesItem } = require('../models/salesItem');
 const { wrapRoute } = require('../helpers/failureEmail'); // ✅ wrapRoute for error emails
+const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 require('dotenv').config();
 
 // Middleware for client validation
@@ -14,13 +15,16 @@ const validateClient = (req, res, next) => {
             return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
         }
         const tokenValue = token.split(' ')[1];
-        jwt.verify(tokenValue, process.env.secret, (err, user) => {
-            if (err || !user.clientID) {
+        try {
+            const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
+            if (!decoded.clientID) {
                 return res.status(403).json({ error: 'Forbidden - Invalid token' });
             }
-            req.clientId = user.clientID;
+            req.clientId = decoded.clientID;
             next();
-        });
+        } catch (_err) {
+            return res.status(403).json({ error: 'Forbidden - Invalid token' });
+        }
     } catch (error) {
         console.error('Error in client validation:', error);
         res.status(500).json({ error: 'Internal Server Error' });

@@ -19,6 +19,21 @@ const encryptedString = {
   }
 };
 
+const metaCampaignSchema = new Schema(
+  {
+    name: { type: String, required: true },
+    objective: { type: String, required: true },
+    budget: { type: Number, min: 0 },
+    status: {
+      type: String,
+      enum: ['draft', 'active', 'paused', 'archived'],
+      default: 'draft',
+    },
+    meta_campaign_id: { type: String, default: '' },
+  },
+  { timestamps: true }
+);
+
 const clientSchema = new Schema({
   clientID: { type: String, required: true, unique: true },
   companyName: { type: String, required: true },
@@ -91,6 +106,16 @@ const clientSchema = new Schema({
     accessToken: encryptedString,
     testEventCode: encryptedString,
     apiVersion: { type: String, default: 'v18.0' },
+    /** Marketing API ad account id (digits only; no act_ prefix). */
+    adAccountId: { type: String, default: '' },
+    ownershipType: {
+      type: String,
+      enum: ['agency', 'client'],
+      default: 'agency',
+    },
+    metaBusinessId: { type: String, default: '' },
+    partnerRequestId: { type: String, default: '' },
+    campaigns: [metaCampaignSchema],
     enabled: { type: Boolean, default: false },
     lastSync: { type: Date },
     status: { 
@@ -207,5 +232,5 @@ clientSchema.virtual('id').get(function () {
 clientSchema.set('toJSON', { virtuals: true, getters: true });
 clientSchema.set('toObject', { virtuals: true, getters: true });
 
-const Client = mongoose.model('Client', clientSchema);
+const Client = mongoose.models.Client || mongoose.model('Client', clientSchema);
 module.exports = Client;

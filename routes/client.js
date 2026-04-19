@@ -7,6 +7,7 @@ const router = express.Router();
 const authJwt = require('../helpers/jwt');
 const rateLimit = require('express-rate-limit');
 const { wrapRoute } = require('../helpers/failureEmail');
+const { getJwtSecret, verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const { BetaAnalyticsDataClient } = require('@google-analytics/data');
 const metaService = require('../services/metaService');
 const googleService = require('../services/googleService');
@@ -24,7 +25,7 @@ const loginLimiter = rateLimit({
 
 // Helper function to generate a JWT token
 function generateToken(client) {
-  const secret = process.env.secret;
+  const secret = getJwtSecret();
   const payload = {
     clientID: client.clientID,
     companyName: client.companyName,
@@ -39,39 +40,34 @@ function generateToken(client) {
 function authenticateToken(req, res, next) {
   try {
     const token = req.headers.authorization;
-    const secret = process.env.secret;
+    const secret = getJwtSecret();
     if (!token) return res.status(401).json({ error: 'Unauthorized - Token missing' });
 
     const tokenValue = token.split(' ')[1];
-    jwt.verify(tokenValue, secret, (err, user) => {
-      if (err) return res.status(403).json({ error: 'Forbidden - Invalid token' });
-      req.user = user;
-      next();
-    });
+    const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
+    req.user = decoded;
+    next();
   } catch (error) {
     next(error);
   }
 }
 
 // Admin check middleware
-function requireAdmin(req, res, next) {
+async function requireAdmin(req, res, next) {
   try {
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Unauthorized' });
 
-    jwt.verify(token, process.env.secret, async (err, decoded) => {
-      if (err) return res.status(403).json({ error: 'Invalid token' });
+    const { decoded } = verifyJwtWithAnySecret(jwt, token);
+    const client = await Client.findOne({ clientID: decoded.clientID });
+    if (!client) return res.status(404).json({ error: 'Client not found' });
 
-      const client = await Client.findOne({ clientID: decoded.clientID });
-      if (!client) return res.status(404).json({ error: 'Client not found' });
+    if (client.role !== 'admin') {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
 
-      if (client.role !== 'admin') {
-        return res.status(403).json({ error: 'Admin access required' });
-      }
-
-      req.user = decoded;
-      next();
-    });
+    req.user = decoded;
+    next();
   } catch (error) {
     next(error);
   }
@@ -84,50 +80,47 @@ function checkDashboardPermission(requiredPermission = 'view') {
       const token = req.headers.authorization?.split(' ')[1];
       if (!token) return res.status(401).json({ error: 'Unauthorized' });
 
-      jwt.verify(token, process.env.secret, async (err, decoded) => {
-        if (err) return res.status(403).json({ error: 'Invalid token' });
+      const { decoded } = verifyJwtWithAnySecret(jwt, token);
+      const client = await Client.findOne({ clientID: decoded.clientID });
+      if (!client) return res.status(404).json({ error: 'Client not found' });
 
-        const client = await Client.findOne({ clientID: decoded.clientID });
-        if (!client) return res.status(404).json({ error: 'Client not found' });
-
-        // Check if client has admin role (admins have all permissions)
-        if (client.role === 'admin') {
-          req.user = decoded;
-          req.clientPermissions = {
-            view: true,
-            analytics: true,
-            reports: true,
-            sales: true,
-            bookings: true,
-            orders: true,
-            staff: true,
-            categories: true,
-            preorder: true,
-            voting: true
-          };
-          return next();
-        }
-
-        // Check dashboard permission from permissions object
-        const hasDashboardAccess = client.permissions?.dashboard || false;
-        
-        if (!hasDashboardAccess) {
-          return res.status(403).json({ error: 'Dashboard access denied' });
-        }
-
-        // For granular permissions, you can extend this
-        if (requiredPermission === 'analytics' && !client.permissions?.sales) {
-          return res.status(403).json({ error: 'No permission to view analytics' });
-        }
-
-        if (requiredPermission === 'reports' && !client.permissions?.sales) {
-          return res.status(403).json({ error: 'No permission to view reports' });
-        }
-
+      // Check if client has admin role (admins have all permissions)
+      if (client.role === 'admin') {
         req.user = decoded;
-        req.clientPermissions = client.permissions;
-        next();
-      });
+        req.clientPermissions = {
+          view: true,
+          analytics: true,
+          reports: true,
+          sales: true,
+          bookings: true,
+          orders: true,
+          staff: true,
+          categories: true,
+          preorder: true,
+          voting: true
+        };
+        return next();
+      }
+
+      // Check dashboard permission from permissions object
+      const hasDashboardAccess = client.permissions?.dashboard || false;
+      
+      if (!hasDashboardAccess) {
+        return res.status(403).json({ error: 'Dashboard access denied' });
+      }
+
+      // For granular permissions, you can extend this
+      if (requiredPermission === 'analytics' && !client.permissions?.sales) {
+        return res.status(403).json({ error: 'No permission to view analytics' });
+      }
+
+      if (requiredPermission === 'reports' && !client.permissions?.sales) {
+        return res.status(403).json({ error: 'No permission to view reports' });
+      }
+
+      req.user = decoded;
+      req.clientPermissions = client.permissions;
+      next();
     } catch (error) {
       next(error);
     }
@@ -723,7 +716,7 @@ router.post('/migrate/switch-to-secret-encryption', requireAdmin, wrapRoute(asyn
           merchant_key: client.merchant_key,
           passphrase: client.passphrase
         },
-        process.env.secret,
+        getJwtSecret(),
         { expiresIn: '1y' }
       );
 
@@ -740,7 +733,7 @@ router.post('/migrate/switch-to-secret-encryption', requireAdmin, wrapRoute(asyn
               merchant_id: client.merchant_id,
               isActive: true
             },
-            process.env.secret,
+            getJwtSecret(),
             { expiresIn: '1d' }
           );
           client.sessionToken = newSessionToken;
@@ -819,7 +812,7 @@ router.get('/debug/verify-migration', requireAdmin, wrapRoute(async (req, res) =
 
     // Verify token
     try {
-      jwt.verify(client.token, process.env.secret);
+      verifyJwtWithAnySecret(jwt, client.token);
       clientResult.tokenValid = true;
     } catch (error) {
       clientResult.tokenValid = false;
@@ -1757,7 +1750,7 @@ router.post('/login', loginLimiter, wrapRoute(async (req, res) => {
       clientID: client.clientID, 
       merchant_id: client.merchant_id, 
       isActive: true 
-    }, process.env.secret, { expiresIn: '1d' });
+    }, getJwtSecret(), { expiresIn: '1d' });
 
     if (client.isLoggedIn) {
       client.sessionToken = null;
@@ -1794,7 +1787,7 @@ router.post('/login', loginLimiter, wrapRoute(async (req, res) => {
 // Client logout
 router.post('/logout', wrapRoute(async (req, res) => {
   const token = req.headers.authorization.split(' ')[1];
-  const decoded = jwt.verify(token, process.env.secret);
+  const { decoded } = verifyJwtWithAnySecret(jwt, token);
   const client = await Client.findOne({ clientID: decoded.clientID });
   if (!client) return res.status(400).send('Client not found');
 
@@ -2007,7 +2000,11 @@ router.put('/:clientId/ad-integrations/meta', authenticateToken, wrapRoute(async
     accessToken, 
     testEventCode, 
     apiVersion,
-    enabled 
+    enabled,
+    adAccountId,
+    ownershipType,
+    metaBusinessId,
+    partnerRequestId,
   } = req.body;
 
   const updateData = {
@@ -2020,6 +2017,19 @@ router.put('/:clientId/ad-integrations/meta', authenticateToken, wrapRoute(async
     'metaAds.status': enabled ? 'active' : 'inactive',
     'metaAds.errorMessage': ''
   };
+
+  if (adAccountId !== undefined) {
+    updateData['metaAds.adAccountId'] = String(adAccountId).trim().replace(/^act_/i, '');
+  }
+  if (ownershipType !== undefined) {
+    updateData['metaAds.ownershipType'] = ownershipType === 'client' ? 'client' : 'agency';
+  }
+  if (metaBusinessId !== undefined) {
+    updateData['metaAds.metaBusinessId'] = String(metaBusinessId || '').trim();
+  }
+  if (partnerRequestId !== undefined) {
+    updateData['metaAds.partnerRequestId'] = String(partnerRequestId || '').trim();
+  }
 
   // Validate configuration if enabling
   if (enabled && pixelId && accessToken) {
@@ -2468,7 +2478,7 @@ router.get('/:clientId/event-logs', authenticateToken, wrapRoute(async (req, res
 router.post('/:clientId/reset-stats', authenticateToken, wrapRoute(async (req, res) => {
   // Check if user is admin
   const token = req.headers.authorization?.split(' ')[1];
-  const decoded = jwt.verify(token, process.env.secret);
+  const { decoded } = verifyJwtWithAnySecret(jwt, token);
   const adminClient = await Client.findOne({ clientID: decoded.clientID });
   
   if (adminClient.role !== 'admin') {

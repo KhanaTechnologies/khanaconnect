@@ -1,7 +1,10 @@
 const nodemailer = require('nodemailer');
-const { decrypt } = require('../helpers/encryption'); // Add this import
+const { decrypt } = require('../helpers/encryption');
+const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../helpers/mailHost');
+const { escapeHtml, mergeEmailSignature } = require('../helpers/signatureHtml');
+const { inlineSignatureImages } = require('../helpers/mailer');
 
-const failedAttempts = new Map(); // Tracks failed attempts per email
+const failedAttempts = new Map();
 const MAX_ATTEMPTS = 1;
 const COOLDOWN_MINUTES = 30;
 
@@ -15,96 +18,115 @@ function isLockedOut(email) {
     return count >= MAX_ATTEMPTS && minutesSinceLastFail < COOLDOWN_MINUTES;
 }
 
-// Helper function to extract domain from URL
 function extractDomain(url) {
     if (!url) return '';
-    
-    // Remove protocol and paths
-    let domain = url.replace(/https?:\/\//, '') // Remove http:// or https://
-                   .replace(/^www\./, '')      // Remove www.
-                   .split('/')[0]              // Remove paths after domain
-                   .split('?')[0];             // Remove query parameters
-    
+    let domain = url
+        .replace(/https?:\/\//, '')
+        .replace(/^www\./, '')
+        .split('/')[0]
+        .split('?')[0];
     return domain;
 }
 
-async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass, websiteURL, clientName) {
-
-    // Decrypt the email credentials
+async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass, websiteURL, clientName, emailSignature = '') {
     const decryptedEmail = decrypt(bEmail);
     const decryptedPass = decrypt(BEPass);
 
     const formattedClientName = clientName
-        ? 'The ' + clientName.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase()).trim() + ' Team'
+        ? 'The ' + clientName.replace(/([A-Z])/g, ' $1').replace(/^./, (str) => str.toUpperCase()).trim() + ' Team'
         : 'The Khana Connect Team';
 
-    if (isLockedOut(decryptedEmail)) { // Check lockout with decrypted email
+    if (isLockedOut(decryptedEmail)) {
         console.warn(`Email sending temporarily disabled for ${decryptedEmail} due to repeated failures.`);
         return;
     }
 
-    // Extract clean domain from websiteURL
     const domain = extractDomain(websiteURL);
-    console.log('Email configuration:', { 
-        bEmail: decryptedEmail, // Log decrypted email for debugging
-        websiteURL, 
-        extractedDomain: domain,
-        mailHost: `mail.${domain}`
-    });
+    const host = resolveSmtpHost({ businessEmail: decryptedEmail });
+    const port = resolveSmtpPort({ businessEmail: decryptedEmail }, host);
+    const secure = resolveSmtpSecure(port);
+
+    if (!host) {
+        console.error('[sendVerificationEmail] Could not resolve SMTP host for', decryptedEmail, 'site:', domain);
+        throw new Error('SMTP host could not be resolved for this business email.');
+    }
 
     const transporter = nodemailer.createTransport({
-        host: `mail.${domain}`, // e.g. mail.herbeauty.co.za
-        port: 465,
-        secure: true,
+        host,
+        port,
+        secure,
+        requireTLS: port === 587,
         auth: {
-            user: decryptedEmail, // Use decrypted email
-            pass: decryptedPass // Use decrypted password
+            user: decryptedEmail,
+            pass: decryptedPass,
         },
-        tls: { rejectUnauthorized: false } // for cPanel certs
+        tls: { rejectUnauthorized: false, minVersion: 'TLSv1.2' },
     });
 
-    const emailContent = `
-        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
-            <h2 style="text-align: center; color: #444;">Verify Your Email Address</h2>
-            <p>Hi there,</p>
-            <p>Thank you for registering. Please verify your email address by clicking the button below:</p>
+    const safeUrlDisplay = escapeHtml(verificationURL);
+    const brandPlain = formattedClientName.replace('The ', '').replace(' Team', '');
 
-            <div style="text-align: center; margin: 30px 0;">
-                <a href="${verificationURL}" style="background-color: #28a745; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px;">
-                    Verify My Account
+    const emailContent = `
+        <div style="font-family: Arial, Helvetica, sans-serif; color: #111827; max-width: 600px; margin: auto;">
+            <h2 style="text-align: center; color: #1f2937;">Confirm your email</h2>
+            <p>Hi there,</p>
+            <p>Thanks for registering with <strong>${escapeHtml(brandPlain)}</strong>. Please confirm this email address belongs to you by using the button below.</p>
+
+            <div style="text-align: center; margin: 28px 0;">
+                <a href="${verificationURL}" style="background-color: #2563eb; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+                    Verify my email
                 </a>
             </div>
 
-            <p>If the button above doesn't work, copy and paste this link into your browser:</p>
-            <p style="word-break: break-all;"><a href="${verificationURL}">${verificationURL}</a></p>
+            <p style="font-size: 14px; color: #4b5563;">If the button does not work, copy and paste this link into your browser:</p>
+            <p style="word-break: break-all; font-size: 13px;"><a href="${verificationURL}">${safeUrlDisplay}</a></p>
 
-            <p>This link will expire in 1 hour.</p>
-            <p>If you didn't sign up for an account, please ignore this email.</p>
+            <div style="margin: 24px 0; padding: 14px; background: #fef3c7; border-left: 4px solid #f59e0b; font-size: 14px;">
+                <strong>Security:</strong> this link expires in about one hour. If you did not create an account, you can ignore this message — no changes will be made.
+            </div>
 
-            <p style="margin-top: 30px;">Warm regards,<br>${formattedClientName}</p>
-
-            <hr style="margin-top: 40px;">
-            <p style="font-size: 12px; color: #888;">This email was sent by ${formattedClientName.replace('The ', '').replace(' Team', '')} for account verification purposes.</p>
+            <p style="margin-top: 28px;">Warm regards,<br>${formattedClientName}</p>
+            <hr style="margin-top: 36px; border: none; border-top: 1px solid #e5e7eb;">
+            <p style="font-size: 12px; color: #6b7280;">Sent by ${escapeHtml(brandPlain)} for account verification only.</p>
         </div>
     `;
 
+    let merged = { html: emailContent, text: '' };
+    if (emailSignature && String(emailSignature).trim()) {
+        try {
+            merged = mergeEmailSignature(emailContent, '', String(emailSignature));
+        } catch {
+            merged = { html: emailContent, text: '' };
+        }
+    }
+    const textBody =
+        merged.text ||
+        (merged.html || '')
+            .replace(/<br\s*\/?>/gi, '\n')
+            .replace(/<[^>]*>/g, '')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+    const { html: htmlOut, attachments } = inlineSignatureImages(merged.html, []);
+
     try {
         await transporter.sendMail({
-            from: `"${formattedClientName}" <${decryptedEmail}>`, // Use decrypted email
+            from: `"${formattedClientName.replace(/<[^>]+>/g, '')}" <${decryptedEmail}>`,
             to: userEmail,
-            subject: 'Verify Your Email Address',
-            html: emailContent
+            subject: 'Confirm your email address',
+            text: textBody,
+            html: htmlOut,
+            attachments: attachments || [],
         });
 
         console.log('Verification email sent successfully');
-        failedAttempts.delete(decryptedEmail); // Use decrypted email
+        failedAttempts.delete(decryptedEmail);
     } catch (error) {
         console.error('Error sending verification email:', error);
 
         const previous = failedAttempts.get(decryptedEmail) || { count: 0, lastFailed: 0 };
         failedAttempts.set(decryptedEmail, {
             count: previous.count + 1,
-            lastFailed: Date.now()
+            lastFailed: Date.now(),
         });
 
         throw error;

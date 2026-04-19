@@ -8,6 +8,7 @@ const { Octokit } = require("@octokit/rest");
 require('dotenv').config();
 
 const { wrapRoute } = require('../helpers/failureEmail'); // ensure correct path
+const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 
 const octokit = new Octokit({
   auth: process.env.GITHUB_TOKEN
@@ -64,16 +65,16 @@ const validateTokenAndExtractClientID = (req, res, next) => {
       return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
     }
     const tokenValue = token.split(' ')[1];
-    jwt.verify(tokenValue, process.env.secret, (err, decoded) => {
-      if (err) {
-        return res.status(403).json({ error: 'Forbidden - Invalid token', err });
-      }
+    try {
+      const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
       if (!decoded || !decoded.clientID) {
         return res.status(403).json({ error: 'Forbidden - Invalid token payload' });
       }
       req.clientID = decoded.clientID;
       next();
-    });
+    } catch (_err) {
+      return res.status(403).json({ error: 'Forbidden - Invalid token' });
+    }
   } catch (error) {
     // Unexpected error -> forward to global error handler (and email)
     console.error('Error in token validation middleware:', error);

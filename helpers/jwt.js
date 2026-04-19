@@ -1,7 +1,8 @@
 const { expressjwt } = require('express-jwt');
+const { getJwtSecret } = require('./jwtSecret');
  
 const authJwt = () => {
-  const secret = process.env.secret;
+  const secret = getJwtSecret();
   const api = process.env.API_URL || '/api/v1';
   const apiEsc = api.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return expressjwt({
@@ -38,6 +39,9 @@ const authJwt = () => {
      // IMPORTANT: Add this regex for tracking events
      { url: new RegExp(`^${apiEsc}/events(/.*)?`), methods: ['POST', 'OPTIONS'] },
      { url: new RegExp(`^${apiEsc}/payments/payfast/itn/?$`), methods: ['POST', 'OPTIONS'] },
+     { url: new RegExp(`^${apiEsc}/saas/billing/payfast/itn/?$`), methods: ['POST', 'OPTIONS'] },
+     { url: new RegExp(`^${apiEsc}/saas/webhooks/whatsapp/?$`), methods: ['GET', 'POST', 'OPTIONS'] },
+     { url: new RegExp(`^${apiEsc}/saas/webhooks/meta-ads/?$`), methods: ['GET', 'POST', 'OPTIONS'] },
      
      // Keep your existing string paths
      `${api}/orders/update-order-payment`,

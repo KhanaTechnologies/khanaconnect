@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const { wrapRoute } = require('../helpers/failureEmail'); // ✅ Wrap async routes to send email on error
+const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 
 // Middleware to validate token and extract clientID
 const validateTokenAndExtractClientID = (req, res, next) => {
@@ -11,13 +12,16 @@ const validateTokenAndExtractClientID = (req, res, next) => {
         return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
     }
     const tokenValue = token.split(' ')[1];
-    jwt.verify(tokenValue, process.env.secret, (err, decoded) => {
-        if (err || !decoded.clientID) {
+    try {
+        const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
+        if (!decoded.clientID) {
             return res.status(403).json({ error: 'Forbidden - Invalid token' });
         }
         req.clientId = decoded.clientID; // standardized name
         next();
-    });
+    } catch (_err) {
+        return res.status(403).json({ error: 'Forbidden - Invalid token' });
+    }
 };
 
 // GET all sizes

@@ -21,6 +21,8 @@ const eventProcessor = require('./services/eventProcessor');
 // Redis and Worker imports
 require('./config/redis');
 require('./workers/eventWorker');
+require('./workers/saasUsageWorker');
+require('./workers/emailOutboxWorker');
 
 // failureEmail helper
 const failureEmail = require('./helpers/failureEmail');
@@ -167,7 +169,12 @@ app.disable('x-powered-by');
  */
 
 // Body parsing with limits
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({
+  limit: '10mb',
+  verify: (req, _res, buf) => {
+    req.rawBody = buf.toString('utf8');
+  },
+}));
 app.use(express.urlencoded({ extended: true, limit: '10mb', parameterLimit: 100 }));
 
 app.use(cookieParser());
@@ -241,6 +248,8 @@ var sizeRoutes = require('./routes/sizes');
 var orderRoutes = require('./routes/orders');
 var emailSubscriptionsRoutes = require('./routes/emailSubscriptions');
 var wishListRouter = require('./routes/wishList');
+var wishlistStatsRouter = require('./routes/wishlistStats');
+var serviceWishlistRouter = require('./routes/serviceWishlist');
 var categoriesRouter = require('./routes/categories');
 var productSalesRouter = require('./routes/productsale');
 var discountCodeRouter = require('./routes/discountCode');
@@ -254,6 +263,7 @@ var campaignsRouter = require('./routes/campaigns');
 var votingCampaignsRouter = require('./routes/votingCampaigns');
 const analyticsRoutes = require("./routes/analytics");
 const paymentsRouter = require('./routes/payments');
+const saasRouter = require('./routes/saas');
 
 app.use('/', indexRouter);
 
@@ -264,7 +274,9 @@ app.use(`${api}/events`, trackingLimiter, trackingRoutes);
 // PayFast ITN (no JWT — validated with PayFast server-side /eng/query/validate)
 app.use(`${api}/payments`, paymentsRouter);
 // Apply API routes
+app.use(`${api}/wishlists/stats`, wishlistStatsRouter);
 app.use(`${api}/wishlists`, wishListRouter);
+app.use(`${api}/service-wishlist`, serviceWishlistRouter);
 app.use(`${api}/categories`, categoriesRouter);
 app.use(`${api}/emailsub`, emailSubscriptionsRoutes);
 app.use(`${api}/orders`, orderRoutes);
@@ -284,6 +296,7 @@ app.use(`${api}/preorderpledge`, PreorderPledgeRouter);
 app.use(`${api}/campaigns`, campaignsRouter);
 app.use(`${api}/votingcampaigns`, votingCampaignsRouter);
 app.use(`${api}/email`, emailRouter);
+app.use(`${api}/saas`, saasRouter);
 
 
 /**
@@ -318,6 +331,14 @@ mongoose.connect(process.env.CONNECTION_STRING, {
     console.log('✅ Booking Reminder Service started');
   } catch (error) {
     console.error('❌ Failed to start Booking Reminder Service:', error);
+  }
+
+  try {
+    const serviceWishlistReminderCron = require('./services/serviceWishlistReminderCron');
+    serviceWishlistReminderCron.start();
+    console.log('✅ Service wishlist reminder cron started');
+  } catch (error) {
+    console.error('❌ Failed to start service wishlist reminder cron:', error);
   }
 
   console.log('📊 Tracking System initialized');

@@ -56,7 +56,7 @@ function formatSignatureBlock(signature) {
   const textFallback = sig.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
   return {
-    html: `<div class="crm-signature">${inner}</div>`,
+    html: `<div class="crm-signature" style="margin-top:1em">${inner}</div>`,
     text: textFallback,
   };
 }

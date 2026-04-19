@@ -9,12 +9,19 @@ const Email = require('../models/Email');
 const EmailSubscriber = require('../models/emailSubscriber');
 const { sendMail, sendMailWithRetry } = require('../helpers/mailer');
 const { wrapRoute } = require('../helpers/failureEmail');
-const { fetchClientEmails, addFlags, removeFlags, normalizeMessageId } = require('../helpers/imapService');
+const { fetchClientEmails, fetchClientSentEmails, addFlags, removeFlags, normalizeMessageId } = require('../helpers/imapService');
 const NewsletterService = require('../helpers/newsletterService');
+const {
+    buildPromotionalTemplateOneHtml,
+    buildPromotionalTemplateOneText,
+    parsePromoPayload,
+    isAllowedAssetUrl,
+} = require('../helpers/promoEmailTemplateOne');
 const { mergeEmailSignature } = require('../helpers/signatureHtml');
 const Client = require('../models/client');
 const { sendContactUsEmail } = require('../utils/email');
 const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../helpers/mailHost');
+const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 
 const router = express.Router();
 
@@ -154,7 +161,8 @@ function enqueueImapForClient(clientID, task) {
  * Note: do not default `refresh` to boolean `false` in route destructuring — Express leaves the query undefined when omitted;
  * boolean false only matches skip when callers explicitly send JSON; for query, use the string 'false'.
  */
-async function maybeSyncImapMailbox(client, refreshParam) {
+async function maybeSyncImapMailbox(client, refreshParam, opts = {}) {
+    const { syncSent = false } = opts;
     await enqueueImapForClient(client.clientID, async () => {
         if (refreshParam === false || refreshParam === 'false' || refreshParam === '0') return;
 
@@ -171,9 +179,20 @@ async function maybeSyncImapMailbox(client, refreshParam) {
 
         try {
             const imapEmails = await fetchClientEmails(client);
+            let sentCount = 0;
+            if (syncSent) {
+                try {
+                    const sent = await fetchClientSentEmails(client);
+                    sentCount = Array.isArray(sent) ? sent.length : 0;
+                } catch (sentErr) {
+                    console.error('❌ IMAP Sent sync failed:', sentErr.message);
+                }
+            }
             imapSyncLastAt.set(client.clientID, Date.now());
             console.log(
-                `✅ IMAP sync: ${Array.isArray(imapEmails) ? imapEmails.length : 0} message(s) processed for ${client.clientID}`
+                `✅ IMAP sync: ${Array.isArray(imapEmails) ? imapEmails.length : 0} inbox message(s)${
+                    syncSent ? `, ${sentCount} sent message(s)` : ''
+                } for ${client.clientID}`
             );
         } catch (error) {
             console.error('❌ IMAP sync failed:', error.message);
@@ -260,7 +279,7 @@ async function validateClient(req, res, next) {
     const token = authHeader.split(' ')[1];
     try {
         // Verify JWT
-        const payload = jwt.verify(token, process.env.secret);
+        const { decoded: payload } = verifyJwtWithAnySecret(jwt, token);
         if (!payload.clientID) {
             return res.status(403).json({ ok: false, message: 'Forbidden - Invalid token' });
         }
@@ -316,22 +335,31 @@ router.route('/')
                 view = 'threads', // 'threads', 'messages', or 'thread'
                 format = 'gmail', // 'gmail' or 'simple'
                 page = 1,
-                limit = 50,
+                limit = 10,
                 search = '',
                 label = '',
+                folder = 'inbox', // inbox | sent | all
                 threadId: specificThreadId = '',
                 refresh, // undefined when omitted — do not default to boolean false (breaks skip vs debounced sync)
                 includeSpamTrash = false,
                 maxResults = 50
             } = req.query;
 
+            const pageNum = Math.max(1, parseInt(String(page), 10) || 1);
+            const limitNum = Math.min(50, Math.max(1, parseInt(String(limit), 10) || 10));
+            const folderLc = String(folder || 'inbox').toLowerCase();
+            const syncSentImap =
+                req.query.syncSent === 'true' ||
+                (folderLc === 'sent' && (refresh === 'true' || refresh === true));
+
             console.log(`📧 Unified GET request:`, {
                 view,
                 format,
-                page,
-                limit,
+                page: pageNum,
+                limit: limitNum,
                 search,
                 label,
+                folder: folderLc,
                 specificThreadId,
                 refresh,
                 clientID: req.client.clientID
@@ -341,7 +369,7 @@ router.route('/')
             const threadOnly = Boolean(specificThreadId && String(specificThreadId).trim());
             const forceMailboxSync = refresh === 'true' || refresh === true;
             if (!threadOnly || forceMailboxSync) {
-                await maybeSyncImapMailbox(req.client, refresh);
+                await maybeSyncImapMailbox(req.client, refresh, { syncSent: syncSentImap });
             }
 
             // Prepare base query
@@ -397,9 +425,10 @@ router.route('/')
                 // Get Gmail-style threads
                 const result = await Email.getGmailStyleThreads(
                     req.client.clientID,
-                    parseInt(page),
-                    parseInt(limit),
-                    search
+                    pageNum,
+                    limitNum,
+                    search,
+                    folderLc
                 );
 
                 // Apply label filter
@@ -410,7 +439,7 @@ router.route('/')
                         )
                     );
                     result.pagination.total = result.threads.length;
-                    result.pagination.pages = Math.ceil(result.threads.length / limit);
+                    result.pagination.pages = Math.ceil(result.threads.length / limitNum) || 1;
                 }
 
                 return res.json({
@@ -424,11 +453,16 @@ router.route('/')
 
             } else if (view === 'messages') {
                 // Get individual messages
-                const messagesPage = Math.max(1, parseInt(page));
-                const messagesLimit = Math.min(200, Math.max(5, parseInt(limit)));
+                const messagesPage = pageNum;
+                const messagesLimit = Math.min(50, limitNum);
                 const skip = (messagesPage - 1) * messagesLimit;
 
                 let messagesQuery = { ...baseQuery };
+                if (folderLc === 'sent') {
+                    messagesQuery.direction = 'outbound';
+                } else if (folderLc === 'inbox') {
+                    messagesQuery.direction = 'inbound';
+                }
                 
                 // Add search filter
                 if (search) {
@@ -1067,7 +1101,7 @@ router.get('/search', validateClient, wrapRoute(async (req, res) => {
         const { 
             q: query, 
             page = 1, 
-            limit = 50,
+            limit = 10,
             field = 'all' // 'all', 'subject', 'from', 'to', 'body' - CHANGED from 'in' to 'field'
         } = req.query;
 
@@ -1078,7 +1112,9 @@ router.get('/search', validateClient, wrapRoute(async (req, res) => {
             });
         }
 
-        const skip = (page - 1) * limit;
+        const pageNum = Math.max(1, parseInt(String(page), 10) || 1);
+        const limitNum = Math.min(50, Math.max(1, parseInt(String(limit), 10) || 10));
+        const skip = (pageNum - 1) * limitNum;
         
         // Build search query
         const searchConditions = { clientID: req.client.clientID };
@@ -1100,7 +1136,7 @@ router.get('/search', validateClient, wrapRoute(async (req, res) => {
             Email.find(searchConditions)
                 .sort({ date: -1 })
                 .skip(skip)
-                .limit(parseInt(limit))
+                .limit(limitNum)
                 .lean(),
             Email.countDocuments(searchConditions)
         ]);
@@ -1152,9 +1188,9 @@ router.get('/search', validateClient, wrapRoute(async (req, res) => {
                 messages: {
                     data: messages,
                     total,
-                    page: parseInt(page),
-                    limit: parseInt(limit),
-                    pages: Math.ceil(total / limit)
+                    page: pageNum,
+                    limit: limitNum,
+                    pages: Math.ceil(total / limitNum) || 1
                 },
                 threads: {
                     data: threads,
@@ -1473,19 +1509,49 @@ router.post('/newsletter/send', validateClient, upload.array('attachments', 5), 
         contentType: file.mimetype || 'application/octet-stream'
     }));
 
+    const promoTemplate = String(req.body.promoTemplate || '').trim().toLowerCase();
+    let htmlBody = html;
+    let textBody = text;
+    if (promoTemplate === 'one' || promoTemplate === 'promo_one' || promoTemplate === '1') {
+        let rawPromo = req.body.promoPayload;
+        if ((rawPromo == null || rawPromo === '') && Array.isArray(req.body.promoBlocks)) {
+            rawPromo = { blocks: req.body.promoBlocks };
+        } else if ((rawPromo == null || rawPromo === '') && req.body.promoBlocks != null && req.body.promoBlocks !== '') {
+            rawPromo = parseMaybeJson(req.body.promoBlocks, null);
+        }
+        const payload = parsePromoPayload(rawPromo);
+        if (!payload || !Array.isArray(payload.blocks) || payload.blocks.length === 0) {
+            return res.status(400).json({
+                ok: false,
+                message:
+                    'promoTemplate "one" requires promoPayload (JSON string or object) with blocks: [{ imageUrl, linkUrl?, alt? }]',
+            });
+        }
+        if (!payload.blocks.some((b) => isAllowedAssetUrl(b && b.imageUrl))) {
+            return res.status(400).json({
+                ok: false,
+                message:
+                    'Each block needs a safe imageUrl (https://, http://, or /public/uploads/...)',
+            });
+        }
+        const templateOpts = { ...payload, companyName: req.client.companyName };
+        htmlBody = buildPromotionalTemplateOneHtml(templateOpts);
+        textBody = text || buildPromotionalTemplateOneText(templateOpts);
+    }
+
     // Validate required fields
-    if (!subject || !html) {
+    if (!subject || !htmlBody) {
         return res.status(400).json({ 
             ok: false, 
-            message: 'Missing required fields: subject, html' 
+            message: 'Missing required fields: subject, and html (or promoTemplate one + promoPayload.blocks)' 
         });
     }
 
     try {
         const newsletterData = {
             subject,
-            text: text || html.replace(/<[^>]*>/g, '').substring(0, 500),
-            html,
+            text: textBody || htmlBody.replace(/<[^>]*>/g, '').substring(0, 500),
+            html: htmlBody,
             attachments,
             enableTracking
         };
@@ -1501,7 +1567,11 @@ router.post('/newsletter/send', validateClient, upload.array('attachments', 5), 
         }
 
         const rateLimit = NewsletterService.checkRateLimit(req.client.clientID);
-        const totalBatches = Math.max(1, Math.ceil((recipientEstimate || 1) / 50));
+        const { batchSize, batchDelayMs, emailDelayMs } = NewsletterService.getDeliveryPacing();
+        const totalBatches = Math.max(1, Math.ceil((recipientEstimate || 1) / batchSize));
+        const estMs =
+            (recipientEstimate || 0) * emailDelayMs + Math.max(0, totalBatches - 1) * batchDelayMs;
+        const estMin = Math.max(1, Math.ceil(estMs / 60000));
 
         res.json({
             ok: true,
@@ -1510,7 +1580,7 @@ router.post('/newsletter/send', validateClient, upload.array('attachments', 5), 
                 recipientSource: useSubscribers ? 'subscribers' : 'custom',
                 totalRecipients: recipientEstimate,
                 totalBatches,
-                estimatedTime: `${Math.ceil((totalBatches * 1000) / 1000 / 60)} minutes`,
+                estimatedTime: `~${estMin} min (sequential within each batch; see NEWSLETTER_* env)`,
                 enableTracking,
                 rateLimit: {
                     currentHour: rateLimit.hourly,
@@ -2097,7 +2167,9 @@ router.post('/contact', validateClient, wrapRoute(async (req, res) => {
             contactData,
             req.client.businessEmail,
             req.client.businessEmailPassword,
-            req.client.companyName
+            req.client.companyName,
+            req.client.emailSignature || '',
+            req.client.clientID
         );
 
         // Return success response

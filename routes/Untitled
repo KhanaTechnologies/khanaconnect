@@ -1,0 +1,1 @@
+    bookings: { type: Boolean, default: false },

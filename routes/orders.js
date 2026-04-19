@@ -15,6 +15,8 @@ const { wrapRoute } = require('../helpers/failureEmail');
 const { updateCustomerOrderHistory } = require('../helpers/orderCustomerHistory');
 const { fulfillGatewayPayment } = require('../helpers/fulfillGatewayPayment');
 const { orderPaymentWebhookOk } = require('../helpers/webhookAuth');
+const wishlistNotifyService = require('../services/wishlistNotifyService');
+const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 
 // Middleware to authenticate JWT token and extract clientId
 const authenticateToken = (req, res, next) => {
@@ -26,11 +28,13 @@ const authenticateToken = (req, res, next) => {
 
     const tokenValue = token.split(' ')[1];
 
-    jwt.verify(tokenValue, process.env.secret, (err, user) => {
-        if (err) return res.status(403).json({ error: 'Forbidden - Invalid token' });
-        req.clientId = user.clientID;
+    try {
+        const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
+        req.clientId = decoded.clientID;
         next();
-    });
+    } catch (_err) {
+        return res.status(403).json({ error: 'Forbidden - Invalid token' });
+    }
 };
 
 // -------------------- HELPER FUNCTIONS -------------------- //
@@ -124,6 +128,17 @@ router.post('/', authenticateToken, [
     if (discountCode) {
         const code = await DiscountCode.findOne({ code: discountCode, clientID: req.clientId });
         if (!code) return res.status(400).json({ error: 'Invalid discount code' });
+        const alreadyUsedByCustomer = await Order.exists({
+            clientID: req.clientId,
+            customer,
+            checkoutCode: discountCode,
+        });
+        if (alreadyUsedByCustomer) {
+            return res.status(400).json({ error: 'This discount code has already been used on this account' });
+        }
+        if (code.usageCount >= code.usageLimit) {
+            return res.status(400).json({ error: 'This discount code is no longer available' });
+        }
 
         for (const orderItem of orderItems) {
             const product = await Product.findById(orderItem.product);
@@ -177,8 +192,12 @@ router.post('/', authenticateToken, [
     for (const product_ of orderItems) {
         const product = await Product.findById(product_.product);
         if (!product) continue;
+        const prevSnapshot = product.toObject({ depopulate: true });
         product.countInStock -= product_.quantity;
         await product.save();
+        wishlistNotifyService
+            .handleProductUpdate(prevSnapshot, product.toObject({ depopulate: true }))
+            .catch((err) => console.error('wishlist notify (order stock):', err.message));
     }
 
     // Update customer order history and analytics (in background)
@@ -197,7 +216,9 @@ router.post('/', authenticateToken, [
                 client.businessEmailPassword,
                 deliveryPrice,
                 req.clientId,
-                order._id
+                order._id,
+                client.emailSignature || '',
+                req.clientId
             );
         } catch (emailError) {
             console.error('Order confirmation email failed to send:', emailError.message);
@@ -246,7 +267,9 @@ router.put('/:id', authenticateToken, wrapRoute(async (req, res) => {
                 client.businessEmailPassword,
                 client.companyName,
                 setStatus === 'shipped' ? order._id : 'nothing',
-                setStatus === 'shipped' ? order.orderTrackingLink : 'nothing'
+                setStatus === 'shipped' ? order.orderTrackingLink : 'nothing',
+                client.emailSignature || '',
+                req.clientId
             );
         } catch (emailError) {
             console.error('Email failed to send:', emailError.message);

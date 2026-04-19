@@ -8,6 +8,8 @@ const sizeLimiter = require('../middleware/sizeLimiter');
 const asyncHandler = require('../middleware/errorHandler');
 const failureEmail = require('../helpers/failureEmail');
 const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
+const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 
 // Middleware to extract client and session info
 const extractTrackingInfo = (req, res, next) => {
@@ -20,8 +22,7 @@ const extractTrackingInfo = (req, res, next) => {
     if (token && token.startsWith('Bearer ')) {
       try {
         const tokenValue = token.split(' ')[1];
-        const jwt = require('jsonwebtoken');
-        const decoded = jwt.verify(tokenValue, process.env.JWT_SECRET || process.env.secret);
+        const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
         clientID = decoded.clientID || decoded.clientId;
       } catch (jwtError) {
         // Invalid token, just continue
