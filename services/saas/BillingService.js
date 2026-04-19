@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const Client = require('../../models/Client');
+const Client = require('../../models/client');
 const SaasBillingAccount = require('../../models/SaasBillingAccount');
 const SaasTransaction = require('../../models/SaasTransaction');
 const PricingService = require('./PricingService');
