@@ -1,5 +1,5 @@
 const axios = require('axios');
-const Client = require('../../models/Client');
+const Client = require('../../models/client');
 const SaasUsageEvent = require('../../models/SaasUsageEvent');
 const { usageBillingQueue } = require('../../queues/saasQueues');
 
