@@ -69,7 +69,7 @@ function skipEmailMailboxReads(req) {
 }
 
 const generalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
+  windowMs: 2 * 60 * 1000,
   max: 100,
   message: { error: 'Too many requests from this IP, please try again later.' },
   standardHeaders: true,
@@ -86,7 +86,7 @@ const authLimiter = rateLimit({
 });
 
 const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
+  windowMs: 2 * 60 * 1000,
   max: 200,
   message: { error: 'Too many API requests, please try again later.' },
   standardHeaders: true,
