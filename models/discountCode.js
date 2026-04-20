@@ -220,19 +220,43 @@ router.post('/createCheckoutCode', authenticateToken, async (req, res) => {
       promoEmailIntro,
     } = req.body;
 
-    const newCheckoutCode = new DiscountCode({
-      id: `code${Math.floor(Math.random() * 10000)}`,
-      code,
-      discount,
-      type,
-      appliesTo,
-      appliesToModel: appliesToModel || (appliesTo.length > 0 ? 'Product' : 'Service'),
-      usageLimit: Number(usageLimit),
-      clientID: req.clientId,
-      isActive
-    });
+    // Guard against duplicate checkout codes for this collection.
+    const existingCode = await DiscountCode.findOne({ code });
+    if (existingCode) {
+      return res.status(409).json({ error: 'Checkout code already exists. Please use a different code.' });
+    }
 
-    await newCheckoutCode.save();
+    // Generate a collision-safe public id (schema has unique:true on `id`).
+    let newCheckoutCode = null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const candidate = new DiscountCode({
+        id: `code_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
+        code,
+        discount,
+        type,
+        appliesTo,
+        appliesToModel: appliesToModel || (appliesTo.length > 0 ? 'Product' : 'Service'),
+        usageLimit: Number(usageLimit),
+        clientID: req.clientId,
+        isActive
+      });
+      try {
+        await candidate.save();
+        newCheckoutCode = candidate;
+        break;
+      } catch (saveErr) {
+        const duplicateId =
+          saveErr &&
+          saveErr.code === 11000 &&
+          saveErr.keyPattern &&
+          saveErr.keyPattern.id;
+        if (!duplicateId) throw saveErr;
+      }
+    }
+
+    if (!newCheckoutCode) {
+      return res.status(500).json({ error: 'Failed to create checkout code', details: 'Could not generate unique code id' });
+    }
 
     const wantsNewsletter = notifySubscribers === true || notifySubscribers === 'true';
     let newsletter = null;
@@ -321,6 +345,9 @@ router.post('/createCheckoutCode', authenticateToken, async (req, res) => {
     });
   } catch (err) {
     console.error('Error creating checkout code:', err);
+    if (err && err.code === 11000 && err.keyPattern && err.keyPattern.code) {
+      return res.status(409).json({ error: 'Checkout code already exists. Please use a different code.' });
+    }
     res.status(400).json({ error: 'Failed to create checkout code', details: err.message });
   }
 });
