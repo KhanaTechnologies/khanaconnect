@@ -20,22 +20,21 @@ const encryptedString = {
 };
 
 const encryptedNumber = {
-  type: Number,
+  // Encrypted values are stored as `iv:ciphertext`, which must be a string.
+  type: String,
   set: function(value) {
     if (!value) return value;
-    // Convert number to string for encryption
-    const valueStr = value.toString();
+    // Convert input to string before encryption.
+    const valueStr = String(value);
     if (!valueStr.includes(':')) {
       return encrypt(valueStr);
     }
-    return value;
+    return valueStr;
   },
   get: function(value) {
     if (!value) return value;
-    const decrypted = decrypt(value.toString());
-    // Try to convert back to number if it's a number
-    const num = parseFloat(decrypted);
-    return isNaN(num) ? decrypted : num;
+    // Phone numbers should stay as strings (preserves leading zeroes, +, etc).
+    return decrypt(String(value));
   }
 };
 
