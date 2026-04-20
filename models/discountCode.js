@@ -218,7 +218,7 @@ router.post('/createCheckoutCode', authenticateToken, async (req, res) => {
       notifySubscribers,
       promoEmailSubject,
       promoEmailIntro,
-    } = req.body;
+    } = req.body || {};
 
     const newCheckoutCode = new DiscountCode({
       id: `code${Math.floor(Math.random() * 10000)}`,
@@ -239,58 +239,63 @@ router.post('/createCheckoutCode', authenticateToken, async (req, res) => {
     let wishlistAlerts = null;
 
     if (wantsNewsletter) {
-      const subscriberCount = await NewsletterService.getSubscriberCount(req.clientId, true);
-      const clientDoc = await Client.findOne({ clientID: req.clientId });
-      const smtpOk = clientDoc && resolveSmtpHost(clientDoc);
+      try {
+        const subscriberCount = await NewsletterService.getSubscriberCount(req.clientId, true);
+        const clientDoc = await Client.findOne({ clientID: req.clientId });
+        const smtpOk = clientDoc && resolveSmtpHost(clientDoc);
 
-      if (!smtpOk) {
-        newsletter = { status: 'skipped', reason: 'smtp_not_configured' };
-      } else if (!subscriberCount) {
-        newsletter = { status: 'skipped', reason: 'no_active_subscribers' };
-      } else {
-        const brand = escapeHtml(clientDoc.companyName || 'Our store');
-        const codeEsc = escapeHtml(code);
-        const subject =
-          (promoEmailSubject && String(promoEmailSubject).trim().slice(0, 200)) ||
-          `New offer — ${code} (${discount}% off)`;
-        const introHtml =
-          promoEmailIntro && String(promoEmailIntro).trim()
-            ? escapeHtml(String(promoEmailIntro).trim()).replace(/\n/g, '<br>')
-            : `We just published a new checkout code. Use <strong>${codeEsc}</strong> at checkout to save <strong>${escapeHtml(String(discount))}%</strong>.`;
+        if (!smtpOk) {
+          newsletter = { status: 'skipped', reason: 'smtp_not_configured' };
+        } else if (!subscriberCount) {
+          newsletter = { status: 'skipped', reason: 'no_active_subscribers' };
+        } else {
+          const brand = escapeHtml(clientDoc.companyName || 'Our store');
+          const codeEsc = escapeHtml(code);
+          const subject =
+            (promoEmailSubject && String(promoEmailSubject).trim().slice(0, 200)) ||
+            `New offer — ${code} (${discount}% off)`;
+          const introHtml =
+            promoEmailIntro && String(promoEmailIntro).trim()
+              ? escapeHtml(String(promoEmailIntro).trim()).replace(/\n/g, '<br>')
+              : `We just published a new checkout code. Use <strong>${codeEsc}</strong> at checkout to save <strong>${escapeHtml(String(discount))}%</strong>.`;
 
-        const html = `
-        <div style="font-family: Arial, Helvetica, sans-serif; max-width: 640px; margin: auto; color: #111827;">
-          <h2 style="color: #1f2937;">${brand}</h2>
-          <p>${introHtml}</p>
-          <div style="margin: 20px 0; padding: 16px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px;">
-            <p style="margin: 6px 0;"><strong>Code:</strong> ${codeEsc}</p>
-            <p style="margin: 6px 0;"><strong>Discount:</strong> ${escapeHtml(String(discount))}%</p>
-            <p style="margin: 6px 0;"><strong>Scope:</strong> ${escapeHtml(String(type))}</p>
-          </div>
-          <p style="font-size: 14px; color: #6b7280;">Terms and exclusions may apply — see checkout or contact us for details.</p>
-        </div>`;
+          const html = `
+          <div style="font-family: Arial, Helvetica, sans-serif; max-width: 640px; margin: auto; color: #111827;">
+            <h2 style="color: #1f2937;">${brand}</h2>
+            <p>${introHtml}</p>
+            <div style="margin: 20px 0; padding: 16px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px;">
+              <p style="margin: 6px 0;"><strong>Code:</strong> ${codeEsc}</p>
+              <p style="margin: 6px 0;"><strong>Discount:</strong> ${escapeHtml(String(discount))}%</p>
+              <p style="margin: 6px 0;"><strong>Scope:</strong> ${escapeHtml(String(type))}</p>
+            </div>
+            <p style="font-size: 14px; color: #6b7280;">Terms and exclusions may apply — see checkout or contact us for details.</p>
+          </div>`;
 
-        const text = `${clientDoc.companyName || 'Our store'} — new code ${code}: ${discount}% off (scope: ${type}).`;
+          const text = `${clientDoc.companyName || 'Our store'} — new code ${code}: ${discount}% off (scope: ${type}).`;
 
-        newsletter = {
-          status: 'started',
-          estimatedRecipients: subscriberCount,
-          newsletterId: `promo_checkout_${newCheckoutCode._id}`,
-        };
+          newsletter = {
+            status: 'started',
+            estimatedRecipients: subscriberCount,
+            newsletterId: `promo_checkout_${newCheckoutCode._id}`,
+          };
 
-        const newsletterData = {
-          subject,
-          html,
-          text,
-          newsletterId: newsletter.newsletterId,
-          enableTracking: true,
-        };
+          const newsletterData = {
+            subject,
+            html,
+            text,
+            newsletterId: newsletter.newsletterId,
+            enableTracking: true,
+          };
 
-        setImmediate(() => {
-          NewsletterService.sendNewsletter(clientDoc, newsletterData, { useSubscribers: true })
-            .then((result) => console.log('✅ Promo newsletter finished:', result.newsletterId, result.totalSent, 'sent'))
-            .catch((err) => console.error('💥 Promo newsletter failed:', err.message));
-        });
+          setImmediate(() => {
+            NewsletterService.sendNewsletter(clientDoc, newsletterData, { useSubscribers: true })
+              .then((result) => console.log('✅ Promo newsletter finished:', result.newsletterId, result.totalSent, 'sent'))
+              .catch((err) => console.error('💥 Promo newsletter failed:', err.message));
+          });
+        }
+      } catch (newsletterErr) {
+        console.error('Newsletter setup failed:', newsletterErr);
+        newsletter = { status: 'failed', reason: newsletterErr.message };
       }
     }
 
@@ -298,18 +303,23 @@ router.post('/createCheckoutCode', authenticateToken, async (req, res) => {
       (newCheckoutCode.appliesToModel || '').toLowerCase() === 'product' ||
       ['all', 'product', 'category'].includes(String(newCheckoutCode.type || '').toLowerCase());
     if (productLikeCode && Array.isArray(newCheckoutCode.appliesTo) && newCheckoutCode.appliesTo.length) {
-      wishlistAlerts = { status: 'started' };
-      setImmediate(() => {
-        sendWishlistCheckoutCodeAlerts({
-          clientId: req.clientId,
-          code: newCheckoutCode.code,
-          discount: newCheckoutCode.discount,
-          appliesTo: newCheckoutCode.appliesTo,
-          type: newCheckoutCode.type,
-        })
-          .then((result) => console.log('✅ Wishlist checkout-code alerts:', result))
-          .catch((err) => console.error('💥 Wishlist checkout-code alerts failed:', err.message));
-      });
+      try {
+        wishlistAlerts = { status: 'started' };
+        setImmediate(() => {
+          sendWishlistCheckoutCodeAlerts({
+            clientId: req.clientId,
+            code: newCheckoutCode.code,
+            discount: newCheckoutCode.discount,
+            appliesTo: newCheckoutCode.appliesTo,
+            type: newCheckoutCode.type,
+          })
+            .then((result) => console.log('✅ Wishlist checkout-code alerts:', result))
+            .catch((err) => console.error('💥 Wishlist checkout-code alerts failed:', err.message));
+        });
+      } catch (wishlistErr) {
+        console.error('Wishlist alert setup failed:', wishlistErr);
+        wishlistAlerts = { status: 'failed', reason: wishlistErr.message };
+      }
     } else {
       wishlistAlerts = { status: 'skipped', reason: 'not_product_targeted' };
     }
