@@ -10,6 +10,7 @@ const { smtpHostToImapForSent } = require('./mailHost');
 const { enqueueOutboundEmail } = require('../queues/outboundEmailQueue');
 const { serializeMailOptions } = require('./mailQueueSerialize');
 const { isNonRetryableSmtpError, isRetryableSmtpError } = require('./smtpErrors');
+const { decrypt } = require('./encryption');
 
 /** Uploaded dashboard signatures are stored here and referenced by absolute URL in Client.emailSignature */
 const SIGNATURES_UPLOAD_DIR = path.join(__dirname, '../public/uploads/signatures');
@@ -161,6 +162,29 @@ function extractCleanEmail(emailString) {
   return trimmed.replace(/"/g, '').toLowerCase();
 }
 
+function decryptAddressValue(value) {
+  if (!value) return value;
+
+  if (Array.isArray(value)) {
+    return value.map((entry) => decryptAddressValue(entry));
+  }
+
+  if (typeof value === 'string') {
+    // Some recipients are persisted encrypted (iv:ciphertext), so normalize to plain email before SMTP.
+    return decrypt(value);
+  }
+
+  if (typeof value === 'object') {
+    const copy = { ...value };
+    if (typeof copy.address === 'string') {
+      copy.address = decrypt(copy.address);
+    }
+    return copy;
+  }
+
+  return value;
+}
+
 /**
  * Save sent email to IMAP Sent folder
  */
@@ -290,8 +314,8 @@ async function sendMail(options) {
   const { html: htmlOut, attachments: attachmentsOut } = inlineSignatureImages(html, attachments);
 
   const mailOptions = {
-    from: from,
-    to: to,
+    from: decryptAddressValue(from),
+    to: decryptAddressValue(to),
     subject: subject || '(no subject)',
     text: text || htmlOut?.replace(/<[^>]*>/g, '') || 'No content',
     html: htmlOut || text || 'No content',
@@ -308,8 +332,8 @@ async function sendMail(options) {
   };
 
   // Add CC and BCC if provided
-  if (cc) mailOptions.cc = cc;
-  if (bcc) mailOptions.bcc = bcc;
+  if (cc) mailOptions.cc = decryptAddressValue(cc);
+  if (bcc) mailOptions.bcc = decryptAddressValue(bcc);
 
   // Add threading headers if provided
   if (inReplyTo) {
