@@ -61,6 +61,40 @@ function qTenant(tenantClientId) {
     return tenantClientId ? { clientID: String(tenantClientId) } : null;
 }
 
+function decryptAddressValue(value) {
+    if (!value) return value;
+
+    if (Array.isArray(value)) {
+        return value.map((entry) => decryptAddressValue(entry));
+    }
+
+    if (typeof value === 'string') {
+        return decrypt(value);
+    }
+
+    if (typeof value === 'object') {
+        const copy = { ...value };
+        if (typeof copy.address === 'string') {
+            copy.address = decrypt(copy.address);
+        }
+        return copy;
+    }
+
+    return value;
+}
+
+function normalizeMailRecipients(mailOptions) {
+    if (!mailOptions || typeof mailOptions !== 'object') return mailOptions;
+    return {
+        ...mailOptions,
+        from: decryptAddressValue(mailOptions.from),
+        to: decryptAddressValue(mailOptions.to),
+        cc: decryptAddressValue(mailOptions.cc),
+        bcc: decryptAddressValue(mailOptions.bcc),
+        replyTo: decryptAddressValue(mailOptions.replyTo),
+    };
+}
+
 /**
  * Used by emailOutboxWorker after loading tenant SMTP credentials from Mongo.
  */
@@ -78,11 +112,12 @@ async function deliverQueuedOutboundEmail(bEmail, BEPass, mailOptionsSerialized)
  */
 async function sendWithRetry(getTransporter, mailOptions, retries = 5, delayMs = 1600, queueMeta = null) {
     const factory = typeof getTransporter === 'function' ? getTransporter : () => getTransporter;
+    const normalizedMailOptions = normalizeMailRecipients(mailOptions);
 
     for (let attempt = 1; attempt <= retries; attempt++) {
         const transporter = factory();
         try {
-            const result = await transporter.sendMail(mailOptions);
+            const result = await transporter.sendMail(normalizedMailOptions);
             await closeTransporterQuietly(transporter);
 
             if (attempt > 1) {
@@ -111,7 +146,7 @@ async function sendWithRetry(getTransporter, mailOptions, retries = 5, delayMs =
                     try {
                         await enqueueOutboundEmail({
                             clientID: queueMeta.clientID,
-                            mailOptions: serializeMailOptions(mailOptions),
+                            mailOptions: serializeMailOptions(normalizedMailOptions),
                             label: queueMeta.label || '',
                             lastError: err.message,
                         });
