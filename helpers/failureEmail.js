@@ -4,6 +4,7 @@
 
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
+const { decrypt } = require('./encryption');
 
 /**
  * ============================
@@ -137,8 +138,8 @@ async function sendErrorEmail({ subject, html, text, dedupe = true }) {
     }
 
     const mailOptions = {
-      from: CONFIG.ERROR_EMAIL_FROM || CONFIG.SMTP_USER,
-      to: CONFIG.ERROR_EMAIL_TO || CONFIG.SMTP_USER,
+      from: decrypt(CONFIG.ERROR_EMAIL_FROM || CONFIG.SMTP_USER),
+      to: decrypt(CONFIG.ERROR_EMAIL_TO || CONFIG.SMTP_USER),
       subject: subject || 'API Error Notification',
       html,
       text
