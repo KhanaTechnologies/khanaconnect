@@ -16,15 +16,6 @@ const { sendMail } = require('../helpers/mailer');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const { decrypt } = require('../helpers/encryption');
 
-function resolveRecipientEmail(value) {
-  if (!value) return '';
-  const raw = String(value).trim();
-  if (!raw) return '';
-  const candidate = raw.includes(':') ? decrypt(raw) : raw;
-  const email = String(candidate || '').trim().toLowerCase();
-  return /\S+@\S+\.\S+/.test(email) ? email : '';
-}
-
 // Middleware to authenticate JWT token and extract clientId
 const authenticateToken = (req, res, next) => {
   const token = req.headers.authorization;
@@ -40,6 +31,14 @@ const authenticateToken = (req, res, next) => {
   }
 };
 
+function resolveRecipientEmail(value) {
+  if (!value) return '';
+  const raw = String(value).trim();
+  if (!raw) return '';
+  const candidate = raw.includes(':') ? decrypt(raw) : raw;
+  return String(candidate || '').trim();
+}
+
 async function sendWishlistCheckoutCodeAlerts({
   clientId,
   code,
@@ -47,13 +46,6 @@ async function sendWishlistCheckoutCodeAlerts({
   appliesTo = [],
   type = 'all',
 }) {
-  console.log('[discountCode][wishlistAlerts] starting', {
-    clientId,
-    code,
-    discount,
-    appliesToCount: Array.isArray(appliesTo) ? appliesTo.length : 0,
-    type,
-  });
   const productIds = Array.isArray(appliesTo)
     ? appliesTo.map((id) => String(id)).filter(Boolean)
     : [];
@@ -101,21 +93,10 @@ async function sendWishlistCheckoutCodeAlerts({
     clientID: clientId,
   }).lean();
 
-  console.log('[discountCode][wishlistAlerts] customers matched', {
-    targetedCustomers: byCustomer.size,
-    customersFetched: customers.length,
-  });
-
   let sent = 0;
   for (const customer of customers) {
     const bucket = byCustomer.get(String(customer._id));
     const recipientEmail = resolveRecipientEmail(customer.emailAddress);
-    if (customer.emailAddress && !recipientEmail) {
-      console.warn('[discountCode][wishlistAlerts] invalid recipient after resolve', {
-        customerId: String(customer._id),
-        rawEmailPreview: String(customer.emailAddress).slice(0, 20),
-      });
-    }
     if (!bucket || !bucket.productNames.size || !recipientEmail) continue;
     const productList = Array.from(bucket.productNames).slice(0, 8);
     const listItemsHtml = productList
@@ -181,10 +162,6 @@ ${websiteUrl ? `Website: ${websiteUrl}` : ''}`;
     }
   }
 
-  console.log('[discountCode][wishlistAlerts] finished', {
-    targetedCustomers: byCustomer.size,
-    sent,
-  });
   return { status: 'done', targetedCustomers: byCustomer.size, sent };
 }
 
@@ -229,11 +206,6 @@ router.post('/verify-discount-code', authenticateToken, async (req, res) => {
 // --------------------
 router.post('/createCheckoutCode', authenticateToken, async (req, res) => {
   try {
-    console.log('[discountCode][createCheckoutCode] request received', {
-      clientId: req.clientId,
-      bodyKeys: req.body ? Object.keys(req.body) : [],
-    });
-
     const {
       code,
       discount,
@@ -260,17 +232,12 @@ router.post('/createCheckoutCode', authenticateToken, async (req, res) => {
     });
 
     await newCheckoutCode.save();
-    console.log('[discountCode][createCheckoutCode] code saved', {
-      id: String(newCheckoutCode._id),
-      code: newCheckoutCode.code,
-      appliesToCount: Array.isArray(newCheckoutCode.appliesTo) ? newCheckoutCode.appliesTo.length : 0,
-    });
 
     const wantsNewsletter = notifySubscribers === true || notifySubscribers === 'true';
     let newsletter = null;
     let wishlistAlerts = null;
+
     if (wantsNewsletter) {
-      console.log('[discountCode][createCheckoutCode] newsletter requested');
       const subscriberCount = await NewsletterService.getSubscriberCount(req.clientId, true);
       const clientDoc = await Client.findOne({ clientID: req.clientId });
       const smtpOk = clientDoc && resolveSmtpHost(clientDoc);
@@ -331,9 +298,6 @@ router.post('/createCheckoutCode', authenticateToken, async (req, res) => {
       ['all', 'product', 'category'].includes(String(newCheckoutCode.type || '').toLowerCase());
     if (productLikeCode && Array.isArray(newCheckoutCode.appliesTo) && newCheckoutCode.appliesTo.length) {
       wishlistAlerts = { status: 'started' };
-      console.log('[discountCode][createCheckoutCode] wishlist alerts scheduled', {
-        appliesToCount: newCheckoutCode.appliesTo.length,
-      });
       setImmediate(() => {
         sendWishlistCheckoutCodeAlerts({
           clientId: req.clientId,
@@ -356,7 +320,7 @@ router.post('/createCheckoutCode', authenticateToken, async (req, res) => {
       wishlistAlerts,
     });
   } catch (err) {
-    console.error('[discountCode][createCheckoutCode] Error creating checkout code:', err);
+    console.error('Error creating checkout code:', err);
     res.status(400).json({ error: 'Failed to create checkout code', details: err.message });
   }
 });
