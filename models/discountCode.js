@@ -25,6 +25,12 @@ function resolveRecipientEmail(value) {
   return /\S+@\S+\.\S+/.test(email) ? email : '';
 }
 
+function queueBackground(task, label) {
+  Promise.resolve()
+    .then(task)
+    .catch((err) => console.error(`💥 ${label} failed:`, err?.message || err));
+}
+
 // Middleware to authenticate JWT token and extract clientId
 const authenticateToken = (req, res, next) => {
   const token = req.headers.authorization;
@@ -207,121 +213,143 @@ router.post('/verify-discount-code', authenticateToken, async (req, res) => {
 // --------------------
 router.post('/createCheckoutCode', authenticateToken, async (req, res) => {
   try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
     const {
       code,
       discount,
       type = 'all',
-      appliesTo = [],
+      appliesTo: rawAppliesTo = [],
       usageLimit = 1,
       isActive = true,
       appliesToModel,
       notifySubscribers,
       promoEmailSubject,
       promoEmailIntro,
-    } = req.body || {};
+    } = body;
+
+    const appliesTo = Array.isArray(rawAppliesTo) ? rawAppliesTo.filter(Boolean) : [];
+    const normalizedType = ['all', 'product', 'category'].includes(String(type || '').toLowerCase())
+      ? String(type).toLowerCase()
+      : 'all';
+    const normalizedCode = String(code || '').trim();
+    const normalizedDiscount = Number(discount);
+    const normalizedUsageLimit = Number(usageLimit);
+
+    if (!normalizedCode) {
+      return res.status(400).json({ error: 'Failed to create checkout code', details: 'Code is required' });
+    }
+    if (!Number.isFinite(normalizedDiscount)) {
+      return res.status(400).json({ error: 'Failed to create checkout code', details: 'Discount must be a number' });
+    }
+    if (!Number.isFinite(normalizedUsageLimit) || normalizedUsageLimit < 1) {
+      return res.status(400).json({ error: 'Failed to create checkout code', details: 'Usage limit must be at least 1' });
+    }
 
     const newCheckoutCode = new DiscountCode({
       id: `code${Math.floor(Math.random() * 10000)}`,
-      code,
-      discount,
-      type,
+      code: normalizedCode,
+      discount: normalizedDiscount,
+      type: normalizedType,
       appliesTo,
       appliesToModel: appliesToModel || (appliesTo.length > 0 ? 'Product' : 'Service'),
-      usageLimit: Number(usageLimit),
+      usageLimit: normalizedUsageLimit,
       clientID: req.clientId,
-      isActive
+      isActive: !!isActive
     });
 
     await newCheckoutCode.save();
 
-    const wantsNewsletter = notifySubscribers === true || notifySubscribers === 'true';
     let newsletter = null;
     let wishlistAlerts = null;
+    try {
+      const wantsNewsletter = notifySubscribers === true || notifySubscribers === 'true';
+      if (wantsNewsletter) {
+        try {
+          const subscriberCount = await NewsletterService.getSubscriberCount(req.clientId, true);
+          const clientDoc = await Client.findOne({ clientID: req.clientId });
+          const smtpOk = clientDoc && resolveSmtpHost(clientDoc);
 
-    if (wantsNewsletter) {
-      try {
-        const subscriberCount = await NewsletterService.getSubscriberCount(req.clientId, true);
-        const clientDoc = await Client.findOne({ clientID: req.clientId });
-        const smtpOk = clientDoc && resolveSmtpHost(clientDoc);
+          if (!smtpOk) {
+            newsletter = { status: 'skipped', reason: 'smtp_not_configured' };
+          } else if (!subscriberCount) {
+            newsletter = { status: 'skipped', reason: 'no_active_subscribers' };
+          } else {
+            const brand = escapeHtml(clientDoc.companyName || 'Our store');
+            const codeEsc = escapeHtml(normalizedCode);
+            const subject =
+              (promoEmailSubject && String(promoEmailSubject).trim().slice(0, 200)) ||
+              `New offer — ${normalizedCode} (${normalizedDiscount}% off)`;
+            const introHtml =
+              promoEmailIntro && String(promoEmailIntro).trim()
+                ? escapeHtml(String(promoEmailIntro).trim()).replace(/\n/g, '<br>')
+                : `We just published a new checkout code. Use <strong>${codeEsc}</strong> at checkout to save <strong>${escapeHtml(String(normalizedDiscount))}%</strong>.`;
 
-        if (!smtpOk) {
-          newsletter = { status: 'skipped', reason: 'smtp_not_configured' };
-        } else if (!subscriberCount) {
-          newsletter = { status: 'skipped', reason: 'no_active_subscribers' };
-        } else {
-          const brand = escapeHtml(clientDoc.companyName || 'Our store');
-          const codeEsc = escapeHtml(code);
-          const subject =
-            (promoEmailSubject && String(promoEmailSubject).trim().slice(0, 200)) ||
-            `New offer — ${code} (${discount}% off)`;
-          const introHtml =
-            promoEmailIntro && String(promoEmailIntro).trim()
-              ? escapeHtml(String(promoEmailIntro).trim()).replace(/\n/g, '<br>')
-              : `We just published a new checkout code. Use <strong>${codeEsc}</strong> at checkout to save <strong>${escapeHtml(String(discount))}%</strong>.`;
+            const html = `
+            <div style="font-family: Arial, Helvetica, sans-serif; max-width: 640px; margin: auto; color: #111827;">
+              <h2 style="color: #1f2937;">${brand}</h2>
+              <p>${introHtml}</p>
+              <div style="margin: 20px 0; padding: 16px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px;">
+                <p style="margin: 6px 0;"><strong>Code:</strong> ${codeEsc}</p>
+                <p style="margin: 6px 0;"><strong>Discount:</strong> ${escapeHtml(String(normalizedDiscount))}%</p>
+                <p style="margin: 6px 0;"><strong>Scope:</strong> ${escapeHtml(String(normalizedType))}</p>
+              </div>
+              <p style="font-size: 14px; color: #6b7280;">Terms and exclusions may apply — see checkout or contact us for details.</p>
+            </div>`;
 
-          const html = `
-          <div style="font-family: Arial, Helvetica, sans-serif; max-width: 640px; margin: auto; color: #111827;">
-            <h2 style="color: #1f2937;">${brand}</h2>
-            <p>${introHtml}</p>
-            <div style="margin: 20px 0; padding: 16px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px;">
-              <p style="margin: 6px 0;"><strong>Code:</strong> ${codeEsc}</p>
-              <p style="margin: 6px 0;"><strong>Discount:</strong> ${escapeHtml(String(discount))}%</p>
-              <p style="margin: 6px 0;"><strong>Scope:</strong> ${escapeHtml(String(type))}</p>
-            </div>
-            <p style="font-size: 14px; color: #6b7280;">Terms and exclusions may apply — see checkout or contact us for details.</p>
-          </div>`;
+            const text = `${clientDoc.companyName || 'Our store'} — new code ${normalizedCode}: ${normalizedDiscount}% off (scope: ${normalizedType}).`;
 
-          const text = `${clientDoc.companyName || 'Our store'} — new code ${code}: ${discount}% off (scope: ${type}).`;
+            newsletter = {
+              status: 'started',
+              estimatedRecipients: subscriberCount,
+              newsletterId: `promo_checkout_${newCheckoutCode._id}`,
+            };
 
-          newsletter = {
-            status: 'started',
-            estimatedRecipients: subscriberCount,
-            newsletterId: `promo_checkout_${newCheckoutCode._id}`,
-          };
+            const newsletterData = {
+              subject,
+              html,
+              text,
+              newsletterId: newsletter.newsletterId,
+              enableTracking: true,
+            };
 
-          const newsletterData = {
-            subject,
-            html,
-            text,
-            newsletterId: newsletter.newsletterId,
-            enableTracking: true,
-          };
-
-          setImmediate(() => {
-            NewsletterService.sendNewsletter(clientDoc, newsletterData, { useSubscribers: true })
-              .then((result) => console.log('✅ Promo newsletter finished:', result.newsletterId, result.totalSent, 'sent'))
-              .catch((err) => console.error('💥 Promo newsletter failed:', err.message));
-          });
+            queueBackground(() => {
+              NewsletterService.sendNewsletter(clientDoc, newsletterData, { useSubscribers: true })
+                .then((result) => console.log('✅ Promo newsletter finished:', result.newsletterId, result.totalSent, 'sent'));
+            }, 'Promo newsletter');
+          }
+        } catch (newsletterErr) {
+          console.error('Newsletter setup failed:', newsletterErr);
+          newsletter = { status: 'failed', reason: newsletterErr.message };
         }
-      } catch (newsletterErr) {
-        console.error('Newsletter setup failed:', newsletterErr);
-        newsletter = { status: 'failed', reason: newsletterErr.message };
       }
-    }
 
-    const productLikeCode =
-      (newCheckoutCode.appliesToModel || '').toLowerCase() === 'product' ||
-      ['all', 'product', 'category'].includes(String(newCheckoutCode.type || '').toLowerCase());
-    if (productLikeCode && Array.isArray(newCheckoutCode.appliesTo) && newCheckoutCode.appliesTo.length) {
-      try {
-        wishlistAlerts = { status: 'started' };
-        setImmediate(() => {
-          sendWishlistCheckoutCodeAlerts({
-            clientId: req.clientId,
-            code: newCheckoutCode.code,
-            discount: newCheckoutCode.discount,
-            appliesTo: newCheckoutCode.appliesTo,
-            type: newCheckoutCode.type,
-          })
-            .then((result) => console.log('✅ Wishlist checkout-code alerts:', result))
-            .catch((err) => console.error('💥 Wishlist checkout-code alerts failed:', err.message));
-        });
-      } catch (wishlistErr) {
-        console.error('Wishlist alert setup failed:', wishlistErr);
-        wishlistAlerts = { status: 'failed', reason: wishlistErr.message };
+      const productLikeCode =
+        (newCheckoutCode.appliesToModel || '').toLowerCase() === 'product' ||
+        ['all', 'product', 'category'].includes(String(newCheckoutCode.type || '').toLowerCase());
+      if (productLikeCode && Array.isArray(newCheckoutCode.appliesTo) && newCheckoutCode.appliesTo.length) {
+        try {
+          wishlistAlerts = { status: 'started' };
+          queueBackground(() => {
+            sendWishlistCheckoutCodeAlerts({
+              clientId: req.clientId,
+              code: newCheckoutCode.code,
+              discount: newCheckoutCode.discount,
+              appliesTo: newCheckoutCode.appliesTo,
+              type: newCheckoutCode.type,
+            })
+              .then((result) => console.log('✅ Wishlist checkout-code alerts:', result));
+          }, 'Wishlist checkout-code alerts');
+        } catch (wishlistErr) {
+          console.error('Wishlist alert setup failed:', wishlistErr);
+          wishlistAlerts = { status: 'failed', reason: wishlistErr.message };
+        }
+      } else {
+        wishlistAlerts = { status: 'skipped', reason: 'not_product_targeted' };
       }
-    } else {
-      wishlistAlerts = { status: 'skipped', reason: 'not_product_targeted' };
+    } catch (postCreateErr) {
+      console.error('Post-create notification setup failed:', postCreateErr);
+      if (!newsletter) newsletter = { status: 'failed', reason: postCreateErr.message };
+      if (!wishlistAlerts) wishlistAlerts = { status: 'failed', reason: postCreateErr.message };
     }
 
     res.status(201).json({
