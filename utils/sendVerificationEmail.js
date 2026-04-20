@@ -107,11 +107,12 @@ async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass,
             .replace(/\n{3,}/g, '\n\n')
             .trim();
     const { html: htmlOut, attachments } = inlineSignatureImages(merged.html, []);
+    const recipientEmail = decrypt(userEmail);
 
     try {
         await transporter.sendMail({
             from: `"${formattedClientName.replace(/<[^>]+>/g, '')}" <${decryptedEmail}>`,
-            to: userEmail,
+            to: recipientEmail,
             subject: 'Confirm your email address',
             text: textBody,
             html: htmlOut,
