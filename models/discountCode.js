@@ -47,6 +47,13 @@ async function sendWishlistCheckoutCodeAlerts({
   appliesTo = [],
   type = 'all',
 }) {
+  console.log('[discountCode][wishlistAlerts] starting', {
+    clientId,
+    code,
+    discount,
+    appliesToCount: Array.isArray(appliesTo) ? appliesTo.length : 0,
+    type,
+  });
   const productIds = Array.isArray(appliesTo)
     ? appliesTo.map((id) => String(id)).filter(Boolean)
     : [];
@@ -94,10 +101,21 @@ async function sendWishlistCheckoutCodeAlerts({
     clientID: clientId,
   }).lean();
 
+  console.log('[discountCode][wishlistAlerts] customers matched', {
+    targetedCustomers: byCustomer.size,
+    customersFetched: customers.length,
+  });
+
   let sent = 0;
   for (const customer of customers) {
     const bucket = byCustomer.get(String(customer._id));
     const recipientEmail = resolveRecipientEmail(customer.emailAddress);
+    if (customer.emailAddress && !recipientEmail) {
+      console.warn('[discountCode][wishlistAlerts] invalid recipient after resolve', {
+        customerId: String(customer._id),
+        rawEmailPreview: String(customer.emailAddress).slice(0, 20),
+      });
+    }
     if (!bucket || !bucket.productNames.size || !recipientEmail) continue;
     const productList = Array.from(bucket.productNames).slice(0, 8);
     const listItemsHtml = productList
@@ -163,6 +181,10 @@ ${websiteUrl ? `Website: ${websiteUrl}` : ''}`;
     }
   }
 
+  console.log('[discountCode][wishlistAlerts] finished', {
+    targetedCustomers: byCustomer.size,
+    sent,
+  });
   return { status: 'done', targetedCustomers: byCustomer.size, sent };
 }
 
@@ -207,6 +229,11 @@ router.post('/verify-discount-code', authenticateToken, async (req, res) => {
 // --------------------
 router.post('/createCheckoutCode', authenticateToken, async (req, res) => {
   try {
+    console.log('[discountCode][createCheckoutCode] request received', {
+      clientId: req.clientId,
+      bodyKeys: req.body ? Object.keys(req.body) : [],
+    });
+
     const {
       code,
       discount,
@@ -220,48 +247,30 @@ router.post('/createCheckoutCode', authenticateToken, async (req, res) => {
       promoEmailIntro,
     } = req.body;
 
-    // Guard against duplicate checkout codes for this collection.
-    const existingCode = await DiscountCode.findOne({ code });
-    if (existingCode) {
-      return res.status(409).json({ error: 'Checkout code already exists. Please use a different code.' });
-    }
+    const newCheckoutCode = new DiscountCode({
+      id: `code${Math.floor(Math.random() * 10000)}`,
+      code,
+      discount,
+      type,
+      appliesTo,
+      appliesToModel: appliesToModel || (appliesTo.length > 0 ? 'Product' : 'Service'),
+      usageLimit: Number(usageLimit),
+      clientID: req.clientId,
+      isActive
+    });
 
-    // Generate a collision-safe public id (schema has unique:true on `id`).
-    let newCheckoutCode = null;
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const candidate = new DiscountCode({
-        id: `code_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
-        code,
-        discount,
-        type,
-        appliesTo,
-        appliesToModel: appliesToModel || (appliesTo.length > 0 ? 'Product' : 'Service'),
-        usageLimit: Number(usageLimit),
-        clientID: req.clientId,
-        isActive
-      });
-      try {
-        await candidate.save();
-        newCheckoutCode = candidate;
-        break;
-      } catch (saveErr) {
-        const duplicateId =
-          saveErr &&
-          saveErr.code === 11000 &&
-          saveErr.keyPattern &&
-          saveErr.keyPattern.id;
-        if (!duplicateId) throw saveErr;
-      }
-    }
-
-    if (!newCheckoutCode) {
-      return res.status(500).json({ error: 'Failed to create checkout code', details: 'Could not generate unique code id' });
-    }
+    await newCheckoutCode.save();
+    console.log('[discountCode][createCheckoutCode] code saved', {
+      id: String(newCheckoutCode._id),
+      code: newCheckoutCode.code,
+      appliesToCount: Array.isArray(newCheckoutCode.appliesTo) ? newCheckoutCode.appliesTo.length : 0,
+    });
 
     const wantsNewsletter = notifySubscribers === true || notifySubscribers === 'true';
     let newsletter = null;
     let wishlistAlerts = null;
     if (wantsNewsletter) {
+      console.log('[discountCode][createCheckoutCode] newsletter requested');
       const subscriberCount = await NewsletterService.getSubscriberCount(req.clientId, true);
       const clientDoc = await Client.findOne({ clientID: req.clientId });
       const smtpOk = clientDoc && resolveSmtpHost(clientDoc);
@@ -322,6 +331,9 @@ router.post('/createCheckoutCode', authenticateToken, async (req, res) => {
       ['all', 'product', 'category'].includes(String(newCheckoutCode.type || '').toLowerCase());
     if (productLikeCode && Array.isArray(newCheckoutCode.appliesTo) && newCheckoutCode.appliesTo.length) {
       wishlistAlerts = { status: 'started' };
+      console.log('[discountCode][createCheckoutCode] wishlist alerts scheduled', {
+        appliesToCount: newCheckoutCode.appliesTo.length,
+      });
       setImmediate(() => {
         sendWishlistCheckoutCodeAlerts({
           clientId: req.clientId,
@@ -344,10 +356,7 @@ router.post('/createCheckoutCode', authenticateToken, async (req, res) => {
       wishlistAlerts,
     });
   } catch (err) {
-    console.error('Error creating checkout code:', err);
-    if (err && err.code === 11000 && err.keyPattern && err.keyPattern.code) {
-      return res.status(409).json({ error: 'Checkout code already exists. Please use a different code.' });
-    }
+    console.error('[discountCode][createCheckoutCode] Error creating checkout code:', err);
     res.status(400).json({ error: 'Failed to create checkout code', details: err.message });
   }
 });
