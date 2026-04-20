@@ -14,7 +14,6 @@ const { escapeHtml } = require('../helpers/signatureHtml');
 const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../helpers/mailHost');
 const { sendMail } = require('../helpers/mailer');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
-const { decrypt } = require('../helpers/encryption');
 
 // Middleware to authenticate JWT token and extract clientId
 const authenticateToken = (req, res, next) => {
@@ -30,14 +29,6 @@ const authenticateToken = (req, res, next) => {
     return res.status(403).json({ error: 'Forbidden - Invalid token' });
   }
 };
-
-function resolveRecipientEmail(value) {
-  if (!value) return '';
-  const raw = String(value).trim();
-  if (!raw) return '';
-  const candidate = raw.includes(':') ? decrypt(raw) : raw;
-  return String(candidate || '').trim();
-}
 
 async function sendWishlistCheckoutCodeAlerts({
   clientId,
@@ -96,8 +87,7 @@ async function sendWishlistCheckoutCodeAlerts({
   let sent = 0;
   for (const customer of customers) {
     const bucket = byCustomer.get(String(customer._id));
-    const recipientEmail = resolveRecipientEmail(customer.emailAddress);
-    if (!bucket || !bucket.productNames.size || !recipientEmail) continue;
+    if (!bucket || !bucket.productNames.size || !customer.emailAddress) continue;
     const productList = Array.from(bucket.productNames).slice(0, 8);
     const listItemsHtml = productList
       .map(
@@ -151,7 +141,7 @@ ${websiteUrl ? `Website: ${websiteUrl}` : ''}`;
         user: clientDoc.businessEmail,
         pass: clientDoc.businessEmailPassword,
         from: `"${clientDoc.companyName}" <${clientDoc.businessEmail}>`,
-        to: recipientEmail,
+        to: customer.emailAddress,
         subject: `Wish list match: ${code} (${discount}% off)`,
         text,
         html,
