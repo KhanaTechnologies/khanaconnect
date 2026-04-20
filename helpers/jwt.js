@@ -13,7 +13,9 @@ const authJwt = () => {
     path: [
      { url: /\/api\/v1\/emailsub(.*)/, methods: ['POST', 'OPTIONS'] },
      { url: /\/public\/uploads(.*)/, methods: ['GET', 'OPTIONS'] },
-     { url: /\/api\/v1\/customer(.*)/, methods: ['GET', 'OPTIONS'] },
+     // Customer endpoints use route-level token validation that supports secret fallback.
+     // Exempt POST here so express-jwt does not fail early with "invalid signature".
+     { url: /\/api\/v1\/customer(.*)/, methods: ['GET', 'POST', 'OPTIONS'] },
      { url: /\/api\/v1\/client(.*)/, methods: ['GET','POST', 'OPTIONS'] },
      { url: /\/api\/v1\/categories(.*)/, methods: ['GET', 'OPTIONS'] },
      { url: /\/api\/v1\/tradecation(.*)/, methods: ['GET', 'OPTIONS'] },
