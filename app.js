@@ -1,4 +1,5 @@
 const { config } = require('dotenv');
+const path = require('path');
 var express = require('express');
 const app = express();
 var cookieParser = require('cookie-parser');
@@ -69,7 +70,7 @@ function skipEmailMailboxReads(req) {
 }
 
 const generalLimiter = rateLimit({
-  windowMs: 2 * 60 * 1000,
+  windowMs: 15 * 60 * 1000,
   max: 100,
   message: { error: 'Too many requests from this IP, please try again later.' },
   standardHeaders: true,
@@ -86,7 +87,7 @@ const authLimiter = rateLimit({
 });
 
 const apiLimiter = rateLimit({
-  windowMs: 2 * 60 * 1000,
+  windowMs: 15 * 60 * 1000,
   max: 200,
   message: { error: 'Too many API requests, please try again later.' },
   standardHeaders: true,
@@ -136,7 +137,7 @@ app.use(cors({
     return callback(null, true);
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Client-ID', 'X-Session-ID', 'X-Anonymous-ID']
 }));
 
@@ -192,10 +193,18 @@ app.use((req, res, next) => {
 app.use(failureEmail.captureResponse);
 
 // Static Files
-app.use("/public/uploads", express.static(__dirname + "/public/uploads", {
+app.use("/public/uploads", express.static(path.join(__dirname, "public/uploads"), {
   setHeaders: (res) => {
     res.set('X-Content-Type-Options', 'nosniff');
     res.set('X-Frame-Options', 'DENY');
+  }
+}));
+
+// Campaign & voting images (written to /uploads by multer routes)
+app.use("/uploads", express.static(path.join(__dirname, "uploads"), {
+  setHeaders: (res) => {
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.set('Cache-Control', 'public, max-age=86400');
   }
 }));
 
