@@ -14,101 +14,178 @@ const { body, validationResult } = require('express-validator');
 const { wrapRoute } = require('../helpers/failureEmail');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 
-// Ensure upload directories exist
-const uploadDirs = ['uploads/voting', 'uploads/voting/temp', 'uploads/voting/items'];
-uploadDirs.forEach(dir => {
+// Absolute paths so uploads work regardless of process cwd
+const VOTING_UPLOAD_ROOT = path.join(__dirname, '..', 'uploads', 'voting');
+const VOTING_TEMP_DIR = path.join(VOTING_UPLOAD_ROOT, 'temp');
+const VOTING_ITEMS_DIR = path.join(VOTING_UPLOAD_ROOT, 'items');
+
+[VOTING_UPLOAD_ROOT, VOTING_TEMP_DIR, VOTING_ITEMS_DIR].forEach((dir) => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
 });
 
-// Configure multer for file uploads
+const IMAGE_EXT = /\.(jpe?g|png|gif|webp|heic|heif|avif)$/i;
+const IMAGE_MIME = /^image\/(jpeg|png|gif|webp|heic|heif|avif|svg\+xml|pjpeg)$/i;
+
 const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    // Store in temp directory first for processing
-    cb(null, 'uploads/voting/temp');
+  destination(_req, _file, cb) {
+    cb(null, VOTING_TEMP_DIR);
   },
-  filename: function (req, file, cb) {
+  filename(_req, file, cb) {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const ext = path.extname(file.originalname);
+    const ext = path.extname(file.originalname) || '.jpg';
     cb(null, 'vote-' + uniqueSuffix + ext);
-  }
+  },
 });
 
 const fileFilter = (req, file, cb) => {
-  const allowedTypes = /\.(jpg|JPG|jpeg|JPEG|png|PNG|gif|GIF|webp|WEBP)$/;
-  if (!file.originalname.match(allowedTypes)) {
-    req.fileValidationError = 'Only image files are allowed (jpg, png, gif, webp)';
-    return cb(new Error('Only image files are allowed'), false);
+  const name = file.originalname || '';
+  const mime = file.mimetype || '';
+  if (IMAGE_EXT.test(name) || IMAGE_MIME.test(mime)) {
+    return cb(null, true);
   }
-  cb(null, true);
+  req.fileValidationError = 'Only image files are allowed (jpg, png, gif, webp)';
+  return cb(new Error('Only image files are allowed'), false);
 };
 
 const upload = multer({
-  storage: storage,
-  limits: {
-    fileSize: 10 * 1024 * 1024 // 10MB limit for voting images
-  },
-  fileFilter: fileFilter
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter,
 });
 
-// Image processing middleware
+function respondMulterError(err, req, res, next) {
+  if (req.fileValidationError) {
+    return res.status(400).json({ success: false, error: req.fileValidationError });
+  }
+  if (err) {
+    const message =
+      err.code === 'LIMIT_FILE_SIZE'
+        ? 'Image too large (max 10MB)'
+        : err.message || 'Upload failed';
+    return res.status(400).json({ success: false, error: message });
+  }
+  return next();
+}
+
+function pickFirstUploadedFile(req, fieldNames) {
+  if (req.file) return req.file;
+  if (!req.files) return null;
+  for (const name of fieldNames) {
+    const list = req.files[name];
+    if (list && list[0]) return list[0];
+  }
+  return null;
+}
+
+/** Accept common multipart field names used by different clients */
+function acceptSingleUpload(fieldNames) {
+  const fields = fieldNames.map((name) => ({ name, maxCount: 1 }));
+  return (req, res, next) => {
+    upload.fields(fields)(req, res, (err) => {
+      if (err || req.fileValidationError) {
+        return respondMulterError(err, req, res, () => {});
+      }
+      req.file = pickFirstUploadedFile(req, fieldNames);
+      return next();
+    });
+  };
+}
+
+function acceptBulkUpload(fieldNames, maxCount = 10) {
+  const fields = fieldNames.map((name) => ({ name, maxCount }));
+  return (req, res, next) => {
+    upload.fields(fields)(req, res, (err) => {
+      if (err || req.fileValidationError) {
+        return respondMulterError(err, req, res, () => {});
+      }
+      const collected = [];
+      for (const name of fieldNames) {
+        if (req.files && req.files[name]) {
+          collected.push(...req.files[name]);
+        }
+      }
+      req.files = collected.length ? collected : null;
+      return next();
+    });
+  };
+}
+
+function votingItemUrlFromBasename(jpgBase) {
+  return `/uploads/voting/items/${jpgBase}`;
+}
+
+function unlinkIfExists(filePath) {
+  if (filePath && fs.existsSync(filePath)) {
+    fs.unlinkSync(filePath);
+  }
+}
+
+function unlinkProcessedImage(processedImage) {
+  if (!processedImage) return;
+  unlinkVotingImageByUrl(processedImage.url);
+}
+
+function unlinkVotingImageByUrl(imageUrl) {
+  if (!imageUrl) return;
+  const base = path.basename(imageUrl);
+  unlinkIfExists(path.join(VOTING_ITEMS_DIR, base));
+  unlinkIfExists(path.join(VOTING_ITEMS_DIR, base.replace(/^medium-/, 'thumb-')));
+  unlinkIfExists(path.join(VOTING_ITEMS_DIR, base.replace(/^medium-/, 'orig-')));
+}
+
+async function processVotingImageFile(file) {
+  const filePath = file.path;
+  const fileName = file.filename;
+  const jpgBase = fileName.replace(/\.[^/.]+$/, '.jpg');
+
+  const metadata = await sharp(filePath).metadata();
+
+  await sharp(filePath)
+    .resize(300, 300, { fit: 'cover', position: 'centre' })
+    .jpeg({ quality: 80 })
+    .toFile(path.join(VOTING_ITEMS_DIR, 'thumb-' + jpgBase));
+
+  await sharp(filePath)
+    .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
+    .jpeg({ quality: 85 })
+    .toFile(path.join(VOTING_ITEMS_DIR, 'medium-' + jpgBase));
+
+  await sharp(filePath)
+    .jpeg({ quality: 90 })
+    .toFile(path.join(VOTING_ITEMS_DIR, 'orig-' + jpgBase));
+
+  unlinkIfExists(filePath);
+
+  return {
+    url: votingItemUrlFromBasename('medium-' + jpgBase),
+    thumbnail: votingItemUrlFromBasename('thumb-' + jpgBase),
+    original: votingItemUrlFromBasename('orig-' + jpgBase),
+    filename: fileName,
+    width: metadata.width,
+    height: metadata.height,
+    format: 'jpeg',
+    size: file.size,
+  };
+}
+
 const processImage = async (req, res, next) => {
   if (!req.file) return next();
-  
+
   try {
-    const filePath = req.file.path;
-    const fileName = req.file.filename;
-    const baseName = path.parse(fileName).name;
-    const outputDir = 'uploads/voting/items';
-    
-    // Get image metadata
-    const metadata = await sharp(filePath).metadata();
-    
-    // Create thumbnail (300x300, crop to square)
-    const thumbnailPath = path.join(outputDir, 'thumb-' + fileName.replace(/\.[^/.]+$/, '.jpg'));
-    await sharp(filePath)
-      .resize(300, 300, { fit: 'cover', position: 'centre' })
-      .jpeg({ quality: 80 })
-      .toFile(thumbnailPath);
-    
-    // Create medium size (800x800, maintain aspect ratio)
-    const mediumPath = path.join(outputDir, 'medium-' + fileName.replace(/\.[^/.]+$/, '.jpg'));
-    await sharp(filePath)
-      .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 85 })
-      .toFile(mediumPath);
-    
-    // Move original to items folder with proper name
-    const originalPath = path.join(outputDir, 'orig-' + fileName.replace(/\.[^/.]+$/, '.jpg'));
-    await sharp(filePath)
-      .jpeg({ quality: 90 })
-      .toFile(originalPath);
-    
-    // Clean up temp file
-    fs.unlinkSync(filePath);
-    
-    req.processedImage = {
-      url: `/uploads/voting/items/medium-${fileName.replace(/\.[^/.]+$/, '.jpg')}`,
-      thumbnail: `/uploads/voting/items/thumb-${fileName.replace(/\.[^/.]+$/, '.jpg')}`,
-      original: `/uploads/voting/items/orig-${fileName.replace(/\.[^/.]+$/, '.jpg')}`,
-      filename: fileName,
-      width: metadata.width,
-      height: metadata.height,
-      format: 'jpeg',
-      size: req.file.size
-    };
-    
-    next();
+    req.processedImage = await processVotingImageFile(req.file);
+    return next();
   } catch (error) {
     console.error('Image processing error:', error);
-    // Clean up temp file if processing fails
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
-    next(error);
+    unlinkIfExists(req.file.path);
+    return next(error);
   }
 };
+
+const uploadCover = acceptSingleUpload(['coverImage', 'image', 'file']);
+const uploadItemImage = acceptSingleUpload(['image', 'file', 'photo']);
+const uploadItemImagesBulk = acceptBulkUpload(['images', 'files'], 10);
 
 // Middleware to authenticate client
 const validateClient = (req, res, next) => {
@@ -230,7 +307,7 @@ router.post('/', validateClient, campaignValidation, wrapRoute(async (req, res) 
 }));
 
 // Upload cover image for campaign
-router.post('/:id/upload-cover', validateClient, upload.single('coverImage'), processImage, wrapRoute(async (req, res) => {
+router.post('/:id/upload-cover', validateClient, uploadCover, processImage, wrapRoute(async (req, res) => {
   if (req.fileValidationError) {
     return res.status(400).json({
       success: false,
@@ -252,15 +329,7 @@ router.post('/:id/upload-cover', validateClient, upload.single('coverImage'), pr
   });
 
   if (!campaign) {
-    // Clean up uploaded files
-    if (req.processedImage) {
-      ['url', 'thumbnail', 'original'].forEach(key => {
-        if (req.processedImage[key]) {
-          const filePath = req.processedImage[key].replace('/uploads/voting/items/', 'uploads/voting/items/');
-          if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-        }
-      });
-    }
+    unlinkProcessedImage(req.processedImage);
     return res.status(404).json({
       success: false,
       message: 'Campaign not found'
@@ -269,15 +338,14 @@ router.post('/:id/upload-cover', validateClient, upload.single('coverImage'), pr
 
   // Delete old cover image if exists
   if (campaign.media && campaign.media.coverImage) {
-    const oldImagePath = campaign.media.coverImage.replace('/uploads/voting/', 'uploads/voting/');
-    if (fs.existsSync(oldImagePath)) {
-      fs.unlinkSync(oldImagePath);
-    }
-    // Also delete thumbnails if they exist
-    const oldThumbPath = oldImagePath.replace(/medium-/, 'thumb-');
-    if (fs.existsSync(oldThumbPath)) fs.unlinkSync(oldThumbPath);
-    const oldOrigPath = oldImagePath.replace(/medium-/, 'orig-');
-    if (fs.existsSync(oldOrigPath)) fs.unlinkSync(oldOrigPath);
+    const oldBase = path.basename(campaign.media.coverImage);
+    unlinkIfExists(path.join(VOTING_ITEMS_DIR, oldBase));
+    unlinkIfExists(path.join(VOTING_ITEMS_DIR, oldBase.replace(/^medium-/, 'thumb-')));
+    unlinkIfExists(path.join(VOTING_ITEMS_DIR, oldBase.replace(/^medium-/, 'orig-')));
+  }
+
+  if (!campaign.media) {
+    campaign.media = {};
   }
 
   // Update campaign with new cover image
@@ -299,7 +367,7 @@ router.post('/:id/upload-cover', validateClient, upload.single('coverImage'), pr
 // ==================== VOTING ITEMS IMAGE MANAGEMENT ====================
 
 // Upload image for a specific voting item
-router.post('/:id/items/:itemId/images', validateClient, upload.single('image'), processImage, wrapRoute(async (req, res) => {
+router.post('/:id/items/:itemId/images', validateClient, uploadItemImage, processImage, wrapRoute(async (req, res) => {
   if (req.fileValidationError) {
     return res.status(400).json({
       success: false,
@@ -321,13 +389,7 @@ router.post('/:id/items/:itemId/images', validateClient, upload.single('image'),
   });
 
   if (!campaign) {
-    // Clean up uploaded files
-    ['url', 'thumbnail', 'original'].forEach(key => {
-      if (req.processedImage[key]) {
-        const filePath = req.processedImage[key].replace('/uploads/voting/items/', 'uploads/voting/items/');
-        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-      }
-    });
+    unlinkProcessedImage(req.processedImage);
     return res.status(404).json({
       success: false,
       message: 'Campaign not found'
@@ -339,13 +401,7 @@ router.post('/:id/items/:itemId/images', validateClient, upload.single('image'),
   );
   
   if (!item) {
-    // Clean up uploaded files
-    ['url', 'thumbnail', 'original'].forEach(key => {
-      if (req.processedImage[key]) {
-        const filePath = req.processedImage[key].replace('/uploads/voting/items/', 'uploads/voting/items/');
-        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-      }
-    });
+    unlinkProcessedImage(req.processedImage);
     return res.status(404).json({
       success: false,
       message: 'Item not found'
@@ -394,7 +450,7 @@ router.post('/:id/items/:itemId/images', validateClient, upload.single('image'),
 }));
 
 // Upload multiple images for an item
-router.post('/:id/items/:itemId/images/bulk', validateClient, upload.array('images', 10), wrapRoute(async (req, res) => {
+router.post('/:id/items/:itemId/images/bulk', validateClient, uploadItemImagesBulk, wrapRoute(async (req, res) => {
   if (!req.files || req.files.length === 0) {
     return res.status(400).json({
       success: false,
@@ -441,61 +497,30 @@ router.post('/:id/items/:itemId/images/bulk', validateClient, upload.array('imag
   for (let i = 0; i < req.files.length; i++) {
     const file = req.files[i];
     try {
-      // Create a mock req for processImage
-      const mockReq = { file, body: { caption: req.body.captions ? req.body.captions[i] : '' } };
-      const mockRes = {};
-      
-      // Manually process the image
-      const metadata = await sharp(file.path).metadata();
-      const fileName = file.filename;
-      const outputDir = 'uploads/voting/items';
-      
-      // Create thumbnail
-      const thumbnailPath = path.join(outputDir, 'thumb-' + fileName.replace(/\.[^/.]+$/, '.jpg'));
-      await sharp(file.path)
-        .resize(300, 300, { fit: 'cover' })
-        .jpeg({ quality: 80 })
-        .toFile(thumbnailPath);
-      
-      // Create medium size
-      const mediumPath = path.join(outputDir, 'medium-' + fileName.replace(/\.[^/.]+$/, '.jpg'));
-      await sharp(file.path)
-        .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality: 85 })
-        .toFile(mediumPath);
-      
-      // Create original
-      const originalPath = path.join(outputDir, 'orig-' + fileName.replace(/\.[^/.]+$/, '.jpg'));
-      await sharp(file.path)
-        .jpeg({ quality: 90 })
-        .toFile(originalPath);
-      
-      // Clean up temp file
-      fs.unlinkSync(file.path);
+      const processed = await processVotingImageFile(file);
 
       const imageData = {
-        url: `/uploads/voting/items/medium-${fileName.replace(/\.[^/.]+$/, '.jpg')}`,
-        thumbnail: `/uploads/voting/items/thumb-${fileName.replace(/\.[^/.]+$/, '.jpg')}`,
-        medium: `/uploads/voting/items/medium-${fileName.replace(/\.[^/.]+$/, '.jpg')}`,
-        original: `/uploads/voting/items/orig-${fileName.replace(/\.[^/.]+$/, '.jpg')}`,
-        publicId: fileName,
+        url: processed.url,
+        thumbnail: processed.thumbnail,
+        medium: processed.url,
+        original: processed.original,
+        publicId: processed.filename,
         caption: req.body.captions ? req.body.captions[i] : '',
         isPrimary: item.images.length === 0 && uploadedImages.length === 0,
         order: item.images.length + uploadedImages.length,
         dimensions: {
-          width: metadata.width,
-          height: metadata.height
+          width: processed.width,
+          height: processed.height,
         },
-        fileSize: file.size,
-        format: 'jpeg'
+        fileSize: processed.size,
+        format: processed.format,
       };
 
       await campaign.addItemImage(item.itemId || item._id, imageData);
       uploadedImages.push(imageData);
     } catch (error) {
       errors.push({ file: file.originalname, error: error.message });
-      // Clean up failed file
-      if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+      unlinkIfExists(file.path);
     }
   }
 
@@ -646,23 +671,7 @@ router.delete('/:id/items/:itemId/images', validateClient, wrapRoute(async (req,
     });
   }
 
-  // Delete physical files
-  const imagePath = imageUrl.replace('/uploads/voting/items/', 'uploads/voting/items/');
-  if (fs.existsSync(imagePath)) {
-    fs.unlinkSync(imagePath);
-  }
-  
-  // Delete thumbnail if exists
-  const thumbPath = imagePath.replace('medium-', 'thumb-');
-  if (fs.existsSync(thumbPath)) {
-    fs.unlinkSync(thumbPath);
-  }
-  
-  // Delete original
-  const originalPath = imagePath.replace('medium-', 'orig-');
-  if (fs.existsSync(originalPath)) {
-    fs.unlinkSync(originalPath);
-  }
+  unlinkVotingImageByUrl(imageUrl);
 
   await campaign.removeItemImage(item.itemId || item._id, imageUrl);
 
@@ -1066,16 +1075,7 @@ router.delete('/:id/items/:itemId', validateClient, wrapRoute(async (req, res) =
 
   // Delete all images for this item
   if (item.images && item.images.length > 0) {
-    item.images.forEach(image => {
-      const imagePath = image.url.replace('/uploads/voting/items/', 'uploads/voting/items/');
-      if (fs.existsSync(imagePath)) fs.unlinkSync(imagePath);
-      
-      const thumbPath = imagePath.replace('medium-', 'thumb-');
-      if (fs.existsSync(thumbPath)) fs.unlinkSync(thumbPath);
-      
-      const originalPath = imagePath.replace('medium-', 'orig-');
-      if (fs.existsSync(originalPath)) fs.unlinkSync(originalPath);
-    });
+    item.images.forEach((image) => unlinkVotingImageByUrl(image.url));
   }
 
   campaign.items = campaign.items.filter(i => 
