@@ -187,6 +187,214 @@ const uploadCover = acceptSingleUpload(['coverImage', 'image', 'file']);
 const uploadItemImage = acceptSingleUpload(['image', 'file', 'photo']);
 const uploadItemImagesBulk = acceptBulkUpload(['images', 'files'], 10);
 
+const COVER_UPLOAD_FIELDS = new Set(['coverImage', 'cover', 'campaignCover']);
+const ITEM_IMAGE_FIELD_PATTERNS = [
+  /^itemImages_(\d+)$/i,
+  /^items\[(\d+)\]\[images\]$/i,
+  /^items\[(\d+)\]\[image\]$/i,
+  /^item_(\d+)_images$/i,
+];
+
+function isMultipartRequest(req) {
+  return (req.headers['content-type'] || '').includes('multipart/form-data');
+}
+
+/** Optional multipart on POST / (cover + per-item images in one request) */
+function acceptCampaignCreateUpload(req, res, next) {
+  if (!isMultipartRequest(req)) {
+    req.uploadedFiles = [];
+    return next();
+  }
+
+  upload.any()(req, res, (err) => {
+    if (err || req.fileValidationError) {
+      return respondMulterError(err, req, res, () => {});
+    }
+    req.uploadedFiles = Array.isArray(req.files) ? req.files : [];
+    return next();
+  });
+}
+
+function parseJsonField(value, fieldName) {
+  if (value == null || value === '') return undefined;
+  if (typeof value === 'object') return value;
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch (_e) {
+    throw new Error(`Invalid JSON in "${fieldName}" field`);
+  }
+}
+
+function parseCampaignCreateBody(req) {
+  const raw = { ...req.body };
+
+  for (const key of ['campaign', 'data', 'payload']) {
+    if (typeof raw[key] === 'string' && raw[key].trim()) {
+      const parsed = parseJsonField(raw[key], key);
+      const { [key]: _drop, ...rest } = raw;
+      return { ...parsed, ...rest };
+    }
+  }
+
+  const body = { ...raw };
+  if (typeof body.items === 'string') body.items = parseJsonField(body.items, 'items');
+  if (typeof body.votingRules === 'string') body.votingRules = parseJsonField(body.votingRules, 'votingRules');
+  if (typeof body.settings === 'string') body.settings = parseJsonField(body.settings, 'settings');
+  if (typeof body.media === 'string') body.media = parseJsonField(body.media, 'media');
+  if (typeof body.categories === 'string') body.categories = parseJsonField(body.categories, 'categories');
+  if (typeof body.tags === 'string') body.tags = parseJsonField(body.tags, 'tags');
+
+  return body;
+}
+
+function parseCampaignCreateBodyMiddleware(req, res, next) {
+  try {
+    req.campaignPayload = parseCampaignCreateBody(req);
+    if (isMultipartRequest(req)) {
+      req.body = req.campaignPayload;
+    }
+    return next();
+  } catch (err) {
+    return res.status(400).json({ success: false, error: err.message });
+  }
+}
+
+function groupCreateUploads(files) {
+  const coverCandidates = [];
+  const itemsByIndex = new Map();
+
+  for (const file of files || []) {
+    const name = file.fieldname || '';
+    let itemIndex = null;
+
+    for (const pattern of ITEM_IMAGE_FIELD_PATTERNS) {
+      const match = name.match(pattern);
+      if (match) {
+        itemIndex = parseInt(match[1], 10);
+        break;
+      }
+    }
+
+    if (itemIndex !== null && !Number.isNaN(itemIndex)) {
+      if (!itemsByIndex.has(itemIndex)) itemsByIndex.set(itemIndex, []);
+      itemsByIndex.get(itemIndex).push(file);
+      continue;
+    }
+
+    if (COVER_UPLOAD_FIELDS.has(name)) {
+      coverCandidates.push(file);
+    }
+  }
+
+  return {
+    coverFile: coverCandidates[0] || null,
+    itemsByIndex,
+  };
+}
+
+function getPrimaryImageIndexForItem(body, itemIndex, item) {
+  if (item && item.primaryImageIndex != null && item.primaryImageIndex !== '') {
+    const n = parseInt(item.primaryImageIndex, 10);
+    if (!Number.isNaN(n)) return Math.max(0, n);
+  }
+  const fieldKey = `primaryImageIndex_${itemIndex}`;
+  if (body[fieldKey] != null && body[fieldKey] !== '') {
+    const n = parseInt(body[fieldKey], 10);
+    if (!Number.isNaN(n)) return Math.max(0, n);
+  }
+  return 0;
+}
+
+function imageDataFromProcessed(processed, order, isPrimary, caption = '') {
+  return {
+    url: processed.url,
+    thumbnail: processed.thumbnail,
+    medium: processed.url,
+    original: processed.original,
+    publicId: processed.filename,
+    caption,
+    isPrimary: !!isPrimary,
+    order,
+    dimensions: {
+      width: processed.width || 0,
+      height: processed.height || 0,
+    },
+    fileSize: processed.size,
+    format: processed.format,
+    uploadedAt: new Date(),
+  };
+}
+
+function applyPrimaryToItem(item, primaryImageIndex = 0) {
+  if (!item.images || item.images.length === 0) {
+    item.mainImage = null;
+    item.thumbnail = null;
+    return;
+  }
+
+  const idx = Math.min(Math.max(0, primaryImageIndex), item.images.length - 1);
+  item.images.forEach((img, i) => {
+    img.isPrimary = i === idx;
+    img.order = i;
+  });
+
+  const primary = item.images[idx];
+  item.mainImage = primary.medium || primary.url;
+  item.thumbnail = primary.thumbnail || null;
+}
+
+function normalizeExistingItemImages(images) {
+  if (!Array.isArray(images)) return [];
+  return images
+    .filter((img) => img && typeof img.url === 'string' && img.url.trim())
+    .map((img, i) => ({
+      url: img.url.trim(),
+      thumbnail: img.thumbnail || null,
+      medium: img.medium || img.url.trim(),
+      original: img.original || null,
+      publicId: img.publicId || null,
+      caption: img.caption || '',
+      isPrimary: !!img.isPrimary,
+      order: img.order != null ? img.order : i,
+      dimensions: img.dimensions || {},
+      fileSize: img.fileSize,
+      format: img.format,
+      uploadedAt: img.uploadedAt || new Date(),
+    }));
+}
+
+async function processItemImagesForCreate(item, files, primaryImageIndex = 0) {
+  const existing = normalizeExistingItemImages(item.images);
+  const imageDataList = [...existing];
+
+  for (const file of files || []) {
+    const processed = await processVotingImageFile(file);
+    imageDataList.push(
+      imageDataFromProcessed(processed, imageDataList.length, false, '')
+    );
+  }
+
+  item.images = imageDataList;
+  applyPrimaryToItem(item, primaryImageIndex);
+  return item;
+}
+
+function initializeCampaignItem(item) {
+  return {
+    ...item,
+    images: Array.isArray(item.images) ? item.images : [],
+    mainImage: item.mainImage || null,
+    thumbnail: item.thumbnail || null,
+    displaySettings: {
+      imageFit: 'cover',
+      showCaption: false,
+      imageAspectRatio: '1:1',
+      ...item.displaySettings,
+    },
+  };
+}
+
 // Middleware to authenticate client
 const validateClient = (req, res, next) => {
   const token = req.headers.authorization;
@@ -245,66 +453,83 @@ const campaignValidation = [
 
 // ==================== VOTING CAMPAIGN MANAGEMENT ====================
 
-// Create a new voting campaign
-router.post('/', validateClient, campaignValidation, wrapRoute(async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
-  }
+// Create a new voting campaign (JSON or multipart with images)
+router.post(
+  '/',
+  validateClient,
+  acceptCampaignCreateUpload,
+  parseCampaignCreateBodyMiddleware,
+  campaignValidation,
+  wrapRoute(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
 
-  // Add client info
-  req.body.clientId = req.clientId;
-  req.body.createdBy = req.clientId;
+    const payload = req.campaignPayload || req.body;
+    payload.clientId = req.clientId;
+    payload.createdBy = req.clientId;
 
-  // Validate dates
-  const startDate = new Date(req.body.startDate);
-  const endDate = new Date(req.body.endDate);
-  
-  if (startDate >= endDate) {
-    return res.status(400).json({
-      success: false,
-      error: 'End date must be after start date'
-    });
-  }
+    const startDate = new Date(payload.startDate);
+    const endDate = new Date(payload.endDate);
 
-  // Set status based on dates
-  const now = new Date();
-  if (startDate <= now && endDate >= now) {
-    req.body.campaignStatus = 'active';
-  } else if (startDate > now) {
-    req.body.campaignStatus = 'draft';
-  }
+    if (startDate >= endDate) {
+      return res.status(400).json({
+        success: false,
+        error: 'End date must be after start date',
+      });
+    }
 
-  // Initialize media if not provided
-  if (!req.body.media) {
-    req.body.media = {};
-  }
+    const now = new Date();
+    if (startDate <= now && endDate >= now) {
+      payload.campaignStatus = 'active';
+    } else if (startDate > now) {
+      payload.campaignStatus = 'draft';
+    }
 
-  // Initialize images array and image-related fields for each item
-  if (req.body.items) {
-    req.body.items = req.body.items.map(item => ({
-      ...item,
-      images: [],
-      mainImage: null,
-      thumbnail: null,
-      displaySettings: {
-        imageFit: 'cover',
-        showCaption: false,
-        imageAspectRatio: '1:1',
-        ...item.displaySettings
+    if (!payload.media) {
+      payload.media = {};
+    }
+
+    const { coverFile, itemsByIndex } = groupCreateUploads(req.uploadedFiles || []);
+
+    for (const [index] of itemsByIndex) {
+      if (index < 0 || index >= payload.items.length) {
+        return res.status(400).json({
+          success: false,
+          error: `Image field itemImages_${index} does not match any item (items length: ${payload.items.length})`,
+        });
       }
-    }));
-  }
+    }
 
-  const campaign = new VotingCampaign(req.body);
-  await campaign.save();
+    payload.items = await Promise.all(
+      payload.items.map(async (item, index) => {
+        const initialized = initializeCampaignItem(item);
+        const files = itemsByIndex.get(index) || [];
+        const primaryImageIndex = getPrimaryImageIndexForItem(req.body, index, item);
+        return processItemImagesForCreate(initialized, files, primaryImageIndex);
+      })
+    );
 
-  res.status(201).json({
-    success: true,
-    data: campaign,
-    message: `${campaign.campaignType} created successfully`
-  });
-}));
+    if (coverFile) {
+      const processedCover = await processVotingImageFile(coverFile);
+      payload.media.coverImage = processedCover.url;
+      payload.media.coverImagePublicId = processedCover.filename;
+    }
+
+    const campaign = new VotingCampaign(payload);
+    await campaign.save();
+
+    const data = campaign.toObject();
+    data.itemsWithImages = campaign.itemsWithImages;
+
+    res.status(201).json({
+      success: true,
+      data,
+      message: `${campaign.campaignType} created successfully`,
+    });
+  })
+);
 
 // Upload cover image for campaign
 router.post('/:id/upload-cover', validateClient, uploadCover, processImage, wrapRoute(async (req, res) => {
@@ -408,26 +633,18 @@ router.post('/:id/items/:itemId/images', validateClient, uploadItemImage, proces
     });
   }
 
-  // Prepare image data
-  const imageData = {
-    url: req.processedImage.url,
-    thumbnail: req.processedImage.thumbnail,
-    medium: req.processedImage.url,
-    original: req.processedImage.original,
-    publicId: req.processedImage.filename,
-    caption: req.body.caption || '',
-    isPrimary: item.images.length === 0, // First image is primary by default
-    order: item.images.length,
-    dimensions: {
-      width: req.processedImage.width || 0,
-      height: req.processedImage.height || 0
-    },
-    fileSize: req.processedImage.size,
-    format: req.processedImage.format
-  };
+  const imageData = imageDataFromProcessed(
+    req.processedImage,
+    item.images.length,
+    item.images.length === 0,
+    req.body.caption || ''
+  );
 
-  // Add image to item
   await campaign.addItemImage(item.itemId || item._id, imageData);
+
+  if (req.body.setAsPrimary === 'true' || req.body.setAsPrimary === true) {
+    await campaign.setPrimaryImage(item.itemId || item._id, imageData.url);
+  }
 
   // Get updated item with images
   const updatedItem = campaign.getItemWithImages(item.itemId || item._id);
@@ -964,42 +1181,46 @@ router.patch('/:id/status', validateClient, wrapRoute(async (req, res) => {
   });
 }));
 
-// Add item to campaign
-router.post('/:id/items', validateClient, wrapRoute(async (req, res) => {
+// Add item to campaign (JSON or multipart with item images)
+router.post('/:id/items', validateClient, uploadItemImagesBulk, wrapRoute(async (req, res) => {
   const campaign = await VotingCampaign.findOne({
     _id: req.params.id,
-    clientId: req.clientId
+    clientId: req.clientId,
+    isDeleted: false,
   });
 
   if (!campaign) {
     return res.status(404).json({
       success: false,
-      message: 'Voting campaign not found'
+      message: 'Voting campaign not found',
     });
   }
 
-  const newItem = {
-    itemId: 'ITEM-' + Date.now() + '-' + Math.random().toString(36).substr(2, 8).toUpperCase(),
-    ...req.body,
-    votesCount: 0,
-    images: [],
-    mainImage: null,
-    thumbnail: null,
-    displaySettings: {
-      imageFit: 'cover',
-      showCaption: false,
-      imageAspectRatio: '1:1',
-      ...req.body.displaySettings
+  let itemBody = req.body;
+  if (typeof req.body.item === 'string') {
+    try {
+      itemBody = JSON.parse(req.body.item);
+    } catch (_e) {
+      return res.status(400).json({ success: false, error: 'Invalid JSON in "item" field' });
     }
-  };
+  }
+
+  const newItem = initializeCampaignItem({
+    itemId: 'ITEM-' + Date.now() + '-' + Math.random().toString(36).substr(2, 8).toUpperCase(),
+    ...itemBody,
+    votesCount: 0,
+  });
+
+  const primaryImageIndex = getPrimaryImageIndexForItem(req.body, 0, itemBody);
+  await processItemImagesForCreate(newItem, req.files || [], primaryImageIndex);
 
   campaign.items.push(newItem);
   await campaign.save();
 
   res.status(201).json({
     success: true,
-    data: newItem,
-    message: 'Item added successfully'
+    data: campaign.getItemWithImages(newItem.itemId),
+    message: 'Item added successfully',
   });
 }));
 
