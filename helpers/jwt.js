@@ -13,6 +13,7 @@ const authJwt = () => {
     path: [
      { url: /\/api\/v1\/emailsub(.*)/, methods: ['POST', 'OPTIONS'] },
      { url: /\/public\/uploads(.*)/, methods: ['GET', 'OPTIONS'] },
+     { url: /^\/uploads(\/.*)?$/, methods: ['GET', 'HEAD', 'OPTIONS'] },
      // Customer endpoints use route-level token validation that supports secret fallback.
      // Exempt POST here so express-jwt does not fail early with "invalid signature".
      { url: /\/api\/v1\/customer(.*)/, methods: ['GET','POST', 'OPTIONS'] },
@@ -37,6 +38,7 @@ const authJwt = () => {
      { url: /\/api\/v1\/productsales(.*)/, methods: ['GET'] },
      { url: /\/api\/v1\/resource(.*)/, methods: ['GET'] },
      { url: /\/api\/v1\/campaigns(.*)/, methods: ['GET','POST'] },
+     { url: new RegExp(`^${apiEsc}/votingcampaigns/public`), methods: ['GET', 'OPTIONS'] },
      
      // IMPORTANT: Add this regex for tracking events
      { url: new RegExp(`^${apiEsc}/events(/.*)?`), methods: ['POST', 'OPTIONS'] },

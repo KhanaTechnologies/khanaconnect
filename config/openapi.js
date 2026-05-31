@@ -1364,6 +1364,27 @@ function buildPaths(a) {
       put: op('put', 'Admin', 'Update client permissions', B, { parameters: [paramId] }),
     },
 
+    [`${a}/admin/site-analytics/clients`]: {
+      get: op('get', 'Admin site analytics', 'Client directory (admin JWT + DB role)', B),
+    },
+    [`${a}/admin/site-analytics/site-activity`]: {
+      get: op('get', 'Admin site analytics', 'Site activity time series (TrackingEvent)', B),
+    },
+    [`${a}/admin/site-analytics/site-activity/compare`]: {
+      get: op('get', 'Admin site analytics', 'Site activity + overlapping ad periods', B),
+    },
+    [`${a}/admin/site-analytics/site-activity/export`]: {
+      get: op('get', 'Admin site analytics', 'Download site activity (CSV or JSON)', B),
+    },
+    [`${a}/admin/site-analytics/ad-periods`]: {
+      get: op('get', 'Admin site analytics', 'List saved ad windows', B),
+      post: op('post', 'Admin site analytics', 'Save ad window for comparisons', B),
+    },
+    [`${a}/admin/site-analytics/ad-periods/{id}`]: {
+      put: op('put', 'Admin site analytics', 'Update ad window', B, { parameters: [paramId] }),
+      delete: op('delete', 'Admin site analytics', 'Remove ad window', B, { parameters: [paramId] }),
+    },
+
     ...buildClientPaths(a, B, P, paramClientId),
 
     [`${a}/customer`]: {
@@ -1971,7 +1992,7 @@ function spec() {
       {
         name: 'Admin',
         description:
-          'Cross-tenant administration (`/admin`): client list, nested tokens, per-client counts, permission overrides.',
+          'Cross-tenant administration (`/admin`): client list, nested tokens, per-client counts, permission overrides. **`/admin/site-analytics`** (separate router): requires **admin** role on the Client record; site-wide / per-tenant **TrackingEvent** aggregates, CSV/JSON export, and saved **ad activity periods** for before/after comparisons.',
       },
     ],
     components: {

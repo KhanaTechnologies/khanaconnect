@@ -226,11 +226,17 @@ router.post('/batch',
     
     console.log(`📊 Received batch of ${events.length} events from client ${req.trackingInfo.clientID}`);
 
-    // Generate event hashes for deduplication
-    const eventsWithHashes = events.map(event => ({
-      ...event,
-      eventHash: TrackingEvent.generateEventHash(event)
-    }));
+    // Normalize clientId -> clientID and timestamps so events persist reliably
+    const eventsWithHashes = events.map((event) => {
+      const clientID = event.clientID || event.clientId;
+      const timestamp = event.timestamp ? new Date(event.timestamp) : new Date();
+      const normalized = { ...event, clientID, timestamp };
+      delete normalized.clientId;
+      return {
+        ...normalized,
+        eventHash: TrackingEvent.generateEventHash(normalized),
+      };
+    });
 
     // Check for duplicates by hash
     const existingHashes = await TrackingEvent.find(

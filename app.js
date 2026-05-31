@@ -192,20 +192,24 @@ app.use((req, res, next) => {
 
 app.use(failureEmail.captureResponse);
 
-// Static Files
+// Static Files — shared headers for public assets embedded on external storefronts
+function setPublicUploadHeaders(res) {
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('Cache-Control', 'public, max-age=86400');
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Cross-Origin-Resource-Policy', 'cross-origin');
+}
+
 app.use("/public/uploads", express.static(path.join(__dirname, "public/uploads"), {
   setHeaders: (res) => {
-    res.set('X-Content-Type-Options', 'nosniff');
+    setPublicUploadHeaders(res);
     res.set('X-Frame-Options', 'DENY');
   }
 }));
 
 // Campaign & voting images (written to /uploads by multer routes)
 app.use("/uploads", express.static(path.join(__dirname, "uploads"), {
-  setHeaders: (res) => {
-    res.set('X-Content-Type-Options', 'nosniff');
-    res.set('Cache-Control', 'public, max-age=86400');
-  }
+  setHeaders: setPublicUploadHeaders,
 }));
 
 // OpenAPI / Swagger (export spec at /openapi.json?export=1)
@@ -266,6 +270,7 @@ var bookingsRouter = require('./routes/booking');
 var staffRouter = require('./routes/staff');
 var serviceRouter = require('./routes/services');
 var adminRouter = require('./routes/admin');
+var adminSiteAnalyticsRouter = require('./routes/adminSiteAnalytics');
 var resourcesRouter = require('./routes/resources');
 var PreorderPledgeRouter = require('./routes/preorderPledges');
 var campaignsRouter = require('./routes/campaigns');
@@ -299,6 +304,7 @@ app.use(`${api}/bookings`, bookingsRouter);
 app.use(`${api}/staff`, staffRouter);
 app.use(`${api}/services`, serviceRouter);
 app.use(`${api}/admin`, adminRouter);
+app.use(`${api}/admin/site-analytics`, adminSiteAnalyticsRouter);
 app.use(`${api}/resources`, resourcesRouter); 
 app.use(`${api}/analytics`, analyticsRoutes);
 app.use(`${api}/preorderpledge`, PreorderPledgeRouter);

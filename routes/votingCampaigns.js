@@ -6,20 +6,23 @@ const mongoose = require('mongoose');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const sharp = require('sharp');
 const VotingCampaign = require('../models/VotingCampaign');
 const Vote = require('../models/Vote');
 const Customer = require('../models/customer');
 const { body, validationResult } = require('express-validator');
 const { wrapRoute } = require('../helpers/failureEmail');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
+const {
+  processVotingImageFile,
+  unlinkLocalVotingImageByUrl,
+  resolveLegacyVotingAssetUrl,
+} = require('../helpers/votingImageStorage');
 
-// Absolute paths so uploads work regardless of process cwd
+// Absolute paths so multer temp uploads work regardless of process cwd
 const VOTING_UPLOAD_ROOT = path.join(__dirname, '..', 'uploads', 'voting');
 const VOTING_TEMP_DIR = path.join(VOTING_UPLOAD_ROOT, 'temp');
-const VOTING_ITEMS_DIR = path.join(VOTING_UPLOAD_ROOT, 'items');
 
-[VOTING_UPLOAD_ROOT, VOTING_TEMP_DIR, VOTING_ITEMS_DIR].forEach((dir) => {
+[VOTING_UPLOAD_ROOT, VOTING_TEMP_DIR].forEach((dir) => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -112,10 +115,6 @@ function acceptBulkUpload(fieldNames, maxCount = 10) {
   };
 }
 
-function votingItemUrlFromBasename(jpgBase) {
-  return `/uploads/voting/items/${jpgBase}`;
-}
-
 function unlinkIfExists(filePath) {
   if (filePath && fs.existsSync(filePath)) {
     fs.unlinkSync(filePath);
@@ -124,57 +123,14 @@ function unlinkIfExists(filePath) {
 
 function unlinkProcessedImage(processedImage) {
   if (!processedImage) return;
-  unlinkVotingImageByUrl(processedImage.url);
-}
-
-function unlinkVotingImageByUrl(imageUrl) {
-  if (!imageUrl) return;
-  const base = path.basename(imageUrl);
-  unlinkIfExists(path.join(VOTING_ITEMS_DIR, base));
-  unlinkIfExists(path.join(VOTING_ITEMS_DIR, base.replace(/^medium-/, 'thumb-')));
-  unlinkIfExists(path.join(VOTING_ITEMS_DIR, base.replace(/^medium-/, 'orig-')));
-}
-
-async function processVotingImageFile(file) {
-  const filePath = file.path;
-  const fileName = file.filename;
-  const jpgBase = fileName.replace(/\.[^/.]+$/, '.jpg');
-
-  const metadata = await sharp(filePath).metadata();
-
-  await sharp(filePath)
-    .resize(300, 300, { fit: 'cover', position: 'centre' })
-    .jpeg({ quality: 80 })
-    .toFile(path.join(VOTING_ITEMS_DIR, 'thumb-' + jpgBase));
-
-  await sharp(filePath)
-    .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
-    .jpeg({ quality: 85 })
-    .toFile(path.join(VOTING_ITEMS_DIR, 'medium-' + jpgBase));
-
-  await sharp(filePath)
-    .jpeg({ quality: 90 })
-    .toFile(path.join(VOTING_ITEMS_DIR, 'orig-' + jpgBase));
-
-  unlinkIfExists(filePath);
-
-  return {
-    url: votingItemUrlFromBasename('medium-' + jpgBase),
-    thumbnail: votingItemUrlFromBasename('thumb-' + jpgBase),
-    original: votingItemUrlFromBasename('orig-' + jpgBase),
-    filename: fileName,
-    width: metadata.width,
-    height: metadata.height,
-    format: 'jpeg',
-    size: file.size,
-  };
+  unlinkLocalVotingImageByUrl(processedImage.url);
 }
 
 const processImage = async (req, res, next) => {
   if (!req.file) return next();
 
   try {
-    req.processedImage = await processVotingImageFile(req.file);
+    req.processedImage = await processVotingImageFile(req.file, req);
     return next();
   } catch (error) {
     console.error('Image processing error:', error);
@@ -364,12 +320,12 @@ function normalizeExistingItemImages(images) {
     }));
 }
 
-async function processItemImagesForCreate(item, files, primaryImageIndex = 0) {
+async function processItemImagesForCreate(item, files, primaryImageIndex = 0, req) {
   const existing = normalizeExistingItemImages(item.images);
   const imageDataList = [...existing];
 
   for (const file of files || []) {
-    const processed = await processVotingImageFile(file);
+    const processed = await processVotingImageFile(file, req);
     imageDataList.push(
       imageDataFromProcessed(processed, imageDataList.length, false, '')
     );
@@ -507,12 +463,12 @@ router.post(
         const initialized = initializeCampaignItem(item);
         const files = itemsByIndex.get(index) || [];
         const primaryImageIndex = getPrimaryImageIndexForItem(req.body, index, item);
-        return processItemImagesForCreate(initialized, files, primaryImageIndex);
+        return processItemImagesForCreate(initialized, files, primaryImageIndex, req);
       })
     );
 
     if (coverFile) {
-      const processedCover = await processVotingImageFile(coverFile);
+      const processedCover = await processVotingImageFile(coverFile, req);
       payload.media.coverImage = processedCover.url;
       payload.media.coverImagePublicId = processedCover.filename;
     }
@@ -523,11 +479,11 @@ router.post(
     const data = campaign.toObject();
     data.itemsWithImages = campaign.itemsWithImages;
 
-    res.status(201).json({
-      success: true,
-      data,
-      message: `${campaign.campaignType} created successfully`,
-    });
+  res.status(201).json({
+    success: true,
+    data,
+    message: `${campaign.campaignType} created successfully`,
+  });
   })
 );
 
@@ -563,10 +519,7 @@ router.post('/:id/upload-cover', validateClient, uploadCover, processImage, wrap
 
   // Delete old cover image if exists
   if (campaign.media && campaign.media.coverImage) {
-    const oldBase = path.basename(campaign.media.coverImage);
-    unlinkIfExists(path.join(VOTING_ITEMS_DIR, oldBase));
-    unlinkIfExists(path.join(VOTING_ITEMS_DIR, oldBase.replace(/^medium-/, 'thumb-')));
-    unlinkIfExists(path.join(VOTING_ITEMS_DIR, oldBase.replace(/^medium-/, 'orig-')));
+    unlinkLocalVotingImageByUrl(campaign.media.coverImage);
   }
 
   if (!campaign.media) {
@@ -714,7 +667,7 @@ router.post('/:id/items/:itemId/images/bulk', validateClient, uploadItemImagesBu
   for (let i = 0; i < req.files.length; i++) {
     const file = req.files[i];
     try {
-      const processed = await processVotingImageFile(file);
+      const processed = await processVotingImageFile(file, req);
 
       const imageData = {
         url: processed.url,
@@ -888,7 +841,7 @@ router.delete('/:id/items/:itemId/images', validateClient, wrapRoute(async (req,
     });
   }
 
-  unlinkVotingImageByUrl(imageUrl);
+  unlinkLocalVotingImageByUrl(imageUrl);
 
   await campaign.removeItemImage(item.itemId || item._id, imageUrl);
 
@@ -1212,7 +1165,7 @@ router.post('/:id/items', validateClient, uploadItemImagesBulk, wrapRoute(async 
   });
 
   const primaryImageIndex = getPrimaryImageIndexForItem(req.body, 0, itemBody);
-  await processItemImagesForCreate(newItem, req.files || [], primaryImageIndex);
+  await processItemImagesForCreate(newItem, req.files || [], primaryImageIndex, req);
 
   campaign.items.push(newItem);
   await campaign.save();
@@ -1296,7 +1249,7 @@ router.delete('/:id/items/:itemId', validateClient, wrapRoute(async (req, res) =
 
   // Delete all images for this item
   if (item.images && item.images.length > 0) {
-    item.images.forEach((image) => unlinkVotingImageByUrl(image.url));
+    item.images.forEach((image) => unlinkLocalVotingImageByUrl(image.url));
   }
 
   campaign.items = campaign.items.filter(i => 
@@ -1327,7 +1280,14 @@ router.get('/:id/results', validateClient, wrapRoute(async (req, res) => {
   }
 
   const results = campaign.getResults();
-  
+  if (Array.isArray(results.items)) {
+    results.items = results.items.map((item) => ({
+      ...item,
+      displayImage: resolveLegacyVotingAssetUrl(item.displayImage, req),
+      thumbnail: resolveLegacyVotingAssetUrl(item.thumbnail, req),
+      mainImage: resolveLegacyVotingAssetUrl(item.mainImage, req),
+    }));
+  }
   // Get detailed vote stats
   const voteStats = await Vote.getCampaignStats(campaign._id);
 
@@ -1515,13 +1475,13 @@ router.get('/public/:id', wrapRoute(async (req, res) => {
       title: item.title,
       description: item.description,
       images: item.images.map(img => ({
-        url: img.url,
-        thumbnail: img.thumbnail,
+        url: resolveLegacyVotingAssetUrl(img.url, req),
+        thumbnail: resolveLegacyVotingAssetUrl(img.thumbnail, req),
         caption: img.caption,
         isPrimary: img.isPrimary
       })),
-      mainImage: item.mainImage,
-      thumbnail: item.thumbnail,
+      mainImage: resolveLegacyVotingAssetUrl(item.mainImage, req),
+      thumbnail: resolveLegacyVotingAssetUrl(item.thumbnail, req),
       hasImages: item.hasImages,
       icon: item.icon,
       votesCount: campaign.votingRules.resultsVisibility === 'public' ? item.votesCount : null,
@@ -1535,8 +1495,13 @@ router.get('/public/:id', wrapRoute(async (req, res) => {
     hoursRemaining: campaign.hoursRemaining,
     totalVotes: campaign.votingRules.resultsVisibility === 'public' ? campaign.totalVotes : null,
     media: {
-      coverImage: campaign.media?.coverImage,
-      gallery: campaign.media?.gallery
+      coverImage: resolveLegacyVotingAssetUrl(campaign.media?.coverImage, req),
+      gallery: Array.isArray(campaign.media?.gallery)
+        ? campaign.media.gallery.map((entry) => ({
+            ...entry,
+            url: resolveLegacyVotingAssetUrl(entry.url, req),
+          }))
+        : campaign.media?.gallery
     },
     settings: {
       requireLogin: campaign.settings.requireLogin,
@@ -1554,7 +1519,7 @@ router.get('/public/:id', wrapRoute(async (req, res) => {
 
   res.json({
     success: true,
-    data: publicData
+    data: publicData,
   });
 }));
 
@@ -1756,7 +1721,7 @@ router.get('/public/:id/my-vote', validateCustomer, wrapRoute(async (req, res) =
       votedItem = {
         itemId: item.itemId || item._id,
         title: item.title,
-        image: item.mainImage || item.thumbnail,
+        image: resolveLegacyVotingAssetUrl(item.mainImage || item.thumbnail, req),
         description: item.description,
         hasImages: item.images && item.images.length > 0
       };
