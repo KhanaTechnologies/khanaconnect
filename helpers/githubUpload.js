@@ -1,3 +1,4 @@
+const path = require('path');
 const { Octokit } = require('@octokit/rest');
 
 function githubUploadConfigured() {
