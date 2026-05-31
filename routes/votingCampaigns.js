@@ -4,8 +4,6 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
 const VotingCampaign = require('../models/VotingCampaign');
 const Vote = require('../models/Vote');
 const Customer = require('../models/customer');
@@ -16,46 +14,19 @@ const {
   processVotingImageFile,
   unlinkLocalVotingImageByUrl,
   resolveLegacyVotingAssetUrl,
+  FILE_TYPE_MAP,
 } = require('../helpers/votingImageStorage');
 
-// Absolute paths so multer temp uploads work regardless of process cwd
-const VOTING_UPLOAD_ROOT = path.join(__dirname, '..', 'uploads', 'voting');
-const VOTING_TEMP_DIR = path.join(VOTING_UPLOAD_ROOT, 'temp');
-
-[VOTING_UPLOAD_ROOT, VOTING_TEMP_DIR].forEach((dir) => {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-});
-
-const IMAGE_EXT = /\.(jpe?g|png|gif|webp|heic|heif|avif)$/i;
-const IMAGE_MIME = /^image\/(jpeg|png|gif|webp|heic|heif|avif|svg\+xml|pjpeg)$/i;
-
-const storage = multer.diskStorage({
-  destination(_req, _file, cb) {
-    cb(null, VOTING_TEMP_DIR);
-  },
-  filename(_req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const ext = path.extname(file.originalname) || '.jpg';
-    cb(null, 'vote-' + uniqueSuffix + ext);
-  },
-});
-
-const fileFilter = (req, file, cb) => {
-  const name = file.originalname || '';
-  const mime = file.mimetype || '';
-  if (IMAGE_EXT.test(name) || IMAGE_MIME.test(mime)) {
-    return cb(null, true);
-  }
-  req.fileValidationError = 'Only image files are allowed (jpg, png, gif, webp)';
-  return cb(new Error('Only image files are allowed'), false);
-};
-
 const upload = multer({
-  storage,
-  limits: { fileSize: 10 * 1024 * 1024 },
-  fileFilter,
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!FILE_TYPE_MAP[file.mimetype]) {
+      req.fileValidationError = 'Invalid file type. Use JPEG or PNG.';
+      return cb(new Error('Invalid file type'), false);
+    }
+    cb(null, true);
+  },
 });
 
 function respondMulterError(err, req, res, next) {
@@ -115,12 +86,6 @@ function acceptBulkUpload(fieldNames, maxCount = 10) {
   };
 }
 
-function unlinkIfExists(filePath) {
-  if (filePath && fs.existsSync(filePath)) {
-    fs.unlinkSync(filePath);
-  }
-}
-
 function unlinkProcessedImage(processedImage) {
   if (!processedImage) return;
   unlinkLocalVotingImageByUrl(processedImage.url);
@@ -134,14 +99,16 @@ const processImage = async (req, res, next) => {
     return next();
   } catch (error) {
     console.error('Image processing error:', error);
-    unlinkIfExists(req.file.path);
-    return next(error);
+    return res.status(400).json({
+      success: false,
+      error: error.message || 'Image upload failed',
+    });
   }
 };
 
-const uploadCover = acceptSingleUpload(['coverImage', 'image', 'file']);
-const uploadItemImage = acceptSingleUpload(['image', 'file', 'photo']);
-const uploadItemImagesBulk = acceptBulkUpload(['images', 'files'], 10);
+const uploadCover = acceptSingleUpload(['coverImage', 'cover', 'image', 'file', 'photo']);
+const uploadItemImage = acceptSingleUpload(['image', 'images', 'file', 'photo']);
+const uploadItemImagesBulk = acceptBulkUpload(['images', 'files', 'image'], 10);
 
 const COVER_UPLOAD_FIELDS = new Set(['coverImage', 'cover', 'campaignCover']);
 const ITEM_IMAGE_FIELD_PATTERNS = [
@@ -635,10 +602,6 @@ router.post('/:id/items/:itemId/images/bulk', validateClient, uploadItemImagesBu
   });
 
   if (!campaign) {
-    // Clean up uploaded files
-    req.files.forEach(file => {
-      if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
-    });
     return res.status(404).json({
       success: false,
       message: 'Campaign not found'
@@ -650,10 +613,6 @@ router.post('/:id/items/:itemId/images/bulk', validateClient, uploadItemImagesBu
   );
   
   if (!item) {
-    // Clean up uploaded files
-    req.files.forEach(file => {
-      if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
-    });
     return res.status(404).json({
       success: false,
       message: 'Item not found'
@@ -690,7 +649,6 @@ router.post('/:id/items/:itemId/images/bulk', validateClient, uploadItemImagesBu
       uploadedImages.push(imageData);
     } catch (error) {
       errors.push({ file: file.originalname, error: error.message });
-      unlinkIfExists(file.path);
     }
   }
 

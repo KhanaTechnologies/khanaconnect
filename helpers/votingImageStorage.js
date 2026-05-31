@@ -1,10 +1,14 @@
 const fs = require('fs');
 const path = require('path');
-const sharp = require('sharp');
 const { githubUploadConfigured, uploadBufferToGitHub } = require('./githubUpload');
 
-const VOTING_GITHUB_PREFIX = 'public/uploads/voting/items';
-const VOTING_PUBLIC_DIR = path.join(__dirname, '..', 'public', 'uploads', 'voting', 'items');
+const FILE_TYPE_MAP = {
+  'image/png': 'png',
+  'image/jpeg': 'jpeg',
+  'image/jpg': 'jpg',
+};
+
+const PUBLIC_UPLOADS_DIR = path.join(__dirname, '..', 'public', 'uploads');
 const VOTING_LEGACY_DIR = path.join(__dirname, '..', 'uploads', 'voting', 'items');
 
 function requestOrigin(req) {
@@ -21,58 +25,49 @@ function publicPathUrl(relativePath, req) {
   return origin ? `${origin}${rel}` : rel;
 }
 
-async function storeProcessedVariant(buffer, fileName, req) {
+function assertSupportedImage(file) {
+  const mime = file.mimetype || '';
+  if (!FILE_TYPE_MAP[mime]) {
+    throw new Error('Invalid file type. Use JPEG or PNG.');
+  }
+  if (!file.buffer || !file.buffer.length) {
+    throw new Error('No image data received');
+  }
+  return FILE_TYPE_MAP[mime];
+}
+
+function buildFileName(ext) {
+  return `${Date.now()}-${Math.random().toString(36).substring(2)}.${ext}`;
+}
+
+async function storeImageBuffer(buffer, fileName, req) {
+  const repoPath = `public/uploads/${fileName}`;
+
   if (githubUploadConfigured()) {
-    return uploadBufferToGitHub(buffer, `${VOTING_GITHUB_PREFIX}/${fileName}`);
+    return uploadBufferToGitHub(buffer, repoPath);
   }
 
-  fs.mkdirSync(VOTING_PUBLIC_DIR, { recursive: true });
-  fs.writeFileSync(path.join(VOTING_PUBLIC_DIR, fileName), buffer);
-  return publicPathUrl(`/public/uploads/voting/items/${fileName}`, req);
+  fs.mkdirSync(PUBLIC_UPLOADS_DIR, { recursive: true });
+  fs.writeFileSync(path.join(PUBLIC_UPLOADS_DIR, fileName), buffer);
+  return publicPathUrl(`/public/uploads/${fileName}`, req);
 }
 
 /**
- * Process an uploaded temp file into thumb/medium/orig variants.
- * Stores like product images: full https URL on GitHub when configured,
- * otherwise full URL to /public/uploads/voting/items/ on this host.
+ * Upload one voting image the same way as products: memory buffer → public/uploads/ on GitHub.
  */
 async function processVotingImageFile(file, req) {
-  const filePath = file.path;
-  const fileName = file.filename;
-  const jpgBase = fileName.replace(/\.[^/.]+$/, '.jpg');
-
-  const metadata = await sharp(filePath).metadata();
-
-  const [thumbBuf, mediumBuf, origBuf] = await Promise.all([
-    sharp(filePath)
-      .resize(300, 300, { fit: 'cover', position: 'centre' })
-      .jpeg({ quality: 80 })
-      .toBuffer(),
-    sharp(filePath)
-      .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 85 })
-      .toBuffer(),
-    sharp(filePath).jpeg({ quality: 90 }).toBuffer(),
-  ]);
-
-  if (fs.existsSync(filePath)) {
-    fs.unlinkSync(filePath);
-  }
-
-  const [thumbnail, url, original] = await Promise.all([
-    storeProcessedVariant(thumbBuf, `thumb-${jpgBase}`, req),
-    storeProcessedVariant(mediumBuf, `medium-${jpgBase}`, req),
-    storeProcessedVariant(origBuf, `orig-${jpgBase}`, req),
-  ]);
+  const ext = assertSupportedImage(file);
+  const fileName = buildFileName(ext);
+  const url = await storeImageBuffer(file.buffer, fileName, req);
 
   return {
     url,
-    thumbnail,
-    original,
+    thumbnail: url,
+    original: url,
     filename: fileName,
-    width: metadata.width,
-    height: metadata.height,
-    format: 'jpeg',
+    width: 0,
+    height: 0,
+    format: ext,
     size: file.size,
   };
 }
@@ -85,17 +80,13 @@ function isRemoteAssetUrl(imageUrl) {
 function unlinkLocalVotingImageByUrl(imageUrl) {
   if (!imageUrl || isRemoteAssetUrl(imageUrl)) return;
   const base = path.basename(String(imageUrl));
-  for (const dir of [VOTING_PUBLIC_DIR, VOTING_LEGACY_DIR]) {
-    const medium = path.join(dir, base);
-    if (fs.existsSync(medium)) fs.unlinkSync(medium);
-    const thumb = path.join(dir, base.replace(/^medium-/, 'thumb-'));
-    if (fs.existsSync(thumb)) fs.unlinkSync(thumb);
-    const orig = path.join(dir, base.replace(/^medium-/, 'orig-'));
-    if (fs.existsSync(orig)) fs.unlinkSync(orig);
+  for (const dir of [PUBLIC_UPLOADS_DIR, VOTING_LEGACY_DIR]) {
+    const filePath = path.join(dir, base);
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
   }
 }
 
-/** Prefix legacy relative /uploads/... paths when reading old records (no env var). */
+/** Prefix legacy relative paths when reading old records. */
 function resolveLegacyVotingAssetUrl(url, req) {
   if (url == null || url === '') return url;
   const s = String(url).trim();
@@ -108,4 +99,5 @@ module.exports = {
   unlinkLocalVotingImageByUrl,
   resolveLegacyVotingAssetUrl,
   requestOrigin,
+  FILE_TYPE_MAP,
 };
