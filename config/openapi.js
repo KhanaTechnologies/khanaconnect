@@ -1732,6 +1732,22 @@ function buildPaths(a) {
                     description:
                       'Alternative to `promoPayload`: JSON string of `[{ "imageUrl", "linkUrl?", "alt?" }, ...]` (same as `promoPayload.blocks`).',
                   },
+                  templateId: {
+                    type: 'string',
+                    enum: ['promo_stack', 'hero_cta', 'announcement', 'product_spotlight', 'blank'],
+                    description:
+                      'Builder template id (metadata). When `html` is sent from the dashboard, it is validated and used as-is.',
+                  },
+                  builderPayload: {
+                    type: 'string',
+                    description:
+                      'Optional JSON string of field values used by the builder (stored for reference; also used as fallback promo payload when templateId is promo_stack and html is omitted).',
+                  },
+                  draftId: {
+                    type: 'string',
+                    description:
+                      'Optional saved draft Mongo id. Loads subject/html/text when those fields are omitted in the send request.',
+                  },
                 },
               },
             },
@@ -1743,6 +1759,109 @@ function buildPaths(a) {
           400: J.badRequest,
         },
       },
+    },
+    [`${a}/email/newsletter/templates`]: {
+      get: op('get', 'Email', 'List newsletter builder templates (schemas)', B),
+    },
+    [`${a}/email/newsletter/templates/{templateId}`]: {
+      get: op('get', 'Email', 'Get newsletter template incl. htmlStructure starter', B, {
+        parameters: [
+          {
+            name: 'templateId',
+            in: 'path',
+            required: true,
+            schema: {
+              type: 'string',
+              enum: ['promo_stack', 'hero_cta', 'announcement', 'product_spotlight', 'blank'],
+            },
+          },
+        ],
+      }),
+    },
+    [`${a}/email/newsletter/images`]: {
+      post: {
+        tags: ['Email'],
+        summary: 'Upload newsletter builder image',
+        description:
+          'Multipart image for use in builder HTML (`image`, `file`, or `photo` field). Uploads to GitHub `public/uploads/` when configured, otherwise serves from `/public/uploads/`. Returns full URL for `<img src>`.',
+        security: B,
+        requestBody: {
+          required: true,
+          content: {
+            'multipart/form-data': {
+              schema: {
+                type: 'object',
+                properties: {
+                  image: { type: 'string', format: 'binary' },
+                  file: { type: 'string', format: 'binary' },
+                  photo: { type: 'string', format: 'binary' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          201: jsonResponse('NewsletterImageUploadResponse', 'Image URL for builder'),
+          400: J.badRequest,
+        },
+      },
+    },
+    [`${a}/email/newsletter/preview`]: {
+      post: {
+        tags: ['Email'],
+        summary: 'Validate builder HTML before send',
+        description:
+          'Dashboard sends composed HTML; server strips scripts/event handlers and returns sanitized html + plain-text fallback.',
+        security: B,
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/NewsletterPreviewBody' },
+            },
+          },
+        },
+        responses: {
+          200: jsonResponse('NewsletterPreviewResponse', 'Sanitized preview'),
+          400: J.badRequest,
+        },
+      },
+    },
+    [`${a}/email/newsletter/drafts`]: {
+      get: op('get', 'Email', 'List newsletter drafts', B),
+      post: {
+        tags: ['Email'],
+        summary: 'Save newsletter draft',
+        security: B,
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/NewsletterDraftBody' },
+            },
+          },
+        },
+        responses: { 201: jsonResponse('NewsletterDraftResponse', 'Draft saved'), 400: J.badRequest },
+      },
+    },
+    [`${a}/email/newsletter/drafts/{id}`]: {
+      get: op('get', 'Email', 'Get newsletter draft', B, { parameters: [paramId] }),
+      put: {
+        tags: ['Email'],
+        summary: 'Update newsletter draft',
+        security: B,
+        parameters: [paramId],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/NewsletterDraftBody' },
+            },
+          },
+        },
+        responses: { 200: jsonResponse('NewsletterDraftResponse', 'Draft updated'), 400: J.badRequest, 404: J.notFound },
+      },
+      delete: op('delete', 'Email', 'Delete newsletter draft', B, { parameters: [paramId] }),
     },
     [`${a}/email/newsletter/subscribers`]: { get: op('get', 'Email', 'List newsletter subscribers', B) },
     [`${a}/email/newsletter/subscribers/bulk`]: { post: op('post', 'Email', 'Bulk subscriber action', B) },
@@ -1964,7 +2083,7 @@ function spec() {
       {
         name: 'Email',
         description:
-          'IMAP mailbox (`/email`), send/reply/forward, newsletters (**multipart** `POST .../email/newsletter/send` — optional **promoTemplate one** + `promoPayload` / `promoBlocks` for stacked sales layouts), open tracking, public subscribe/unsubscribe.',
+          'IMAP mailbox (`/email`), send/reply/forward, **newsletter builder** (`GET .../newsletter/templates`, `POST .../newsletter/images`, `POST .../newsletter/preview`, draft CRUD), newsletters (**multipart** `POST .../email/newsletter/send` — send dashboard-composed **`html`** or legacy **promoTemplate one** + `promoPayload`), open tracking, public subscribe/unsubscribe.',
       },
       { name: 'Payments', description: 'PayFast ITN (`/payments/payfast/itn`) and related gateway hooks.' },
       {
@@ -2105,6 +2224,8 @@ function spec() {
                     'Rough duration based on `NEWSLETTER_EMAIL_DELAY_MS` between recipients and `NEWSLETTER_BATCH_DELAY_MS` between batches.',
                 },
                 enableTracking: { type: 'boolean' },
+                templateId: { type: 'string', nullable: true },
+                draftId: { type: 'string', nullable: true },
                 rateLimit: {
                   type: 'object',
                   properties: {
@@ -2114,6 +2235,66 @@ function spec() {
                 },
               },
             },
+          },
+        },
+        NewsletterPreviewBody: {
+          type: 'object',
+          required: ['html'],
+          properties: {
+            html: { type: 'string', description: 'Full HTML composed by the dashboard builder.' },
+            subject: { type: 'string' },
+            text: { type: 'string', description: 'Optional plain-text override.' },
+            templateId: { type: 'string' },
+            payload: { type: 'object', description: 'Optional field values JSON for reference.' },
+          },
+        },
+        NewsletterPreviewResponse: {
+          type: 'object',
+          properties: {
+            ok: { type: 'boolean', example: true },
+            data: {
+              type: 'object',
+              properties: {
+                subject: { type: 'string' },
+                html: { type: 'string' },
+                text: { type: 'string' },
+                templateId: { type: 'string', nullable: true },
+                payload: { type: 'object' },
+                warnings: { type: 'array', items: { type: 'string' } },
+              },
+            },
+          },
+        },
+        NewsletterImageUploadResponse: {
+          type: 'object',
+          properties: {
+            ok: { type: 'boolean', example: true },
+            message: { type: 'string' },
+            data: {
+              type: 'object',
+              properties: {
+                url: { type: 'string', description: 'Full HTTPS URL for img src' },
+                fileName: { type: 'string' },
+              },
+            },
+          },
+        },
+        NewsletterDraftBody: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            templateId: { type: 'string' },
+            subject: { type: 'string' },
+            html: { type: 'string' },
+            text: { type: 'string' },
+            payload: { type: 'object' },
+          },
+        },
+        NewsletterDraftResponse: {
+          type: 'object',
+          properties: {
+            ok: { type: 'boolean', example: true },
+            data: { type: 'object' },
           },
         },
         CategoryDocument: {

@@ -656,8 +656,84 @@ router.get('/campaign/:campaignId/stats', validateClient, wrapRoute(async (req, 
   });
 }));
 
-// Send email to all signups (admin only)
-router.post('/campaign/:campaignId/notify', validateClient, requireAdmin, wrapRoute(async (req, res) => {
+// Send go-live blast to campaign signups (tenant — manual confirm required)
+router.post('/campaign/:campaignId/go-live', validateClient, wrapRoute(async (req, res) => {
+  const { subject, message, orderUrl, confirmLive } = req.body;
+
+  if (confirmLive !== true && confirmLive !== 'true') {
+    return res.status(400).json({
+      success: false,
+      message: 'confirmLive must be true — only send when you are really live',
+    });
+  }
+
+  const campaign = await Campaign.findOne({
+    _id: req.params.campaignId,
+    clientId: req.clientId,
+    isDeleted: false,
+  });
+
+  if (!campaign) {
+    return res.status(404).json({ success: false, message: 'Campaign not found' });
+  }
+
+  const Client = require('../models/client');
+  const { sendPreorderGoLiveEmail } = require('../helpers/preorderGoLiveEmail');
+  const { resolveSmtpHost } = require('../helpers/mailHost');
+
+  const client = await Client.findOne({ clientID: req.clientId });
+  if (!client || !resolveSmtpHost(client)) {
+    return res.status(400).json({ success: false, message: 'Configure business email / SMTP first' });
+  }
+
+  const signups = await PreorderPledge.find({
+    campaignId: campaign._id,
+    isDeleted: false,
+    'communicationPreferences.emailUpdates': { $ne: false },
+  });
+
+  const defaultMessage =
+    message?.trim() ||
+    `Great news — ${campaign.name} is officially live! You can order now.`;
+  const shopUrl = orderUrl?.trim() || client.return_url;
+
+  let sent = 0;
+  let failed = 0;
+
+  for (const signup of signups) {
+    if (!signup.customerInfo?.email) continue;
+    try {
+      await sendPreorderGoLiveEmail({
+        signup,
+        campaign,
+        client,
+        subject: subject?.trim() || `${campaign.name} — we're live! Order now`,
+        message: defaultMessage,
+        orderUrl: shopUrl,
+      });
+      sent += 1;
+    } catch (error) {
+      console.error(`Failed to notify ${signup.customerInfo.email}:`, error.message);
+      failed += 1;
+    }
+  }
+
+  campaign.settings = campaign.settings || {};
+  campaign.settings.goLiveBlastAt = new Date();
+  campaign.markModified('settings');
+  await campaign.save();
+
+  res.json({
+    success: true,
+    message: `Go-live blast sent to ${sent} signups`,
+    sent,
+    failed,
+    count: signups.length,
+  });
+}));
+
+// Legacy admin notify (deprecated — use go-live with confirmLive)
+router.post('/campaign/:campaignId/notify', validateClient, wrapRoute(async (req, res) => {
   const { subject, message } = req.body;
   
   const campaign = await Campaign.findOne({

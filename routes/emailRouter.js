@@ -22,6 +22,10 @@ const Client = require('../models/client');
 const { sendContactUsEmail } = require('../utils/email');
 const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../helpers/mailHost');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
+const newsletterBuilderRouter = require('./newsletterBuilder');
+const { validateNewsletterHtml } = require('../helpers/newsletterBuilder');
+const { isKnownTemplateId } = require('../helpers/newsletterTemplates');
+const NewsletterDraft = require('../models/NewsletterDraft');
 
 const router = express.Router();
 
@@ -1477,6 +1481,9 @@ router.post('/batch', validateClient, wrapRoute(async (req, res) => {
 // NEWSLETTER ROUTES
 // ============================================================================
 
+// Builder: templates, image upload, preview, drafts (HTML composed on dashboard)
+router.use('/newsletter', validateClient, newsletterBuilderRouter);
+
 // SEND NEWSLETTER TO SUBSCRIBERS
 router.post('/newsletter/send', validateClient, upload.array('attachments', 5), wrapRoute(async (req, res) => {
     const parseMaybeJson = (val, fallback) => {
@@ -1510,10 +1517,42 @@ router.post('/newsletter/send', validateClient, upload.array('attachments', 5), 
     }));
 
     const promoTemplate = String(req.body.promoTemplate || '').trim().toLowerCase();
+    const templateId = String(req.body.templateId || '').trim();
+    const draftId = String(req.body.draftId || '').trim();
+    const builderPayload = parseMaybeJson(req.body.builderPayload || req.body.payload, null);
+
+    if (templateId && !isKnownTemplateId(templateId)) {
+        return res.status(400).json({ ok: false, message: 'Unknown templateId' });
+    }
+
     let htmlBody = html;
     let textBody = text;
-    if (promoTemplate === 'one' || promoTemplate === 'promo_one' || promoTemplate === '1') {
-        let rawPromo = req.body.promoPayload;
+    let resolvedSubject = subject;
+
+    if (draftId) {
+        const draft = await NewsletterDraft.findOne({
+            _id: draftId,
+            clientID: req.client.clientID,
+            isDeleted: false,
+        });
+        if (!draft) {
+            return res.status(404).json({ ok: false, message: 'Draft not found' });
+        }
+        if (!htmlBody) htmlBody = draft.html;
+        if (!textBody) textBody = draft.text;
+        if (!resolvedSubject) resolvedSubject = draft.subject;
+    }
+
+    const useServerPromo =
+        !htmlBody &&
+        (promoTemplate === 'one' ||
+            promoTemplate === 'promo_one' ||
+            promoTemplate === '1' ||
+            templateId === 'promo_stack' ||
+            templateId === 'khana_promo_stack');
+
+    if (useServerPromo) {
+        let rawPromo = req.body.promoPayload || builderPayload;
         if ((rawPromo == null || rawPromo === '') && Array.isArray(req.body.promoBlocks)) {
             rawPromo = { blocks: req.body.promoBlocks };
         } else if ((rawPromo == null || rawPromo === '') && req.body.promoBlocks != null && req.body.promoBlocks !== '') {
@@ -1524,7 +1563,7 @@ router.post('/newsletter/send', validateClient, upload.array('attachments', 5), 
             return res.status(400).json({
                 ok: false,
                 message:
-                    'promoTemplate "one" requires promoPayload (JSON string or object) with blocks: [{ imageUrl, linkUrl?, alt? }]',
+                    'Server promo render requires promoPayload/builderPayload with blocks: [{ imageUrl, linkUrl?, alt? }], or send composed html from the builder',
             });
         }
         if (!payload.blocks.some((b) => isAllowedAssetUrl(b && b.imageUrl))) {
@@ -1537,23 +1576,32 @@ router.post('/newsletter/send', validateClient, upload.array('attachments', 5), 
         const templateOpts = { ...payload, companyName: req.client.companyName };
         htmlBody = buildPromotionalTemplateOneHtml(templateOpts);
         textBody = text || buildPromotionalTemplateOneText(templateOpts);
+    } else if (htmlBody) {
+        const validated = validateNewsletterHtml(htmlBody);
+        if (!validated.ok) {
+            return res.status(400).json({ ok: false, message: validated.error, warnings: validated.warnings });
+        }
+        htmlBody = validated.html;
+        textBody = textBody || validated.text;
     }
 
     // Validate required fields
-    if (!subject || !htmlBody) {
+    if (!resolvedSubject || !htmlBody) {
         return res.status(400).json({ 
             ok: false, 
-            message: 'Missing required fields: subject, and html (or promoTemplate one + promoPayload.blocks)' 
+            message: 'Missing required fields: subject, and html (from builder, draftId, or promoTemplate one + promoPayload.blocks)' 
         });
     }
 
     try {
         const newsletterData = {
-            subject,
+            subject: resolvedSubject,
             text: textBody || htmlBody.replace(/<[^>]*>/g, '').substring(0, 500),
             html: htmlBody,
             attachments,
-            enableTracking
+            enableTracking,
+            templateId: templateId || null,
+            builderPayload: builderPayload || null,
         };
 
         const options = {
@@ -1582,6 +1630,8 @@ router.post('/newsletter/send', validateClient, upload.array('attachments', 5), 
                 totalBatches,
                 estimatedTime: `~${estMin} min (sequential within each batch; see NEWSLETTER_* env)`,
                 enableTracking,
+                templateId: templateId || null,
+                draftId: draftId || null,
                 rateLimit: {
                     currentHour: rateLimit.hourly,
                     currentDay: rateLimit.daily

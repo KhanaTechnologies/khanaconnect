@@ -180,7 +180,28 @@ const clientSchema = new Schema({
     lastEventSent: { type: Date },
     dailyQuota: { type: Number, default: 10000 },
     monthlyQuota: { type: Number, default: 300000 }
-  }
+  },
+
+  /** Revenue Command Center — feature toggles & business profile */
+  revenueSettings: {
+    businessType: {
+      type: String,
+      enum: ['retail', 'services', 'mixed'],
+      default: 'mixed',
+    },
+    cartRecoveryEnabled: { type: Boolean, default: true },
+    cartRecoveryAutoReminders: { type: Boolean, default: false },
+    inventoryPromosEnabled: { type: Boolean, default: false },
+    lowStockThreshold: { type: Number, default: 5, min: 1 },
+    slowMoverDays: { type: Number, default: 60, min: 7 },
+    socialProofEnabled: { type: Boolean, default: false },
+    showRecentOrders: { type: Boolean, default: true },
+    showWishlistSaves: { type: Boolean, default: true },
+    showStockUrgency: { type: Boolean, default: false },
+    bundleUpsellsEnabled: { type: Boolean, default: true },
+    bookingOptimizerEnabled: { type: Boolean, default: true },
+    freeShippingThreshold: { type: Number, default: 0, min: 0 },
+  },
 }, {
   timestamps: true,
   toJSON: { getters: true }, // Important: This ensures getters run when converting to JSON

@@ -278,6 +278,8 @@ var votingCampaignsRouter = require('./routes/votingCampaigns');
 const analyticsRoutes = require("./routes/analytics");
 const paymentsRouter = require('./routes/payments');
 const saasRouter = require('./routes/saas');
+const revenueCommandCenterRouter = require('./routes/revenueCommandCenter');
+const partnershipPricingRouter = require('./routes/partnershipPricing');
 
 app.use('/', indexRouter);
 
@@ -312,6 +314,8 @@ app.use(`${api}/campaigns`, campaignsRouter);
 app.use(`${api}/votingcampaigns`, votingCampaignsRouter);
 app.use(`${api}/email`, emailRouter);
 app.use(`${api}/saas`, saasRouter);
+app.use(`${api}/revenue`, revenueCommandCenterRouter);
+app.use(`${api}`, partnershipPricingRouter);
 
 
 /**

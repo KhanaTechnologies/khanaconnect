@@ -10,6 +10,7 @@ const Product = require('../models/product');
 const Client = require('../models/client');
 const WishList = require('../models/wishList');
 const NewsletterService = require('../helpers/newsletterService');
+const { buildPromoNewsletterBuilderPayload } = require('../helpers/promoNewsletterBuilder');
 const { escapeHtml } = require('../helpers/signatureHtml');
 const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../helpers/mailHost');
 const { sendMail } = require('../helpers/mailer');
@@ -232,54 +233,22 @@ router.post('/createCheckoutCode', authenticateToken, async (req, res) => {
       const clientDoc = await Client.findOne({ clientID: req.clientId });
       const smtpOk = clientDoc && resolveSmtpHost(clientDoc);
 
+      newsletter = buildPromoNewsletterBuilderPayload({
+        code,
+        discount,
+        type,
+        promoEmailSubject,
+        promoEmailIntro,
+        checkoutCodeId: newCheckoutCode._id,
+        companyName: clientDoc?.companyName,
+      });
+
       if (!smtpOk) {
-        newsletter = { status: 'skipped', reason: 'smtp_not_configured' };
+        newsletter.warnings = ['smtp_not_configured'];
       } else if (!subscriberCount) {
-        newsletter = { status: 'skipped', reason: 'no_active_subscribers' };
+        newsletter.warnings = ['no_active_subscribers'];
       } else {
-        const brand = escapeHtml(clientDoc.companyName || 'Our store');
-        const codeEsc = escapeHtml(code);
-        const subject =
-          (promoEmailSubject && String(promoEmailSubject).trim().slice(0, 200)) ||
-          `New offer — ${code} (${discount}% off)`;
-        const introHtml =
-          promoEmailIntro && String(promoEmailIntro).trim()
-            ? escapeHtml(String(promoEmailIntro).trim()).replace(/\n/g, '<br>')
-            : `We just published a new checkout code. Use <strong>${codeEsc}</strong> at checkout to save <strong>${escapeHtml(String(discount))}%</strong>.`;
-
-        const html = `
-        <div style="font-family: Arial, Helvetica, sans-serif; max-width: 640px; margin: auto; color: #111827;">
-          <h2 style="color: #1f2937;">${brand}</h2>
-          <p>${introHtml}</p>
-          <div style="margin: 20px 0; padding: 16px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px;">
-            <p style="margin: 6px 0;"><strong>Code:</strong> ${codeEsc}</p>
-            <p style="margin: 6px 0;"><strong>Discount:</strong> ${escapeHtml(String(discount))}%</p>
-            <p style="margin: 6px 0;"><strong>Scope:</strong> ${escapeHtml(String(type))}</p>
-          </div>
-          <p style="font-size: 14px; color: #6b7280;">Terms and exclusions may apply — see checkout or contact us for details.</p>
-        </div>`;
-
-        const text = `${clientDoc.companyName || 'Our store'} — new code ${code}: ${discount}% off (scope: ${type}).`;
-
-        newsletter = {
-          status: 'started',
-          estimatedRecipients: subscriberCount,
-          newsletterId: `promo_checkout_${newCheckoutCode._id}`,
-        };
-
-        const newsletterData = {
-          subject,
-          html,
-          text,
-          newsletterId: newsletter.newsletterId,
-          enableTracking: true,
-        };
-
-        setImmediate(() => {
-          NewsletterService.sendNewsletter(clientDoc, newsletterData, { useSubscribers: true })
-            .then((result) => console.log('✅ Promo newsletter finished:', result.newsletterId, result.totalSent, 'sent'))
-            .catch((err) => console.error('💥 Promo newsletter failed:', err.message));
-        });
+        newsletter.estimatedRecipients = subscriberCount;
       }
     }
 

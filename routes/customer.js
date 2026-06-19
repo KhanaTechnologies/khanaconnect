@@ -13,7 +13,7 @@ const { sendCartReminderEmail } = require('../utils/cartReminderEmail');
 const { wrapRoute } = require('../helpers/failureEmail');
 const { getJwtSecret, verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const router = express.Router();
-const TrackingEvent = require('../models/TrackingEvent');
+const { findCustomerByEmail, replaceCustomerCart } = require('../helpers/customerCart');
 const { encrypt, decrypt } = require('../helpers/encryption');
 
 // Rate limiter for login attempts
@@ -332,6 +332,70 @@ router.post('/debug/encrypt', requireAdmin, wrapRoute(async (req, res) => {
 // --------------------
 // CART MANAGEMENT ROUTES
 // --------------------
+
+/** Sync cart at checkout (guest or returning shopper) for abandonment tracking */
+router.post('/cart/sync-checkout', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
+  const { emailAddress, customerFirstName, customerLastName, phoneNumber, items } = req.body;
+
+  if (!emailAddress || !/\S+@\S+\.\S+/.test(emailAddress)) {
+    return res.status(400).json({ error: 'Valid email address is required' });
+  }
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: 'Cart items are required' });
+  }
+
+  const normalizedEmail = normalizeEmailDomain(emailAddress.toLowerCase());
+  let customer = await findCustomerByEmail(Customer, req.clientID, normalizedEmail);
+
+  if (!customer) {
+    customer = new Customer({
+      clientID: req.clientID,
+      customerFirstName: customerFirstName || 'Guest',
+      customerLastName: customerLastName || '',
+      emailAddress: normalizedEmail,
+      phoneNumber: phoneNumber || '',
+      passwordHash: bcrypt.hashSync(crypto.randomBytes(16).toString('hex'), 10),
+      isVerified: false,
+      preferences: {
+        notificationPreferences: {
+          cartReminders: true,
+          promotions: true,
+          restockAlerts: true,
+        },
+      },
+      cartReminder: {
+        reminderType: 'day',
+        isActive: true,
+        nextReminder: calculateNextReminder('day'),
+      },
+    });
+  } else {
+    if (customerFirstName) customer.customerFirstName = customerFirstName;
+    if (customerLastName) customer.customerLastName = customerLastName;
+    if (phoneNumber) customer.phoneNumber = phoneNumber;
+    if (!customer.cartReminder?.isActive) {
+      customer.cartReminder = customer.cartReminder || {};
+      customer.cartReminder.isActive = true;
+      customer.cartReminder.reminderType = customer.cartReminder.reminderType || 'day';
+      customer.cartReminder.nextReminder = calculateNextReminder(
+        customer.cartReminder.reminderType,
+        customer.cartReminder.customHours
+      );
+    }
+  }
+
+  await replaceCustomerCart(customer, items, req.clientID);
+  await customer.save();
+
+  res.json({
+    success: true,
+    customerId: customer._id,
+    cartSummary: {
+      totalItems: customer.cart.reduce((sum, item) => sum + item.quantity, 0),
+      totalValue: customer.cart.reduce((sum, item) => sum + item.price * item.quantity, 0),
+    },
+  });
+}));
 
 // ADD TO CART
 router.post('/:id/cart', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {

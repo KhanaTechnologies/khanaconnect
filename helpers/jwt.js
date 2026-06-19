@@ -47,6 +47,8 @@ const authJwt = () => {
      { url: new RegExp(`^${apiEsc}/saas/webhooks/whatsapp/?$`), methods: ['GET', 'POST', 'OPTIONS'] },
      { url: new RegExp(`^${apiEsc}/saas/webhooks/meta-ads/?$`), methods: ['GET', 'POST', 'OPTIONS'] },
      
+     { url: new RegExp(`^${apiEsc}/public/partnership-pricing/?$`), methods: ['GET', 'OPTIONS'] },
+     
      // Keep your existing string paths
      `${api}/orders/update-order-payment`,
      `${api}/customer/reset-password`,
