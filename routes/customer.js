@@ -997,7 +997,7 @@ router.get('/analytics/cart-abandonment', validateTokenAndExtractClientID, wrapR
 // --------------------
 
 // CREATE / REGISTER CUSTOMER
-router.post('/', validateTokenAndExtractClientID, validateCustomerInput, async (req, res) => {
+const registerCustomer = async (req, res) => {
   try {
     const client = await Client.findOne({ clientID: req.clientID });
     if (!client) return res.status(400).json({ error: 'Client not found' });
@@ -1089,7 +1089,10 @@ router.post('/', validateTokenAndExtractClientID, validateCustomerInput, async (
     console.error('Error registering customer:', error);
     res.status(500).json({ error: 'Internal Server Error' });
   }
-});
+};
+
+router.post('/', validateTokenAndExtractClientID, validateCustomerInput, registerCustomer);
+router.post('/registration', validateTokenAndExtractClientID, validateCustomerInput, registerCustomer);
 
 // LOGIN CUSTOMER - Updated to handle encrypted email search
 router.post('/login', loginLimiter, validateTokenAndExtractClientID, async (req, res) => {
@@ -1228,11 +1231,27 @@ router.post('/verify/:token', async (req, res) => {
     customer.isVerified = true;
     customer.emailVerificationToken = undefined;
     customer.emailVerificationExpires = undefined;
+    customer.lastActivity = new Date();
     await customer.save();
 
-    res.json({ 
+    const token = jwt.sign({
+      customerID: customer._id,
+      clientID: customer.clientID,
+      isActive: true,
+    }, getJwtSecret(), {
+      expiresIn: '1d',
+    });
+
+    const customerResponse = customer.toObject();
+    delete customerResponse.passwordHash;
+    delete customerResponse.emailVerificationToken;
+    delete customerResponse.resetPasswordToken;
+
+    res.json({
       success: true,
-      message: 'Email verification successful' 
+      message: 'Email verification successful',
+      token,
+      customer: customerResponse,
     });
   } catch (err) {
     console.error('Error verifying email:', err);
