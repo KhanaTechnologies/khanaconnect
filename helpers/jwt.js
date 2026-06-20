@@ -31,6 +31,9 @@ const authJwt = () => {
      // Public email endpoints only (do not exempt all /email — that would skip JWT globally)
      { url: new RegExp(`^${apiEsc}/email/subscribe/?$`), methods: ['POST', 'OPTIONS'] },
      { url: new RegExp(`^${apiEsc}/email/unsubscribe/?$`), methods: ['POST', 'OPTIONS'] },
+     // Public contact form — route-level validateClient supports JWT secret fallback.
+     { url: new RegExp(`^${apiEsc}/email/contact/?$`), methods: ['POST', 'OPTIONS'] },
+     { url: /\/api\/v1\/email\/contact\/?$/, methods: ['POST', 'OPTIONS'] },
      { url: new RegExp(`^${apiEsc}/email/newsletter/open\\.gif`), methods: ['GET', 'OPTIONS'] },
      { url: new RegExp(`^${apiEsc}/email/newsletter/unsubscribe`), methods: ['GET', 'OPTIONS'] },
      { url: /\/api\/v1\/orders(.*)/, methods:['GET','OPTIONS']},
