@@ -1,7 +1,8 @@
-// routes/client.js
+// routes/admin.js
 const express = require("express");
 const jwt = require('jsonwebtoken');
 const authJwt = require('../helpers/jwt'); // Import the authJwt middleware
+const bcrypt = require('bcryptjs');
 const Client = require("../models/client");
 const { Order } = require('../models/order');
 const Product = require("../models/product");
@@ -12,6 +13,8 @@ const Staff = require("../models/staff");
 const { SalesItem } = require('../models/salesItem');
 const DiscountCode = require("../models/discountCode");
 const { getJwtSecret } = require('../helpers/jwtSecret');
+const { requireAdmin } = require('../middleware/requireAdmin');
+const { createClientRecord } = require('../helpers/clientCreate');
 
 const { wrapRoute } = require('../helpers/failureEmail'); // <- wrapRoute for automatic emails
 
@@ -110,21 +113,48 @@ router.post('/clients/:id/delete-client-token', authJwt(), wrapRoute(async (req,
 }));
 
 // 🔹 GET all clients
-router.get("/clients", wrapRoute(async (req, res) => {
-  const clients = await Client.find();
+router.get("/clients", requireAdmin, wrapRoute(async (req, res) => {
+  const clients = await Client.find().select('-password -token -sessionToken');
   res.json(clients);
 }));
 
+// 🔹 CREATE a new client (admin dashboard)
+router.post("/clients", requireAdmin, wrapRoute(async (req, res) => {
+  try {
+    const { client, token } = await createClientRecord(req.body);
+    res.status(201).json({ success: true, client, token });
+  } catch (error) {
+    const status = error.status && Number(error.status) >= 400 ? error.status : 500;
+    return res.status(status).json({
+      success: false,
+      error: error.message || 'Failed to create client',
+    });
+  }
+}));
+
 // 🔹 GET a single client by ID
-router.get("/clients/:id", wrapRoute(async (req, res) => {
+router.get("/clients/:id", requireAdmin, wrapRoute(async (req, res) => {
   const client = await Client.findById(req.params.id);
   if (!client) return res.status(404).json({ error: "Client not found" });
   res.json(client);
 }));
 
 // 🔹 UPDATE client details
-router.put("/clients/:id", wrapRoute(async (req, res) => {
-  const updatedClient = await Client.findByIdAndUpdate(req.params.id, req.body, { new: true });
+router.put("/clients/:id", requireAdmin, wrapRoute(async (req, res) => {
+  const updates = { ...req.body };
+
+  if (updates.password) {
+    updates.password = bcrypt.hashSync(updates.password, 10);
+  }
+
+  delete updates._id;
+  delete updates.clientID;
+  delete updates.token;
+  delete updates.sessionToken;
+
+  const updatedClient = await Client.findByIdAndUpdate(req.params.id, { $set: updates }, { new: true })
+    .select('-password -token -sessionToken');
+
   if (!updatedClient) return res.status(404).json({ error: "Client not found" });
   res.json(updatedClient);
 }));
@@ -200,7 +230,7 @@ router.get("/clients/:id/numberOfDiscountCodes", wrapRoute(async (req, res) => {
 }));
 
 // 🔹 UPDATE client permissions (Admin only)
-router.put("/clients/:id/permissions", authJwt(), wrapRoute(async (req, res) => {
+router.put("/clients/:id/permissions", requireAdmin, wrapRoute(async (req, res) => {
   const { id } = req.params;
   const { permissions } = req.body;
   
