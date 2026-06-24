@@ -24,6 +24,7 @@ const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../help
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const { createDashboardAuth } = require('../helpers/dashboardAuth');
 const { recordTeamActivityFromRequest } = require('../helpers/teamActivity');
+const { uploadSignatureImage } = require('../helpers/signatureImageUpload');
 const newsletterBuilderRouter = require('./newsletterBuilder');
 const { validateNewsletterHtml } = require('../helpers/newsletterBuilder');
 const { isKnownTemplateId } = require('../helpers/newsletterTemplates');
@@ -250,24 +251,8 @@ const storage = multer.memoryStorage();
 const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } }); // 10MB limit
 
 const signatureUploadDir = path.join(__dirname, '../public/uploads/signatures');
-const signatureStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    try {
-      fs.mkdirSync(signatureUploadDir, { recursive: true });
-      cb(null, signatureUploadDir);
-    } catch (e) {
-      cb(e);
-    }
-  },
-  filename: (req, file, cb) => {
-    const ext = (path.extname(file.originalname) || '.png').toLowerCase();
-    const safeExt = ['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext) ? ext : '.png';
-    const id = String(req.client?.clientID || 'client').replace(/[^a-zA-Z0-9_-]/g, '_');
-    cb(null, `${id}-${Date.now()}${safeExt}`);
-  },
-});
 const signatureUpload = multer({
-  storage: signatureStorage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 3 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const ok = /\.(png|jpg|jpeg|gif|webp)$/i.test(file.originalname);
@@ -2227,9 +2212,14 @@ router.post(
             });
         }
 
-        const base = (process.env.BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
-        const publicPath = `/public/uploads/signatures/${req.file.filename}`;
-        const imgUrl = `${base}${publicPath}`;
+        const uploaded = await uploadSignatureImage(
+            req.file.buffer,
+            req.file.originalname,
+            req.client.clientID,
+            req,
+            req.file.mimetype
+        );
+        const imgUrl = uploaded.url;
 
         const block = `<div class="crm-signature" style="margin-top:1em"><img src="${imgUrl}" alt="Signature" style="max-width:100%;height:auto" /></div>`;
 
@@ -2245,6 +2235,7 @@ router.post(
             message: 'Signature saved on client profile; it will be appended to outgoing mail automatically.',
             emailSignature,
             imageUrl: imgUrl,
+            storage: uploaded.storage,
         });
     })
 );

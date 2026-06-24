@@ -63,6 +63,30 @@ function resolveLocalSignatureFileFromImgSrc(src) {
   }
 }
 
+/** Signature images hosted on this API or GitHub raw (dashboard uploads). */
+function isHostedSignatureImageUrl(src) {
+  if (!src || typeof src !== 'string' || src.startsWith('cid:')) return false;
+  if (!/^https?:\/\//i.test(src)) return false;
+  return (
+    /\/public\/uploads\/signatures\//i.test(src) ||
+    /raw\.githubusercontent\.com/i.test(src)
+  );
+}
+
+async function fetchRemoteSignatureBuffer(src) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch(src, { signal: controller.signal, redirect: 'follow' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > 5 * 1024 * 1024) throw new Error('Image too large');
+    return buf;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 /**
  * Gmail and many clients do not load remote images from localhost or private hosts.
  * Inline signature images that live on this server as MIME attachments (cid:) so they always render.
@@ -100,6 +124,70 @@ function inlineSignatureImages(html, baseAttachments) {
       return `<img${pre}src=${q}cid:${cid}${q}${post}>`;
     }
   );
+
+  return { html: newHtml, attachments };
+}
+
+/** Like inlineSignatureImages, but also fetches persisted GitHub / API signature URLs when not on local disk. */
+async function inlineSignatureImagesAsync(html, baseAttachments) {
+  const attachments = Array.isArray(baseAttachments) ? [...baseAttachments] : [];
+  if (!html || typeof html !== 'string') return { html, attachments };
+
+  const srcToCid = new Map();
+  let cidSeq = 0;
+  const imgTagRegex = /<img\b([^>]*?)\bsrc\s*=\s*(["'])([^"']+)\2([^>]*)>/gi;
+  const tags = [...html.matchAll(imgTagRegex)];
+
+  for (const match of tags) {
+    const src = String(match[3] || '').trim();
+    if (!src || src.startsWith('cid:')) continue;
+
+    let content = null;
+    let filename = 'signature.png';
+    let contentType = 'image/png';
+
+    const filePath = resolveLocalSignatureFileFromImgSrc(src);
+    if (filePath) {
+      try {
+        content = fs.readFileSync(filePath);
+        filename = path.basename(filePath);
+        contentType = contentTypeForSignatureFile(filePath);
+      } catch (e) {
+        console.warn('Signature inline skipped:', e.message);
+        continue;
+      }
+    } else if (isHostedSignatureImageUrl(src)) {
+      try {
+        content = await fetchRemoteSignatureBuffer(src);
+        let ext = '.png';
+        try {
+          ext = path.extname(new URL(src).pathname) || '.png';
+        } catch (_) {
+          /* ignore */
+        }
+        filename = `signature${ext}`;
+        contentType = contentTypeForSignatureFile(`file${ext}`);
+      } catch (e) {
+        console.warn('Remote signature inline skipped:', src, e.message);
+        continue;
+      }
+    } else {
+      continue;
+    }
+
+    if (!srcToCid.has(src)) {
+      const cid = `kcsig${cidSeq++}`;
+      srcToCid.set(src, cid);
+      attachments.push({ filename, content, contentType, cid });
+    }
+  }
+
+  const newHtml = html.replace(imgTagRegex, (full, pre, q, srcRaw, post) => {
+    const src = String(srcRaw || '').trim();
+    const cid = srcToCid.get(src);
+    if (!cid) return full;
+    return `<img${pre}src=${q}cid:${cid}${q}${post}>`;
+  });
 
   return { html: newHtml, attachments };
 }
@@ -311,7 +399,7 @@ async function sendMail(options) {
     tls: { rejectUnauthorized: false },
   });
 
-  const { html: htmlOut, attachments: attachmentsOut } = inlineSignatureImages(html, attachments);
+  const { html: htmlOut, attachments: attachmentsOut } = await inlineSignatureImagesAsync(html, attachments);
 
   const mailOptions = {
     from: decryptAddressValue(from),
@@ -584,4 +672,5 @@ module.exports = {
   saveToSentFolder,
   sendMailWithRetry,
   inlineSignatureImages,
+  inlineSignatureImagesAsync,
 };
