@@ -24,6 +24,7 @@ const { diffBookingForCustomer, normalizeCustomerNotifyChanges } = require('../u
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const { createDashboardAuth } = require('../helpers/dashboardAuth');
 const { recordTeamActivityFromRequest } = require('../helpers/teamActivity');
+const { autoAdvancePastBookings } = require('../helpers/bookingStatus');
 
 const validateClient = createDashboardAuth('bookings');
 
@@ -54,6 +55,8 @@ router.get('/', validateClient, wrapRoute(async (req, res) => {
             $lte: new Date(endDate)
         };
     }
+
+    await autoAdvancePastBookings({ clientID: clientId });
     
     const bookings = await Booking.find(filter)
         .populate('assignedTo')
