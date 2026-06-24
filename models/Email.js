@@ -77,11 +77,10 @@ const EmailSchema = new mongoose.Schema({
   recipientName: { type: String, default: '' }
 }, { timestamps: true });
 
-// Compound index only applies when uid is not null
-EmailSchema.index({ uid: 1, clientID: 1 }, { 
-  unique: true, 
-  sparse: true,
-  partialFilterExpression: { uid: { $type: "number" } }
+// Compound index only applies when uid is a number (IMAP inbound). Outbound SMTP mail has no uid.
+EmailSchema.index({ uid: 1, clientID: 1 }, {
+  unique: true,
+  partialFilterExpression: { uid: { $type: 'number' } },
 });
 
 // Alternative unique index for sent emails (without uid)

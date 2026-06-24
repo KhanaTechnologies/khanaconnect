@@ -1,8 +1,22 @@
 const Email = require('../models/Email');
 
+const DESIRED_UID_INDEX = {
+  unique: true,
+  partialFilterExpression: { uid: { $type: 'number' } },
+};
+
+function indexSpecMatches(idx) {
+  if (!idx || idx.name !== 'uid_1_clientID_1') return false;
+  const hasPartial =
+    idx.partialFilterExpression &&
+    idx.partialFilterExpression.uid &&
+    idx.partialFilterExpression.uid.$type === 'number';
+  return idx.unique === true && hasPartial && idx.sparse !== true;
+}
+
 /**
- * Production may still have a legacy uid+clientID unique index without a partial
- * filter, which rejects multiple outbound emails with uid: null.
+ * Production may have a legacy uid+clientID index (no partial filter, or sparse+partial mix).
+ * MongoDB rejects indexes that combine sparse with partialFilterExpression.
  */
 async function ensureEmailIndexes() {
   const coll = Email.collection;
@@ -15,16 +29,15 @@ async function ensureEmailIndexes() {
     return;
   }
 
-  const legacyUidIndex = indexes.find(
-    (idx) => idx.name === 'uid_1_clientID_1' && !idx.partialFilterExpression
-  );
+  const uidClientIndex = indexes.find((idx) => idx.name === 'uid_1_clientID_1');
+  const needsDrop = uidClientIndex && !indexSpecMatches(uidClientIndex);
 
-  if (legacyUidIndex) {
+  if (needsDrop) {
     try {
       await coll.dropIndex('uid_1_clientID_1');
-      console.log('Dropped legacy emails uid_1_clientID_1 index (missing partial filter)');
+      console.log('Dropped emails uid_1_clientID_1 index for recreation (legacy or invalid spec)');
     } catch (err) {
-      console.error('Could not drop legacy emails uid_1_clientID_1 index:', err.message);
+      console.error('Could not drop emails uid_1_clientID_1 index:', err.message);
     }
   }
 
@@ -36,4 +49,4 @@ async function ensureEmailIndexes() {
   }
 }
 
-module.exports = { ensureEmailIndexes };
+module.exports = { ensureEmailIndexes, DESIRED_UID_INDEX };
