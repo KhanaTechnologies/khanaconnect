@@ -1,15 +1,15 @@
 const { DEFAULT_PLAN_BUILDER, mergePlanBuilderConfig } = require('./planBuilderPricing');
 
-const PRICING_CONFIG_VERSION = 5;
+const PRICING_CONFIG_VERSION = 6;
 
-/** Default partnership pricing for the SA market (excl. VAT). */
+/** Default partnership pricing for the SA market. */
 const DEFAULT_PARTNERSHIP_PRICING = {
   pricingConfigVersion: PRICING_CONFIG_VERSION,
   showPublishedPrices: true,
   currency: 'ZAR',
   currencySymbol: 'R',
   billingNote: 'All plans billed monthly after go-live. Setup fees are once-off and due before launch.',
-  vatNote: 'Prices exclude VAT (15%) unless stated otherwise.',
+  vatNote: '',
   tiers: [
     {
       id: 'starter',
@@ -40,8 +40,8 @@ const DEFAULT_PARTNERSHIP_PRICING = {
       tagline: 'Professional business online',
       description:
         'For established small businesses that need a polished site with ongoing management and local support.',
-      setupFee: 3999,
-      monthlyFee: 499,
+      setupFee: 3499,
+      monthlyFee: 449,
       setupLabel: '',
       monthlyLabel: '',
       featured: false,
@@ -63,8 +63,8 @@ const DEFAULT_PARTNERSHIP_PRICING = {
       tagline: 'Sell or book online + revenue tools',
       description:
         'Our most popular plan. Full Revenue Command Center to recover sales, segment customers, and run campaigns on top of your store or bookings.',
-      setupFee: 9999,
-      monthlyFee: 1499,
+      setupFee: 6999,
+      monthlyFee: 899,
       setupLabel: '',
       monthlyLabel: '',
       featured: true,
@@ -85,8 +85,8 @@ const DEFAULT_PARTNERSHIP_PRICING = {
       tagline: 'Retail + services on one platform',
       description:
         'For growing businesses running products and appointments together, with full revenue and marketing tools.',
-      setupFee: 18500,
-      monthlyFee: 2999,
+      setupFee: 14999,
+      monthlyFee: 1799,
       setupLabel: '',
       monthlyLabel: '',
       featured: false,
@@ -129,31 +129,41 @@ const DEFAULT_PARTNERSHIP_PRICING = {
       id: 'mixed-module',
       name: 'Mixed business module',
       description: 'Add bookings to a store or products to a booking site',
-      monthlyFee: 399,
+      monthlyFee: 299,
       onceOffFee: null,
       pricingType: 'monthly',
       active: true,
       sortOrder: 0,
     },
     {
-      id: 'large-catalogue',
-      name: 'Large product catalogue',
-      description: '500+ SKUs or advanced category structures',
-      monthlyFee: 249,
+      id: 'revenue-tools',
+      name: 'Revenue Command Center',
+      description: 'Cart recovery, customer segments, campaigns, and revenue insights',
+      monthlyFee: 299,
       onceOffFee: null,
       pricingType: 'monthly',
       active: true,
       sortOrder: 1,
     },
     {
-      id: 'email-campaigns',
-      name: 'Advanced email campaigns',
-      description: 'Higher-volume newsletter sends and campaign support',
+      id: 'large-catalogue',
+      name: 'Large product catalogue',
+      description: '500+ SKUs or advanced category structures',
       monthlyFee: 199,
       onceOffFee: null,
       pricingType: 'monthly',
       active: true,
       sortOrder: 2,
+    },
+    {
+      id: 'email-campaigns',
+      name: 'Advanced email campaigns',
+      description: 'Higher-volume newsletter sends and campaign support',
+      monthlyFee: 99,
+      onceOffFee: null,
+      pricingType: 'monthly',
+      active: true,
+      sortOrder: 3,
     },
     {
       id: 'custom-integration',

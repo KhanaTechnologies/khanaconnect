@@ -1328,6 +1328,69 @@ async function sendContactUsEmail(contactData, bEmail, BEPass, clientName, email
 }
 
 // -----------------------------
+// Plan builder quote emails
+// -----------------------------
+async function sendPlanQuoteEmails({
+  quote,
+  shareUrl,
+  validUntil,
+  prospectEmail,
+  khanaEmail,
+  khanaPass,
+  companyName,
+  emailSignature = '',
+  tenantClientId = null,
+}) {
+  const {
+    buildPlanQuoteTeamHtml,
+    buildPlanQuoteProspectHtml,
+    formatDisplayDate,
+  } = require('../helpers/planQuoteEmail');
+
+  const formattedClientName = getFormattedClientName(companyName);
+  const decryptedFrom = decrypt(khanaEmail);
+  const qm = qTenant(tenantClientId);
+  const validLabel = formatDisplayDate(validUntil);
+
+  const teamHtml = buildPlanQuoteTeamHtml(quote, shareUrl, validUntil);
+  const prospectHtml = buildPlanQuoteProspectHtml(quote, shareUrl, validUntil, formattedClientName);
+
+  const teamBody = mimeFrom(teamHtml, '', emailSignature);
+  const prospectBody = mimeFrom(prospectHtml, '', emailSignature);
+
+  await sendWithRetry(
+    () => createTransporter(khanaEmail, khanaPass),
+    {
+      from: decryptedFrom,
+      to: decryptedFrom,
+      replyTo: prospectEmail,
+      subject: `Plan estimate — ${quote.prospectName}${quote.businessName ? ` (${quote.businessName})` : ''}`,
+      ...teamBody,
+    },
+    5,
+    1600,
+    qm
+  );
+
+  await smtpBetweenMessagesGap();
+
+  await sendWithRetry(
+    () => createTransporter(khanaEmail, khanaPass),
+    {
+      from: decryptedFrom,
+      to: prospectEmail,
+      subject: `Your Khana plan estimate — valid until ${validLabel}`,
+      ...prospectBody,
+    },
+    5,
+    1600,
+    qm
+  );
+
+  console.log(`[sendPlanQuoteEmails] Sent team + prospect emails for ${quote.quoteId}`);
+}
+
+// -----------------------------
 // Accommodation check-in / check-out reminders (cron / reminder service)
 // -----------------------------
 async function sendCheckInReminderEmail(booking, bEmail, BEPass, clientName, emailSignature = '') {
@@ -1398,6 +1461,7 @@ module.exports = {
     sendTeamDashboardInviteEmail,
     sendTeamActivityNotifyEmail,
     sendContactUsEmail,
+    sendPlanQuoteEmails,
     sendCheckInReminderEmail,
     sendCheckOutReminderEmail,
     diffBookingForCustomer,

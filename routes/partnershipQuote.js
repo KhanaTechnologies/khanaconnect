@@ -6,7 +6,13 @@ const { wrapRoute } = require('../helpers/failureEmail');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const { mergePartnershipPricing } = require('../helpers/partnershipPricingDefaults');
 const { calculatePlanEstimate } = require('../helpers/planBuilderPricing');
-const { sendContactUsEmail } = require('../utils/email');
+const {
+  QUOTE_VALIDITY_DAYS,
+  computeValidUntil,
+  isQuoteExpired,
+  formatDisplayDate,
+} = require('../helpers/planQuoteEmail');
+const { sendPlanQuoteEmails } = require('../utils/email');
 
 const router = express.Router();
 
@@ -57,6 +63,7 @@ function buildShareUrl(quoteId) {
 
 function serializeQuote(doc) {
   const q = doc.toObject ? doc.toObject() : doc;
+  const validUntil = computeValidUntil(q);
   return {
     quoteId: q.quoteId,
     prospectName: q.prospectName,
@@ -68,56 +75,19 @@ function serializeQuote(doc) {
     prospectEmail: q.prospectEmail,
     prospectPhone: q.prospectPhone,
     submittedAt: q.submittedAt,
+    validUntil: validUntil.toISOString(),
+    validUntilLabel: formatDisplayDate(validUntil),
+    isExpired: isQuoteExpired(q),
     shareUrl: buildShareUrl(q.quoteId),
     createdAt: q.createdAt,
     updatedAt: q.updatedAt,
   };
 }
 
-function formatZar(amount) {
-  if (amount == null || Number.isNaN(Number(amount))) return 'On enquiry';
-  return `R${Number(amount).toLocaleString('en-ZA')}`;
-}
-
-function buildQuoteEmailBody(quote, pricing) {
-  const est = quote.estimate || {};
-  const sel = quote.selections || {};
-  const lines = [
-    `Prospect: ${quote.prospectName}${quote.businessName ? ` (${quote.businessName})` : ''}`,
-    `Quote ID: ${quote.quoteId}`,
-    `Source: ${quote.sourceRef || 'direct'}`,
-    `Share link: ${buildShareUrl(quote.quoteId)}`,
-    '',
-    '--- Selections ---',
-    `Store: ${sel.needsStore ? 'Yes' : 'No'}`,
-    `Bookings: ${sel.needsBookings ? 'Yes' : 'No'}`,
-    `Revenue tools: ${sel.needsRevenueTools ? 'Yes' : 'No'}`,
-    `Site size: ${sel.siteSize}`,
-    `Catalogue: ${sel.catalogueSize}`,
-    `Team members: ${sel.teamMembers}`,
-    `Advanced email: ${sel.advancedEmail ? 'Yes' : 'No'}`,
-    `Custom integration: ${sel.customIntegration ? 'Yes' : 'No'}`,
-    '',
-    '--- Estimate ---',
-    `Plan: ${est.tierName || '—'}`,
-    `Once-off setup: ${formatZar(est.totalSetup)}`,
-    `Monthly: ${formatZar(est.totalMonthly)}`,
-  ];
-
-  if (est.extraSeats > 0) {
-    lines.push(`Extra team seats: ${est.extraSeats} × ${formatZar(est.seatMonthlyFee)}/mo`);
-  }
-
-  if (est.addOnLines?.length) {
-    lines.push('', 'Add-ons:');
-    est.addOnLines.forEach((a) => {
-      if (a.monthly) lines.push(`- ${a.name}: ${formatZar(a.monthly)}/mo`);
-      if (a.onceOff) lines.push(`- ${a.name}: ${formatZar(a.onceOff)} once-off`);
-    });
-  }
-
-  lines.push('', pricing.vatNote || 'Prices exclude VAT unless stated otherwise.');
-  return lines.join('\n');
+function defaultValidUntil() {
+  const until = new Date();
+  until.setDate(until.getDate() + QUOTE_VALIDITY_DAYS);
+  return until;
 }
 
 /** Admin — create personalized link for a prospect */
@@ -128,6 +98,7 @@ router.post('/partnership-quotes', authenticateAdmin, wrapRoute(async (req, res)
   }
 
   const quoteId = PartnershipQuote.generateQuoteId();
+  const validUntil = defaultValidUntil();
   const doc = await PartnershipQuote.create({
     quoteId,
     prospectName,
@@ -135,6 +106,7 @@ router.post('/partnership-quotes', authenticateAdmin, wrapRoute(async (req, res)
     sourceRef: String(req.body.sourceRef || 'instagram').trim(),
     createdBy: req.adminClient.clientID,
     status: 'draft',
+    validUntil,
   });
 
   res.status(201).json({
@@ -219,6 +191,14 @@ router.post('/public/partnership-quote/:quoteId/submit', wrapRoute(async (req, r
     return res.status(404).json({ success: false, error: 'Quote not found' });
   }
 
+  if (isQuoteExpired(quote)) {
+    return res.status(410).json({
+      success: false,
+      error: 'This estimate has expired. Please ask your Khana contact for a new link.',
+      quote: serializeQuote(quote),
+    });
+  }
+
   const email = String(req.body.email || '').trim().toLowerCase();
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(email)) {
@@ -244,20 +224,19 @@ router.post('/public/partnership-quote/:quoteId/submit', wrapRoute(async (req, r
 
   if (khanaClient?.businessEmail) {
     try {
-      await sendContactUsEmail(
-        {
-          name: quote.prospectName,
-          email,
-          phone: quote.prospectPhone || '',
-          subject: `Plan estimate — ${quote.prospectName}`,
-          message: buildQuoteEmailBody(quote, pricing),
-        },
-        khanaClient.businessEmail,
-        khanaClient.businessEmailPassword,
-        khanaClient.companyName,
-        khanaClient.emailSignature || '',
-        khanaClient.clientID
-      );
+      const shareUrl = buildShareUrl(quote.quoteId);
+      const validUntil = computeValidUntil(quote);
+      await sendPlanQuoteEmails({
+        quote: quote.toObject ? quote.toObject() : quote,
+        shareUrl,
+        validUntil,
+        prospectEmail: email,
+        khanaEmail: khanaClient.businessEmail,
+        khanaPass: khanaClient.businessEmailPassword,
+        companyName: khanaClient.companyName,
+        emailSignature: khanaClient.emailSignature || '',
+        tenantClientId: khanaClient.clientID,
+      });
     } catch (err) {
       console.error('Plan quote notification email failed:', err.message);
     }

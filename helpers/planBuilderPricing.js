@@ -23,13 +23,31 @@ function mergePlanBuilderConfig(config) {
 function resolveTierId(selections) {
   const store = !!selections.needsStore;
   const bookings = !!selections.needsBookings;
-  const revenue = !!selections.needsRevenueTools;
   const established = selections.siteSize === 'established';
 
-  if (store && bookings) return 'scale';
-  if (revenue) return 'growth';
-  if (established) return 'launch';
-  return 'starter';
+  // Mixed retail + services — Scale only when already established; otherwise Launch + mixed add-on
+  if (store && bookings) {
+    return established ? 'scale' : 'launch';
+  }
+
+  if (store || bookings) {
+    return established ? 'launch' : 'starter';
+  }
+
+  return established ? 'launch' : 'starter';
+}
+
+const TIERS_WITH_REVENUE_INCLUDED = new Set(['growth', 'scale']);
+
+function applyRevenueToolsAddOn(selections, tierId, addOns, addOnLines, monthlyAddOns) {
+  if (!selections.needsRevenueTools || TIERS_WITH_REVENUE_INCLUDED.has(tierId)) {
+    return monthlyAddOns;
+  }
+
+  const rcc = addOns.find((a) => a.id === 'revenue-tools' && a.active !== false);
+  const monthly = rcc?.monthlyFee ?? 299;
+  addOnLines.push({ name: rcc?.name || 'Revenue Command Center', monthly });
+  return monthlyAddOns + monthly;
 }
 
 function calculatePlanEstimate(selections, pricingConfig) {
@@ -91,6 +109,8 @@ function calculatePlanEstimate(selections, pricingConfig) {
     }
   }
 
+  monthlyAddOns = applyRevenueToolsAddOn(selections, tierId, addOns, addOnLines, monthlyAddOns);
+
   if (selections.customIntegration) {
     const custom = addOns.find((a) => a.id === 'custom-integration' && a.active !== false);
     const once = custom?.onceOffFee ?? 2000;
@@ -128,4 +148,5 @@ module.exports = {
   mergePlanBuilderConfig,
   calculatePlanEstimate,
   resolveTierId,
+  applyRevenueToolsAddOn,
 };

@@ -61,6 +61,7 @@ const partnershipQuoteSchema = new mongoose.Schema(
     prospectEmail: { type: String, default: '', trim: true, lowercase: true },
     prospectPhone: { type: String, default: '', trim: true },
     submittedAt: { type: Date, default: null },
+    validUntil: { type: Date, default: null },
     pricingConfigVersion: { type: Number, default: null },
   },
   { timestamps: true }
