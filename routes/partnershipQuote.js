@@ -129,6 +129,15 @@ router.get('/partnership-quotes', authenticateAdmin, wrapRoute(async (req, res) 
   });
 }));
 
+/** Admin — delete a plan builder link */
+router.delete('/partnership-quotes/:quoteId', authenticateAdmin, wrapRoute(async (req, res) => {
+  const quote = await PartnershipQuote.findOneAndDelete({ quoteId: req.params.quoteId });
+  if (!quote) {
+    return res.status(404).json({ success: false, error: 'Quote not found' });
+  }
+  res.json({ success: true, message: 'Plan builder link deleted' });
+}));
+
 /** Public — load personalized quote session */
 router.get('/public/partnership-quote/:quoteId', wrapRoute(async (req, res) => {
   const quote = await PartnershipQuote.findOne({ quoteId: req.params.quoteId });
