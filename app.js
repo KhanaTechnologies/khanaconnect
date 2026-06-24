@@ -342,6 +342,17 @@ mongoose.connect(process.env.CONNECTION_STRING, {
 })
 .then(() => {
   console.log('✅ DB Connected!');
+
+  const { resolvePublicBaseUrl } = require('./helpers/publicBaseUrl');
+  const publicBase = resolvePublicBaseUrl();
+  if (publicBase.includes('localhost') && (process.env.RENDER || process.env.NODE_ENV === 'production')) {
+    console.warn(
+      '⚠️ BASE_URL is not set on this server. Newsletter unsubscribe links will point to localhost. ' +
+        'Set BASE_URL=https://khanaconnect.onrender.com in Render environment variables.'
+    );
+  } else {
+    console.log(`📎 Public email link base: ${publicBase}`);
+  }
   
   const { ensureEmailIndexes } = require('./helpers/ensureEmailIndexes');
   ensureEmailIndexes().catch((err) => {

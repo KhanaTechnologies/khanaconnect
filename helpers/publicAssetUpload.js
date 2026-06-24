@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { githubUploadConfigured, uploadBufferToGitHub } = require('./githubUpload');
+const { resolvePublicBaseUrl } = require('./publicBaseUrl');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
 const PUBLIC_UPLOADS_DIR = path.join(PROJECT_ROOT, 'public', 'uploads');
@@ -24,7 +25,7 @@ function requestOrigin(req) {
 
 function publicPathUrl(relativePath, req) {
   const rel = relativePath.startsWith('/') ? relativePath : `/${relativePath}`;
-  const base = (process.env.BASE_URL || requestOrigin(req) || '').replace(/\/$/, '');
+  const base = (resolvePublicBaseUrl() || requestOrigin(req) || '').replace(/\/$/, '');
   return base ? `${base}${rel}` : rel;
 }
 

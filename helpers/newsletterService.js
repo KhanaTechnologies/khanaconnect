@@ -5,6 +5,7 @@ const Email = require('../models/Email');
 const EmailSubscriber = require('../models/emailSubscriber');
 const NewsletterOpen = require('../models/NewsletterOpen');
 const { mergeEmailSignature, escapeHtml } = require('./signatureHtml');
+const { resolvePublicBaseUrl, resolveApiBasePath } = require('./publicBaseUrl');
 const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('./mailHost');
 
 function envInt(name, fallback) {
@@ -24,12 +25,12 @@ const RATE_LIMITS = {
 
 const rateLimitStore = new Map();
 
-function apiBasePath() {
-  return process.env.API_URL || '/api/v1';
+function publicBaseUrl() {
+  return resolvePublicBaseUrl();
 }
 
-function publicBaseUrl() {
-  return (process.env.BASE_URL || 'http://localhost:3000').replace(/\/$/, '');
+function apiBasePath() {
+  return resolveApiBasePath();
 }
 
 function hmacHex(secret, payload) {

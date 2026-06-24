@@ -2049,13 +2049,21 @@ router.get('/newsletter/open.gif', wrapRoute(async (req, res) => {
 router.get('/newsletter/unsubscribe', wrapRoute(async (req, res) => {
     const { email, clientID, sig } = req.query;
     if (!email || !clientID || !sig || !NewsletterService.verifyUnsubscribeToken(clientID, email, sig)) {
-        return res.status(400).type('html').send('<html><body><p>Invalid or expired unsubscribe link.</p></body></html>');
+        return res.status(400).type('html').send(
+            '<html><body style="font-family:sans-serif;padding:2rem;text-align:center">' +
+            '<h1>Invalid link</h1><p>This unsubscribe link is invalid or has expired.</p></body></html>'
+        );
     }
     await EmailSubscriber.updateOne(
         { email: String(email).toLowerCase().trim(), clientID: String(clientID) },
         { $set: { isActive: false } }
     );
-    return res.type('html').send('<html><body><p>You have been unsubscribed from this mailing list.</p></body></html>');
+    return res.type('html').send(
+        '<html><body style="font-family:sans-serif;padding:2rem;text-align:center">' +
+        '<h1>You are unsubscribed</h1>' +
+        '<p>You will no longer receive marketing emails from this list.</p>' +
+        '</body></html>'
+    );
 }));
 
 // Builder: templates, image upload, preview, drafts (HTML composed on dashboard)
