@@ -193,7 +193,6 @@ class NewsletterService {
         update: {
           $setOnInsert: {
             email: sub.email.toLowerCase(),
-            name: sub.name || '',
             clientID: clientId,
             dateSubscribed: new Date(),
           },
