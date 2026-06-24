@@ -1,6 +1,4 @@
-const { githubUploadConfigured, uploadBufferToGitHub } = require('./githubUpload');
-const fs = require('fs');
-const path = require('path');
+const { uploadPublicAsset } = require('./publicAssetUpload');
 
 const FILE_TYPE_MAP = {
   'image/png': 'png',
@@ -11,14 +9,6 @@ const FILE_TYPE_MAP = {
 };
 
 const MAX_HTML_BYTES = 512 * 1024;
-
-function requestOrigin(req) {
-  if (!req || typeof req.get !== 'function') return '';
-  const host = req.get('host');
-  if (!host) return '';
-  const proto = (req.get('x-forwarded-proto') || req.protocol || 'https').split(',')[0].trim();
-  return `${proto}://${host}`.replace(/\/$/, '');
-}
 
 function buildFileName(ext) {
   return `newsletter-${Date.now()}-${Math.random().toString(36).substring(2, 10)}.${ext}`;
@@ -35,23 +25,10 @@ async function uploadNewsletterImage(file, req) {
   }
 
   const fileName = buildFileName(ext);
-  const repoPath = `public/uploads/${fileName}`;
-
-  if (githubUploadConfigured()) {
-    return {
-      url: await uploadBufferToGitHub(file.buffer, repoPath),
-      fileName,
-    };
-  }
-
-  const dir = path.join(__dirname, '..', 'public', 'uploads');
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, fileName), file.buffer);
-  const origin = requestOrigin(req);
-  const rel = `/public/uploads/${fileName}`;
+  const uploaded = await uploadPublicAsset(file.buffer, `public/uploads/${fileName}`, req);
   return {
-    url: origin ? `${origin}${rel}` : rel,
-    fileName,
+    url: uploaded.url,
+    fileName: uploaded.fileName,
   };
 }
 

@@ -210,7 +210,7 @@ app.use("/public/uploads", express.static(path.join(__dirname, "public/uploads")
   }
 }));
 
-// Campaign & voting images (written to /uploads by multer routes)
+// Legacy local campaign paths + GitHub-backed assets under /public/uploads
 app.use("/uploads", express.static(path.join(__dirname, "uploads"), {
   setHeaders: setPublicUploadHeaders,
 }));

@@ -5,29 +5,28 @@ const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
 const Campaign = require('../models/Campaign');
 const PreorderPledge = require('../models/PreorderPledge');
 const { body, validationResult } = require('express-validator');
 const { wrapRoute } = require('../helpers/failureEmail');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const { createDashboardAuth } = require('../helpers/dashboardAuth');
+const { uploadPublicAsset, unlinkLocalAssetByUrl } = require('../helpers/publicAssetUpload');
 
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const uploadDir = 'uploads/campaigns';
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    cb(null, uploadDir);
-  },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const ext = path.extname(file.originalname);
-    cb(null, 'campaign-' + uniqueSuffix + ext);
-  }
-});
+const CAMPAIGN_IMAGE_EXT = /\.(jpg|jpeg|png|gif|webp)$/i;
+
+function buildCampaignFileName(originalname) {
+  const ext = path.extname(originalname || '').toLowerCase();
+  const safeExt = CAMPAIGN_IMAGE_EXT.test(ext) ? ext : '.jpg';
+  return `campaign-${Date.now()}-${Math.round(Math.random() * 1e9)}${safeExt}`;
+}
+
+async function uploadCampaignImage(file, req) {
+  const fileName = buildCampaignFileName(file.originalname);
+  return uploadPublicAsset(file.buffer, `public/uploads/campaigns/${fileName}`, req);
+}
+
+const storage = multer.memoryStorage();
 
 const fileFilter = (req, file, cb) => {
   if (!file.originalname.match(/\.(jpg|JPG|jpeg|JPEG|png|PNG|gif|GIF|webp|WEBP)$/)) {
@@ -37,13 +36,7 @@ const fileFilter = (req, file, cb) => {
   cb(null, true);
 };
 
-const upload = multer({
-  storage: storage,
-  limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB limit
-  },
-  fileFilter: fileFilter
-});
+const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 }, fileFilter });
 
 const validateClient = createDashboardAuth('preorder');
 
@@ -243,30 +236,25 @@ router.post('/:id/upload-cover', validateClient, upload.single('coverImage'), wr
   });
 
   if (!campaign) {
-    fs.unlinkSync(req.file.path);
     return res.status(404).json({
       success: false,
       message: 'Campaign not found'
     });
   }
 
-  // Delete old cover image if exists
   if (campaign.media && campaign.media.coverImage) {
-    const oldImagePath = campaign.media.coverImage.replace(/^.*[\\\/]uploads[\\\/]/, 'uploads/');
-    if (fs.existsSync(oldImagePath)) {
-      fs.unlinkSync(oldImagePath);
-    }
+    unlinkLocalAssetByUrl(campaign.media.coverImage);
   }
 
-  const imageUrl = `/uploads/campaigns/${req.file.filename}`;
-  campaign.media.coverImage = imageUrl;
+  const uploaded = await uploadCampaignImage(req.file, req);
+  campaign.media.coverImage = uploaded.url;
   await campaign.save();
 
   res.json({
     success: true,
     data: {
-      coverImage: imageUrl,
-      filename: req.file.filename
+      coverImage: uploaded.url,
+      filename: uploaded.fileName
     },
     message: 'Cover image uploaded successfully'
   });
@@ -288,7 +276,6 @@ router.post('/:id/upload-gallery', validateClient, upload.array('gallery', 10), 
   });
 
   if (!campaign) {
-    req.files.forEach(file => fs.unlinkSync(file.path));
     return res.status(404).json({
       success: false,
       message: 'Campaign not found'
@@ -298,10 +285,14 @@ router.post('/:id/upload-gallery', validateClient, upload.array('gallery', 10), 
   if (!campaign.media) campaign.media = {};
   if (!campaign.media.gallery) campaign.media.gallery = [];
 
-  const uploadedImages = req.files.map(file => ({
-    url: `/uploads/campaigns/${file.filename}`,
-    caption: req.body.captions ? req.body.captions[file.fieldname] : ''
-  }));
+  const uploadedImages = [];
+  for (const file of req.files) {
+    const uploaded = await uploadCampaignImage(file, req);
+    uploadedImages.push({
+      url: uploaded.url,
+      caption: req.body.captions ? req.body.captions[file.fieldname] : ''
+    });
+  }
 
   campaign.media.gallery.push(...uploadedImages);
   await campaign.save();
@@ -1017,11 +1008,7 @@ router.delete('/:id/cover', validateClient, wrapRoute(async (req, res) => {
   }
 
   if (campaign.media && campaign.media.coverImage) {
-    const imagePath = campaign.media.coverImage.replace(/^.*[\\\/]uploads[\\\/]/, 'uploads/');
-    if (fs.existsSync(imagePath)) {
-      fs.unlinkSync(imagePath);
-    }
-    
+    unlinkLocalAssetByUrl(campaign.media.coverImage);
     campaign.media.coverImage = null;
     await campaign.save();
   }
@@ -1050,11 +1037,7 @@ router.delete('/:id/gallery/:imageIndex', validateClient, wrapRoute(async (req, 
   const imageIndex = parseInt(req.params.imageIndex);
   
   if (campaign.media && campaign.media.gallery && campaign.media.gallery[imageIndex]) {
-    const imagePath = campaign.media.gallery[imageIndex].url.replace(/^.*[\\\/]uploads[\\\/]/, 'uploads/');
-    if (fs.existsSync(imagePath)) {
-      fs.unlinkSync(imagePath);
-    }
-    
+    unlinkLocalAssetByUrl(campaign.media.gallery[imageIndex].url);
     campaign.media.gallery.splice(imageIndex, 1);
     await campaign.save();
   }

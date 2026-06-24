@@ -250,7 +250,6 @@ async function findOriginalMessageForThreading(clientID, inReplyTo, threadId) {
 const storage = multer.memoryStorage();
 const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } }); // 10MB limit
 
-const signatureUploadDir = path.join(__dirname, '../public/uploads/signatures');
 const signatureUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 3 * 1024 * 1024 },
