@@ -66,6 +66,10 @@ const partnershipPricingConfigSchema = new mongoose.Schema(
     addOns: { type: [addOnSchema], default: [] },
     faqs: { type: [faqSchema], default: [] },
     comparisonFeatures: { type: [comparisonRowSchema], default: [] },
+    planBuilder: {
+      includedSeats: { type: mongoose.Schema.Types.Mixed, default: {} },
+      extraSeatMonthlyFee: { type: Number, default: 99 },
+    },
     updatedBy: { type: String, default: '' },
   },
   { timestamps: true }

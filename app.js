@@ -283,6 +283,7 @@ const paymentsRouter = require('./routes/payments');
 const saasRouter = require('./routes/saas');
 const revenueCommandCenterRouter = require('./routes/revenueCommandCenter');
 const partnershipPricingRouter = require('./routes/partnershipPricing');
+const partnershipQuoteRouter = require('./routes/partnershipQuote');
 const teamRouter = require('./routes/team');
 
 app.use('/', indexRouter);
@@ -321,6 +322,7 @@ app.use(`${api}/saas`, saasRouter);
 app.use(`${api}/revenue`, revenueCommandCenterRouter);
 app.use(`${api}/team`, teamRouter);
 app.use(`${api}`, partnershipPricingRouter);
+app.use(`${api}`, partnershipQuoteRouter);
 
 
 /**

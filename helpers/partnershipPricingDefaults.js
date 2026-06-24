@@ -1,3 +1,5 @@
+const { DEFAULT_PLAN_BUILDER, mergePlanBuilderConfig } = require('./planBuilderPricing');
+
 const PRICING_CONFIG_VERSION = 5;
 
 /** Default partnership pricing for the SA market (excl. VAT). */
@@ -196,6 +198,10 @@ const DEFAULT_PARTNERSHIP_PRICING = {
       sortOrder: 4,
     },
   ],
+  planBuilder: {
+    includedSeats: { ...DEFAULT_PLAN_BUILDER.includedSeats },
+    extraSeatMonthlyFee: DEFAULT_PLAN_BUILDER.extraSeatMonthlyFee,
+  },
   comparisonFeatures: [
     { label: 'Managed hosting & SSL', starter: true, launch: true, growth: true, scale: true, enterprise: true },
     { label: 'Business website', starter: true, launch: true, growth: true, scale: true, enterprise: true },
@@ -229,6 +235,7 @@ function mergePartnershipPricing(doc) {
       Array.isArray(src.comparisonFeatures) && src.comparisonFeatures.length
         ? src.comparisonFeatures
         : defaults.comparisonFeatures,
+    planBuilder: mergePlanBuilderConfig({ planBuilder: src.planBuilder || defaults.planBuilder }),
     pricingConfigVersion: src.pricingConfigVersion ?? defaults.pricingConfigVersion,
     updatedAt: src.updatedAt,
     updatedBy: src.updatedBy,
