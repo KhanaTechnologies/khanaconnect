@@ -1474,8 +1474,26 @@ router.post('/batch', validateClient, wrapRoute(async (req, res) => {
 // NEWSLETTER ROUTES
 // ============================================================================
 
-// Builder: templates, image upload, preview, drafts (HTML composed on dashboard)
-router.use('/newsletter', validateClient, newsletterBuilderRouter);
+function mapDraftToCampaign(draft) {
+    const doc = draft && typeof draft.toObject === 'function' ? draft.toObject() : draft;
+    return {
+        id: String(doc._id),
+        name: doc.name || 'Untitled campaign',
+        subject: doc.subject || '',
+        content: doc.html || doc.text || '',
+        status: 'draft',
+        recipientCount: 0,
+    };
+}
+
+function plainTextToHtml(text) {
+    if (!text) return '';
+    return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\n/g, '<br/>');
+}
 
 // SEND NEWSLETTER TO SUBSCRIBERS
 router.post('/newsletter/send', validateClient, upload.array('attachments', 5), wrapRoute(async (req, res) => {
@@ -1697,6 +1715,59 @@ router.get('/newsletter/subscribers', validateClient, wrapRoute(async (req, res)
     }
 }));
 
+// ADD SINGLE SUBSCRIBER
+router.post('/newsletter/subscribers', validateClient, wrapRoute(async (req, res) => {
+    try {
+        const { email, name } = req.body || {};
+
+        if (!email) {
+            return res.status(400).json({
+                ok: false,
+                message: 'Email is required',
+            });
+        }
+
+        if (!NewsletterService.isValidEmail(email)) {
+            return res.status(400).json({
+                ok: false,
+                message: 'Invalid email address',
+            });
+        }
+
+        const result = await NewsletterService.addSubscribers(req.client.clientID, [{ email, name }]);
+
+        if (result.errors && result.errors.length > 0) {
+            return res.status(500).json({
+                ok: false,
+                message: 'Failed to add subscriber',
+                error: result.errors[0],
+            });
+        }
+
+        const normalizedEmail = String(email).toLowerCase().trim();
+        const subscriber = {
+            id: normalizedEmail,
+            email: normalizedEmail,
+            name: name || '',
+            subscribed: true,
+            subscribedAt: new Date().toISOString(),
+        };
+
+        res.status(201).json({
+            ok: true,
+            data: subscriber,
+            added: result.added,
+            updated: result.updated,
+        });
+    } catch (error) {
+        res.status(500).json({
+            ok: false,
+            message: 'Failed to add subscriber',
+            error: error.message,
+        });
+    }
+}));
+
 // ADD SUBSCRIBERS IN BULK
 router.post('/newsletter/subscribers/bulk', validateClient, wrapRoute(async (req, res) => {
     try {
@@ -1799,6 +1870,90 @@ router.get('/newsletter/rate-limit', validateClient, wrapRoute(async (req, res) 
             ok: false,
             message: 'Failed to get rate limit status',
             error: error.message
+        });
+    }
+}));
+
+// NEWSLETTER CAMPAIGNS (dashboard legacy UI — backed by newsletter drafts)
+router.get('/newsletter/campaigns', validateClient, wrapRoute(async (req, res) => {
+    try {
+        const drafts = await NewsletterDraft.find({
+            clientID: req.client.clientID,
+            isDeleted: false,
+        })
+            .sort({ updatedAt: -1 })
+            .lean();
+
+        res.json({
+            ok: true,
+            campaigns: drafts.map(mapDraftToCampaign),
+        });
+    } catch (error) {
+        res.status(500).json({
+            ok: false,
+            message: 'Failed to fetch campaigns',
+            error: error.message,
+        });
+    }
+}));
+
+router.post('/newsletter/campaigns', validateClient, wrapRoute(async (req, res) => {
+    try {
+        const { name, subject, content } = req.body || {};
+        const textBody = content || '';
+        const htmlBody = plainTextToHtml(textBody);
+
+        const draft = await NewsletterDraft.create({
+            clientID: req.client.clientID,
+            name: name || 'Untitled campaign',
+            subject: subject || '',
+            html: htmlBody,
+            text: textBody,
+            payload: {},
+        });
+
+        const campaign = mapDraftToCampaign(draft);
+        res.status(201).json({ ok: true, ...campaign, data: campaign });
+    } catch (error) {
+        res.status(500).json({
+            ok: false,
+            message: 'Failed to create campaign',
+            error: error.message,
+        });
+    }
+}));
+
+router.put('/newsletter/campaigns/:id', validateClient, wrapRoute(async (req, res) => {
+    try {
+        const draft = await NewsletterDraft.findOne({
+            _id: req.params.id,
+            clientID: req.client.clientID,
+            isDeleted: false,
+        });
+
+        if (!draft) {
+            return res.status(404).json({ ok: false, message: 'Campaign not found' });
+        }
+
+        const { name, subject, content, status } = req.body || {};
+        if (name != null) draft.name = name;
+        if (subject != null) draft.subject = subject;
+        if (content != null) {
+            draft.text = content;
+            draft.html = plainTextToHtml(content);
+        }
+        if (status === 'draft') {
+            // no-op — drafts remain drafts until sent via /newsletter/send
+        }
+
+        await draft.save();
+        const campaign = mapDraftToCampaign(draft);
+        res.json({ ok: true, ...campaign, data: campaign });
+    } catch (error) {
+        res.status(500).json({
+            ok: false,
+            message: 'Failed to update campaign',
+            error: error.message,
         });
     }
 }));
@@ -1918,6 +2073,10 @@ router.get('/newsletter/unsubscribe', wrapRoute(async (req, res) => {
     );
     return res.type('html').send('<html><body><p>You have been unsubscribed from this mailing list.</p></body></html>');
 }));
+
+// Builder: templates, image upload, preview, drafts (HTML composed on dashboard)
+// Mounted after specific /newsletter/* routes so subscribers/campaigns are not shadowed.
+router.use('/newsletter', validateClient, newsletterBuilderRouter);
 
 // ============================================================================
 // SUBSCRIBER MANAGEMENT ROUTES
