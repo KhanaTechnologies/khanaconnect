@@ -7,23 +7,9 @@ const gaClient = require("../helpers/gaClient");
 const cache = new NodeCache({ stdTTL: 300 }); // 5 min cache
 const { decrypt } = require("../helpers/encryption"); // Add this import
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
+const { createDashboardAuth } = require('../helpers/dashboardAuth');
 
-// ---------------- Middleware ---------------- //
-const validateClient = (req, res, next) => {
-    const token = req.headers.authorization;
-    if (!token || !token.startsWith('Bearer ')) 
-        return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
-
-    const tokenValue = token.split(' ')[1];
-    try {
-        const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
-        if (!decoded.clientID) return res.status(403).json({ error: 'Forbidden - Invalid token' });
-        req.clientId = decoded.clientID;
-        next();
-    } catch (_err) {
-        return res.status(403).json({ error: 'Forbidden - Invalid token' });
-    }
-};
+const validateClient = createDashboardAuth('sales');
 
 // ---------------- Helper: Aggregate Visits ---------------- //
 const aggregateVisits = (rows, period) => {

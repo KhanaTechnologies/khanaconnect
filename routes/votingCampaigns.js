@@ -10,6 +10,7 @@ const Customer = require('../models/customer');
 const { body, validationResult } = require('express-validator');
 const { wrapRoute } = require('../helpers/failureEmail');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
+const { createDashboardAuth } = require('../helpers/dashboardAuth');
 const {
   processVotingImageFile,
   unlinkLocalVotingImageByUrl,
@@ -318,29 +319,7 @@ function initializeCampaignItem(item) {
   };
 }
 
-// Middleware to authenticate client
-const validateClient = (req, res, next) => {
-  const token = req.headers.authorization;
-  if (!token || !token.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
-  }
-
-  const tokenValue = token.split(' ')[1];
-  try {
-    const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
-    if (!decoded.clientID) {
-      return res.status(403).json({ error: 'Forbidden - Invalid token' });
-    }
-    req.clientId = decoded.clientID;
-    req.user = {
-      id: decoded.clientID,
-      role: decoded.role || 'user'
-    };
-    next();
-  } catch (_err) {
-    return res.status(403).json({ error: 'Forbidden - Invalid token' });
-  }
-};
+const validateClient = createDashboardAuth('voting');
 
 // Middleware to authenticate customer (for voting)
 const validateCustomer = (req, res, next) => {

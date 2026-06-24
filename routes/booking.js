@@ -22,6 +22,10 @@ const {
 } = require('../utils/email');
 const { diffBookingForCustomer, normalizeCustomerNotifyChanges } = require('../utils/bookingEmailHelpers');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
+const { createDashboardAuth } = require('../helpers/dashboardAuth');
+const { recordTeamActivityFromRequest } = require('../helpers/teamActivity');
+
+const validateClient = createDashboardAuth('bookings');
 
 function clientCanSendMail(client) {
     return Boolean(
@@ -32,22 +36,6 @@ function clientCanSendMail(client) {
         client.businessEmail !== 'your-email@gmail.com'
     );
 }
-
-// Middleware to authenticate JWT and attach clientId
-const validateClient = (req, res, next) => {
-    const token = req.headers.authorization;
-    if (!token || !token.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
-
-    const tokenValue = token.split(' ')[1];
-    try {
-        const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
-        if (!decoded.clientID) return res.status(403).json({ error: 'Forbidden - Invalid token' });
-        req.clientId = decoded.clientID;
-        next();
-    } catch (_err) {
-        return res.status(403).json({ error: 'Forbidden - Invalid token' });
-    }
-};
 
 // GET: Get all bookings with filters
 router.get('/', validateClient, wrapRoute(async (req, res) => {
@@ -268,6 +256,12 @@ router.post('/', validateClient, wrapRoute(async (req, res) => {
                       : '24 hours before',
             scheduledTime: booking.reminders[0]?.scheduledTime,
         },
+    });
+    recordTeamActivityFromRequest(req, {
+      category: 'bookings',
+      action: 'booking.created',
+      summary: `Booking created for ${booking.customerName || 'customer'}`,
+      metadata: { bookingId: String(booking._id) },
     });
 
     const displayName = client.companyName || client.clientName || clientId;
@@ -534,6 +528,12 @@ router.put('/:id', validateClient, wrapRoute(async (req, res) => {
         message: 'Booking updated successfully',
         booking: updatedBooking
     });
+    recordTeamActivityFromRequest(req, {
+      category: 'bookings',
+      action: 'booking.updated',
+      summary: `Booking ${updatedBooking._id} updated`,
+      metadata: { bookingId: String(updatedBooking._id) },
+    });
 
     // ============ BACKGROUND EMAIL PROCESSING ============
     // This runs AFTER the response is sent, so frontend doesn't wait
@@ -784,6 +784,12 @@ router.delete('/:id', validateClient, wrapRoute(async (req, res) => {
     await booking.save();
 
     res.json({ message: 'Booking cancelled successfully' });
+    recordTeamActivityFromRequest(req, {
+      category: 'bookings',
+      action: 'booking.cancelled',
+      summary: `Booking ${booking._id} cancelled`,
+      metadata: { bookingId: String(booking._id) },
+    });
 }));
 
 // GET: Get available resources

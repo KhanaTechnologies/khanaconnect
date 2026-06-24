@@ -12,6 +12,9 @@ const { BetaAnalyticsDataClient } = require('@google-analytics/data');
 const metaService = require('../services/metaService');
 const googleService = require('../services/googleService');
 const { encrypt, decrypt } = require('../helpers/encryption'); // ✅ Import from helper
+const { authenticateClientLogin } = require('../helpers/teamLogin');
+const { resolveSessionFromToken, requireTeamSession, requireTeamManager } = require('../helpers/teamAuth');
+const { createDashboardAuth } = require('../helpers/dashboardAuth');
 
 router.use(authJwt());
 
@@ -36,21 +39,8 @@ function generateToken(client) {
   return jwt.sign(payload, secret, { expiresIn: '1y' });
 }
 
-// Middleware to authenticate token
-function authenticateToken(req, res, next) {
-  try {
-    const token = req.headers.authorization;
-    const secret = getJwtSecret();
-    if (!token) return res.status(401).json({ error: 'Unauthorized - Token missing' });
-
-    const tokenValue = token.split(' ')[1];
-    const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
-    req.user = decoded;
-    next();
-  } catch (error) {
-    next(error);
-  }
-}
+// Middleware to authenticate token (dashboard team sessions)
+const authenticateToken = createDashboardAuth('sales');
 
 // Admin check middleware
 async function requireAdmin(req, res, next) {
@@ -81,11 +71,12 @@ function checkDashboardPermission(requiredPermission = 'view') {
       if (!token) return res.status(401).json({ error: 'Unauthorized' });
 
       const { decoded } = verifyJwtWithAnySecret(jwt, token);
-      const client = await Client.findOne({ clientID: decoded.clientID });
-      if (!client) return res.status(404).json({ error: 'Client not found' });
+      const session = await resolveSessionFromToken(decoded);
+      if (!session) return res.status(404).json({ error: 'Client not found' });
 
-      // Check if client has admin role (admins have all permissions)
-      if (client.role === 'admin') {
+      const { client, permissions: sessionPermissions, platformAdmin } = session;
+
+      if (platformAdmin) {
         req.user = decoded;
         req.clientPermissions = {
           view: true,
@@ -97,29 +88,34 @@ function checkDashboardPermission(requiredPermission = 'view') {
           staff: true,
           categories: true,
           preorder: true,
-          voting: true
+          voting: true,
         };
         return next();
       }
 
-      // Check dashboard permission from permissions object
-      const hasDashboardAccess = client.permissions?.dashboard || false;
-      
+      if (!session.member) {
+        return res.status(403).json({
+          error: 'Team member sign-in required. Please log out and sign in with your email and password.',
+        });
+      }
+
+      const permissions = sessionPermissions || client.permissions || {};
+      const hasDashboardAccess = permissions.dashboard || false;
+
       if (!hasDashboardAccess) {
         return res.status(403).json({ error: 'Dashboard access denied' });
       }
 
-      // For granular permissions, you can extend this
-      if (requiredPermission === 'analytics' && !client.permissions?.sales) {
+      if (requiredPermission === 'analytics' && !permissions.sales) {
         return res.status(403).json({ error: 'No permission to view analytics' });
       }
 
-      if (requiredPermission === 'reports' && !client.permissions?.sales) {
+      if (requiredPermission === 'reports' && !permissions.sales) {
         return res.status(403).json({ error: 'No permission to view reports' });
       }
 
       req.user = decoded;
-      req.clientPermissions = client.permissions;
+      req.clientPermissions = permissions;
       next();
     } catch (error) {
       next(error);
@@ -1568,9 +1564,13 @@ router.delete('/:clientId', wrapRoute(async (req, res) => {
   });
 }));
 
-// Update client permissions including dashboard
-router.put('/:clientId/permissions', wrapRoute(async (req, res) => {
+// Update client default permissions for new team members (owner/manager only)
+router.put('/:clientId/permissions', requireTeamSession(), requireTeamManager(), wrapRoute(async (req, res) => {
   const { permissions } = req.body;
+
+  if (req.params.clientId !== req.clientID) {
+    return res.status(403).json({ error: 'You can only update permissions for your own organization' });
+  }
   
   const updatedClient = await Client.findOneAndUpdate(
     { clientID: req.params.clientId },
@@ -1587,18 +1587,43 @@ router.put('/:clientId/permissions', wrapRoute(async (req, res) => {
   });
 }));
 
-// Get client permissions
+// Get client permissions (returns team member permissions when logged in as a member)
 router.get('/:clientId/permissions', wrapRoute(async (req, res) => {
   const client = await Client.findOne({ clientID: req.params.clientId })
-    .select('permissions role');
-  
+    .select('permissions role companyName clientID');
+
   if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  let permissions = client.permissions;
+  let orgRole = null;
+
+  const auth = req.headers.authorization;
+  if (auth && auth.startsWith('Bearer ')) {
+    try {
+      const token = auth.split(' ')[1];
+      const { decoded } = verifyJwtWithAnySecret(jwt, token);
+      if (decoded.clientID === client.clientID) {
+        const session = await resolveSessionFromToken(decoded);
+        if (session?.member) {
+          permissions = session.member.permissions;
+          orgRole = session.member.orgRole;
+        } else if (session?.platformAdmin) {
+          permissions = session.permissions;
+        }
+      }
+    } catch (_err) {
+      // fall back to client permissions
+    }
+  }
 
   res.json({
     success: true,
     role: client.role,
-    permissions: client.permissions,
-    isAdmin: client.role === 'admin'
+    orgRole,
+    permissions,
+    isAdmin: client.role === 'admin',
+    clientID: client.clientID,
+    name: client.companyName,
   });
 }));
 
@@ -1740,48 +1765,19 @@ router.get('/:clientId/analytics/dashboard',
     }
 }));
 
-// Client login
+// Client login — Client ID + email + password (platform admin may omit email)
 router.post('/login', loginLimiter, wrapRoute(async (req, res) => {
-  const client = await Client.findOne({ clientID: req.body.clientID });
-  if (!client) return res.status(400).send('The client could not be found');
+  const result = await authenticateClientLogin({
+    clientID: req.body.clientID,
+    email: req.body.email,
+    password: req.body.password,
+  });
 
-  if (bcrypt.compareSync(req.body.password, client.password)) {
-    const token = jwt.sign({ 
-      clientID: client.clientID, 
-      merchant_id: client.merchant_id, 
-      isActive: true 
-    }, getJwtSecret(), { expiresIn: '1d' });
-
-    if (client.isLoggedIn) {
-      client.sessionToken = null;
-      client.sessionExpires = null;
-    }
-    client.sessionToken = token;
-    client.sessionExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    client.isLoggedIn = true;
-    await client.save();
-
-    // Remove sensitive data
-    const clientResponse = client.toObject();
-    delete clientResponse.password;
-    delete clientResponse.token;
-
-    res.status(200).send({
-      success: true,
-      client: clientResponse,
-      token,
-      permissions: {
-        ...client.permissions,
-        hasDashboardAccess: client.permissions?.dashboard || false
-      },
-      role: client.role,
-      tier: client.tier,
-      hasAdPlatforms: client.hasEnabledAdPlatforms,
-      enabledAdPlatforms: client.getEnabledAdPlatforms()
-    });
-  } else {
-    res.status(400).send('The user email and password are incorrect!');
+  if (!result.ok) {
+    return res.status(result.status || 400).json({ error: result.message });
   }
+
+  res.status(200).send(result.body);
 }));
 
 // Client logout

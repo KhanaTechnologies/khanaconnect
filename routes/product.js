@@ -10,7 +10,11 @@ const { SalesItem } = require('../models/salesItem');
 const { wrapRoute } = require('../helpers/failureEmail'); // ✅ Import wrapRoute
 const wishlistNotifyService = require('../services/wishlistNotifyService');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
+const { createDashboardAuth } = require('../helpers/dashboardAuth');
+const { recordTeamActivityFromRequest } = require('../helpers/teamActivity');
 require('dotenv').config();
+
+const validateClient = createDashboardAuth('products');
 
 const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
 
@@ -45,22 +49,6 @@ const uploadImageToGitHub = async (file, fileName) => {
     });
 
     return response.data.content.download_url;
-};
-
-// Middleware to authenticate JWT and attach clientId
-const validateClient = (req, res, next) => {
-    const token = req.headers.authorization;
-    if (!token || !token.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
-
-    const tokenValue = token.split(' ')[1];
-    try {
-        const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
-        if (!decoded.clientID) return res.status(403).json({ error: 'Forbidden - Invalid token' });
-        req.clientId = decoded.clientID;
-        next();
-    } catch (_err) {
-        return res.status(403).json({ error: 'Forbidden - Invalid token' });
-    }
 };
 
 // -------------------- ROUTES -------------------- //
@@ -138,6 +126,12 @@ router.post(
 
         const savedProduct = await newProduct.save();
         res.json(savedProduct);
+        recordTeamActivityFromRequest(req, {
+          category: 'products',
+          action: 'product.created',
+          summary: `Product created: ${savedProduct.productName}`,
+          metadata: { productId: String(savedProduct._id) },
+        });
     })
 );
 
@@ -218,6 +212,12 @@ router.put(
           .catch((err) => console.error('wishlist notify (product update):', err.message));
 
         res.json(updatedProduct);
+        recordTeamActivityFromRequest(req, {
+          category: 'products',
+          action: 'product.updated',
+          summary: `Product updated: ${updatedProduct.productName}`,
+          metadata: { productId: String(updatedProduct._id) },
+        });
     })
 );
 
@@ -246,6 +246,12 @@ router.delete('/:id', validateClient, wrapRoute(async (req, res) => {
     const product = await Product.findByIdAndDelete(req.params.id);
     if (!product) return res.status(404).json({ error: 'Product not found' });
     res.json({ message: 'Product deleted successfully' });
+    recordTeamActivityFromRequest(req, {
+      category: 'products',
+      action: 'product.deleted',
+      summary: `Product ${req.params.id} deleted`,
+      metadata: { productId: req.params.id },
+    });
 }));
 
 module.exports = router;

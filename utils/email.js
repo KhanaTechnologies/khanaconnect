@@ -1049,6 +1049,188 @@ async function sendResetPasswordEmail(
 }
 
 // -----------------------------
+// Dashboard team login — password reset (from Khana admin mailbox)
+// -----------------------------
+async function sendTeamDashboardResetEmail({
+  memberEmail,
+  memberName,
+  companyName,
+  clientID,
+  resetLink,
+  adminBusinessEmail,
+  adminBusinessEmailPassword,
+  adminCompanyName,
+  emailSignature = '',
+  adminClientId = null,
+}) {
+  const formattedClientName = getFormattedClientName(adminCompanyName || 'Khana Technologies');
+  const decryptedFrom = decrypt(adminBusinessEmail);
+  const qm = qTenant(adminClientId);
+
+  const emailContent = `
+        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
+            <h2 style="text-align: center; color: #444;">Reset your dashboard password</h2>
+            <p>Hi ${memberName || memberEmail},</p>
+            <p>We received a request to reset the password for your <strong>${companyName}</strong> dashboard account.</p>
+            <p><strong>Client ID:</strong> ${clientID}</p>
+            <p><strong>Login email:</strong> ${memberEmail}</p>
+            <div style="text-align: center; margin: 30px 0;">
+              <a href="${resetLink}" style="background-color: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px;">
+                Reset my password
+              </a>
+            </div>
+            <p>This link expires in 1 hour. If you did not request this, please ignore this email.</p>
+            <p>Warm regards,<br>${formattedClientName}</p>
+        </div>
+    `;
+
+  const result = await sendWithRetry(
+    () => createTransporter(adminBusinessEmail, adminBusinessEmailPassword),
+    {
+      from: decryptedFrom,
+      to: memberEmail,
+      subject: `Reset your ${companyName} dashboard password`,
+      ...mimeFrom(
+        emailContent,
+        `Reset your dashboard password for ${companyName} (Client ID: ${clientID}). Link expires in 1 hour: ${resetLink}`,
+        emailSignature
+      ),
+    },
+    5,
+    1600,
+    qm
+  );
+
+  console.log(
+    `[sendTeamDashboardResetEmail] Sent to ${memberEmail} for client ${clientID}` +
+      (result?.messageId ? ` (messageId: ${result.messageId})` : ' (queued for retry)')
+  );
+  return result;
+}
+
+// -----------------------------
+// Dashboard team login — invite (from Khana admin mailbox)
+// -----------------------------
+async function sendTeamDashboardInviteEmail({
+  memberEmail,
+  memberName,
+  companyName,
+  clientID,
+  inviteLink,
+  adminBusinessEmail,
+  adminBusinessEmailPassword,
+  adminCompanyName,
+  emailSignature = '',
+  adminClientId = null,
+}) {
+  const formattedClientName = getFormattedClientName(adminCompanyName || 'Khana Technologies');
+  const decryptedFrom = decrypt(adminBusinessEmail);
+  const qm = qTenant(adminClientId);
+
+  const emailContent = `
+        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
+            <h2 style="text-align: center; color: #444;">You're invited to the dashboard</h2>
+            <p>Hi ${memberName || memberEmail},</p>
+            <p><strong>${companyName}</strong> has invited you to access their Khana dashboard.</p>
+            <p><strong>Client ID:</strong> ${clientID}</p>
+            <p><strong>Your login email:</strong> ${memberEmail}</p>
+            <p>Click below to choose your password and activate your account.</p>
+            <div style="text-align: center; margin: 30px 0;">
+              <a href="${inviteLink}" style="background-color: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px;">
+                Accept invite
+              </a>
+            </div>
+            <p>This link expires in 7 days. After activating, sign in with Client ID, your email, and the password you choose.</p>
+            <p>Warm regards,<br>${formattedClientName}</p>
+        </div>
+    `;
+
+  const result = await sendWithRetry(
+    () => createTransporter(adminBusinessEmail, adminBusinessEmailPassword),
+    {
+      from: decryptedFrom,
+      to: memberEmail,
+      subject: `You're invited to ${companyName}'s Khana dashboard`,
+      ...mimeFrom(
+        emailContent,
+        `You're invited to ${companyName}'s dashboard (Client ID: ${clientID}). Accept your invite: ${inviteLink}`,
+        emailSignature
+      ),
+    },
+    5,
+    1600,
+    qm
+  );
+
+  console.log(
+    `[sendTeamDashboardInviteEmail] Sent to ${memberEmail} for client ${clientID}` +
+      (result?.messageId ? ` (messageId: ${result.messageId})` : ' (queued for retry)')
+  );
+  return result;
+}
+
+// -----------------------------
+// Dashboard activity — owner email alerts
+// -----------------------------
+async function sendTeamActivityNotifyEmail({
+  ownerEmail,
+  ownerName,
+  companyName,
+  clientID,
+  categoryLabel,
+  summary,
+  activityUrl,
+  adminBusinessEmail,
+  adminBusinessEmailPassword,
+  adminCompanyName,
+  emailSignature = '',
+  adminClientId = null,
+}) {
+  const formattedClientName = getFormattedClientName(adminCompanyName || 'Khana Technologies');
+  const decryptedFrom = decrypt(adminBusinessEmail);
+  const qm = qTenant(adminClientId);
+
+  const emailContent = `
+        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
+            <h2 style="text-align: center; color: #444;">Dashboard activity</h2>
+            <p>Hi ${ownerName || ownerEmail},</p>
+            <p><strong>${categoryLabel}</strong> — ${summary}</p>
+            <p><strong>Organization:</strong> ${companyName} (Client ID: ${clientID})</p>
+            <div style="text-align: center; margin: 30px 0;">
+              <a href="${activityUrl}" style="background-color: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px;">
+                View activity log
+              </a>
+            </div>
+            <p>You receive this because you enabled email alerts for this category in Activity settings.</p>
+            <p>Warm regards,<br>${formattedClientName}</p>
+        </div>
+    `;
+
+  const result = await sendWithRetry(
+    () => createTransporter(adminBusinessEmail, adminBusinessEmailPassword),
+    {
+      from: decryptedFrom,
+      to: ownerEmail,
+      subject: `[${companyName}] ${categoryLabel}: ${summary}`.slice(0, 120),
+      ...mimeFrom(
+        emailContent,
+        `${categoryLabel}: ${summary}\n\nView log: ${activityUrl}`,
+        emailSignature
+      ),
+    },
+    5,
+    1600,
+    qm
+  );
+
+  console.log(
+    `[sendTeamActivityNotifyEmail] Sent to ${ownerEmail} for ${clientID}` +
+      (result?.messageId ? ` (messageId: ${result.messageId})` : '')
+  );
+  return result;
+}
+
+// -----------------------------
 // Contact Us Email
 // -----------------------------
 async function sendContactUsEmail(contactData, bEmail, BEPass, clientName, emailSignature = '', tenantClientId = null) {
@@ -1212,6 +1394,9 @@ module.exports = {
     sendAccommodationConfirmationEmail,
     sendMixedBookingConfirmationEmail,
     sendResetPasswordEmail,
+    sendTeamDashboardResetEmail,
+    sendTeamDashboardInviteEmail,
+    sendTeamActivityNotifyEmail,
     sendContactUsEmail,
     sendCheckInReminderEmail,
     sendCheckOutReminderEmail,

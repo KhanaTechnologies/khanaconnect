@@ -9,6 +9,7 @@ const Campaign = require('../models/Campaign');
 const PreorderPledge = require('../models/PreorderPledge');
 const { wrapRoute } = require('../helpers/failureEmail');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
+const { createDashboardAuth } = require('../helpers/dashboardAuth');
 const { mergeRevenueSettings, DEFAULT_REVENUE_SETTINGS } = require('../helpers/revenueDefaults');
 const {
   buildOverview,
@@ -25,20 +26,7 @@ const { resolveSmtpHost } = require('../helpers/mailHost');
 
 const router = express.Router();
 
-function authenticateClient(req, res, next) {
-  const token = req.headers.authorization;
-  if (!token || !token.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  try {
-    const { decoded } = verifyJwtWithAnySecret(jwt, token.split(' ')[1]);
-    if (!decoded.clientID) return res.status(403).json({ error: 'Client token required' });
-    req.clientId = decoded.clientID;
-    next();
-  } catch (_e) {
-    return res.status(403).json({ error: 'Invalid token' });
-  }
-}
+const authenticateClient = createDashboardAuth('sales');
 
 async function loadClient(clientId) {
   return Client.findOne({ clientID: clientId });

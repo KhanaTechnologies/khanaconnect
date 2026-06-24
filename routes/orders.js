@@ -17,25 +17,10 @@ const { fulfillGatewayPayment } = require('../helpers/fulfillGatewayPayment');
 const { orderPaymentWebhookOk } = require('../helpers/webhookAuth');
 const wishlistNotifyService = require('../services/wishlistNotifyService');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
+const { createDashboardAuth } = require('../helpers/dashboardAuth');
+const { recordTeamActivityFromRequest } = require('../helpers/teamActivity');
 
-// Middleware to authenticate JWT token and extract clientId
-const authenticateToken = (req, res, next) => {
-    const token = req.headers.authorization;
-
-    if (!token || !token.startsWith('Bearer ')) {
-        return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
-    }
-
-    const tokenValue = token.split(' ')[1];
-
-    try {
-        const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
-        req.clientId = decoded.clientID;
-        next();
-    } catch (_err) {
-        return res.status(403).json({ error: 'Forbidden - Invalid token' });
-    }
-};
+const authenticateToken = createDashboardAuth('orders');
 
 // -------------------- HELPER FUNCTIONS -------------------- //
 
@@ -101,6 +86,12 @@ router.delete('/:id', authenticateToken, wrapRoute(async (req, res) => {
     );
     
     res.json({ success: true, message: 'Order deleted successfully' });
+    recordTeamActivityFromRequest(req, {
+      category: 'orders',
+      action: 'order.deleted',
+      summary: `Order ${req.params.id} deleted`,
+      metadata: { orderId: req.params.id },
+    });
 }));
 
 // Create a new order
@@ -226,6 +217,12 @@ router.post('/', authenticateToken, [
     }
 
     res.status(201).json(order);
+    recordTeamActivityFromRequest(req, {
+      category: 'orders',
+      action: 'order.created',
+      summary: `Order ${order._id} created`,
+      metadata: { orderId: String(order._id) },
+    });
 }));
 
 // Update an order
@@ -277,9 +274,13 @@ router.put('/:id', authenticateToken, wrapRoute(async (req, res) => {
     }
 
     res.json(order);
+    recordTeamActivityFromRequest(req, {
+      category: 'orders',
+      action: 'order.updated',
+      summary: `Order ${order._id} updated (${setStatus || 'status change'})`,
+      metadata: { orderId: String(order._id), status: setStatus },
+    });
 }));
-
-// Update order payment (webhook auth only when ORDER_PAYMENT_WEBHOOK_ENABLED=true)
 router.post('/update-order-payment', wrapRoute(async (req, res) => {
     if (!orderPaymentWebhookOk(req)) {
         return res.status(401).json({ error: 'Unauthorized' });

@@ -9,6 +9,7 @@ require('dotenv').config();
 
 const { wrapRoute } = require('../helpers/failureEmail'); // ensure correct path
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
+const { createDashboardAuth } = require('../helpers/dashboardAuth');
 
 const octokit = new Octokit({
   auth: process.env.GITHUB_TOKEN
@@ -57,30 +58,7 @@ const uploadImageToGitHub = async (file, fileName) => {
   }
 };
 
-// Middleware to validate token and extract clientID
-const validateTokenAndExtractClientID = (req, res, next) => {
-  try {
-    const token = req.headers.authorization;
-    if (!token || !token.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
-    }
-    const tokenValue = token.split(' ')[1];
-    try {
-      const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
-      if (!decoded || !decoded.clientID) {
-        return res.status(403).json({ error: 'Forbidden - Invalid token payload' });
-      }
-      req.clientID = decoded.clientID;
-      next();
-    } catch (_err) {
-      return res.status(403).json({ error: 'Forbidden - Invalid token' });
-    }
-  } catch (error) {
-    // Unexpected error -> forward to global error handler (and email)
-    console.error('Error in token validation middleware:', error);
-    next(error);
-  }
-};
+const validateTokenAndExtractClientID = createDashboardAuth('categories');
 
 // Get all categories
 router.get('/', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {

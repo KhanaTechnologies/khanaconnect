@@ -15,21 +15,27 @@ const { escapeHtml } = require('../helpers/signatureHtml');
 const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../helpers/mailHost');
 const { sendMail } = require('../helpers/mailer');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
+const { createDashboardAuth } = require('../helpers/dashboardAuth');
+const { recordTeamActivityFromRequest } = require('../helpers/teamActivity');
 
-// Middleware to authenticate JWT token and extract clientId
-const authenticateToken = (req, res, next) => {
+// Storefront checkout — accepts client API token (no team member required)
+const authenticateStoreToken = (req, res, next) => {
   const token = req.headers.authorization;
-  if (!token || !token.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
-
+  if (!token || !token.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
+  }
   const tokenValue = token.split(' ')[1];
   try {
     const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
+    if (!decoded?.clientID) return res.status(403).json({ error: 'Forbidden - Invalid token' });
     req.clientId = decoded.clientID;
     next();
   } catch (_err) {
     return res.status(403).json({ error: 'Forbidden - Invalid token' });
   }
 };
+
+const authenticateToken = createDashboardAuth('sales');
 
 async function sendWishlistCheckoutCodeAlerts({
   clientId,
@@ -159,7 +165,7 @@ ${websiteUrl ? `Website: ${websiteUrl}` : ''}`;
 // --------------------
 // VERIFY DISCOUNT CODE
 // --------------------
-router.post('/verify-discount-code', authenticateToken, async (req, res) => {
+router.post('/verify-discount-code', authenticateStoreToken, async (req, res) => {
   const { discountCode, cartProductIds } = req.body;
   if (!discountCode || !Array.isArray(cartProductIds) || cartProductIds.length === 0) {
     return res.status(400).json({ error: 'Invalid discount code or cart is empty' });
@@ -277,6 +283,12 @@ router.post('/createCheckoutCode', authenticateToken, async (req, res) => {
       checkoutCode: newCheckoutCode,
       newsletter,
       wishlistAlerts,
+    });
+    recordTeamActivityFromRequest(req, {
+      category: 'sales',
+      action: 'discount.created',
+      summary: `Checkout code created: ${newCheckoutCode.code}`,
+      metadata: { codeId: String(newCheckoutCode._id), code: newCheckoutCode.code },
     });
   } catch (err) {
     console.error('Error creating checkout code:', err);

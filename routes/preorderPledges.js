@@ -8,14 +8,13 @@ const Campaign = require('../models/Campaign');
 const { body, validationResult } = require('express-validator');
 const { wrapRoute } = require('../helpers/failureEmail');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
+const { createDashboardAuth } = require('../helpers/dashboardAuth');
 
-// Middleware to authenticate JWT and attach clientId
-const validateClient = (req, res, next) => {
+const authenticateStoreToken = (req, res, next) => {
   const token = req.headers.authorization;
   if (!token || !token.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
   }
-
   const tokenValue = token.split(' ')[1];
   try {
     const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
@@ -23,15 +22,14 @@ const validateClient = (req, res, next) => {
       return res.status(403).json({ error: 'Forbidden - Invalid token' });
     }
     req.clientId = decoded.clientID;
-    req.user = {
-      id: decoded.clientID,
-      role: decoded.role || 'user'
-    };
+    req.user = { id: decoded.clientID, role: decoded.role || 'user' };
     next();
   } catch (_err) {
     return res.status(403).json({ error: 'Forbidden - Invalid token' });
   }
 };
+
+const validateClient = createDashboardAuth('preorder');
 
 // Admin check middleware
 const requireAdmin = (req, res, next) => {
@@ -74,7 +72,7 @@ const fundingPledgeValidation = [
 ];
 
 // Simple signup for interest campaign (no money, just interest)
-router.post('/interest-campaign-signup', validateClient, interestSignupValidation, wrapRoute(async (req, res) => {
+router.post('/interest-campaign-signup', authenticateStoreToken, interestSignupValidation, wrapRoute(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({ errors: errors.array() });
@@ -155,7 +153,7 @@ router.post('/interest-campaign-signup', validateClient, interestSignupValidatio
 }));
 
 // Simple signup for funding campaign (just interest, no pledge)
-router.post('/funding-campaign-interest', validateClient, fundingInterestValidation, wrapRoute(async (req, res) => {
+router.post('/funding-campaign-interest', authenticateStoreToken, fundingInterestValidation, wrapRoute(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({ errors: errors.array() });
@@ -235,7 +233,7 @@ router.post('/funding-campaign-interest', validateClient, fundingInterestValidat
 }));
 
 // Make a pledge (commitment) for funding campaign
-router.post('/funding-campaign-pledge', validateClient, fundingPledgeValidation, wrapRoute(async (req, res) => {
+router.post('/funding-campaign-pledge', authenticateStoreToken, fundingPledgeValidation, wrapRoute(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({ errors: errors.array() });

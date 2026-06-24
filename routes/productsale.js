@@ -5,31 +5,10 @@ const Product = require('../models/product');
 const { SalesItem } = require('../models/salesItem');
 const { wrapRoute } = require('../helpers/failureEmail'); // ✅ wrapRoute for error emails
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
+const { createDashboardAuth } = require('../helpers/dashboardAuth');
 require('dotenv').config();
 
-// Middleware for client validation
-const validateClient = (req, res, next) => {
-    try {
-        const token = req.headers.authorization;
-        if (!token || !token.startsWith('Bearer ')) {
-            return res.status(401).json({ error: 'Unauthorized - Token missing or invalid format' });
-        }
-        const tokenValue = token.split(' ')[1];
-        try {
-            const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
-            if (!decoded.clientID) {
-                return res.status(403).json({ error: 'Forbidden - Invalid token' });
-            }
-            req.clientId = decoded.clientID;
-            next();
-        } catch (_err) {
-            return res.status(403).json({ error: 'Forbidden - Invalid token' });
-        }
-    } catch (error) {
-        console.error('Error in client validation:', error);
-        res.status(500).json({ error: 'Internal Server Error' });
-    }
-};
+const validateClient = createDashboardAuth('sales');
 
 // -------------------- ROUTES -------------------- //
 

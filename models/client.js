@@ -52,11 +52,17 @@ const clientSchema = new Schema({
   sessionToken: { type: String, default: null },
   sessionExpires: { type: Date, default: null },
   isLoggedIn: { type: Boolean, default: false },
+  /** Temporary owner-setup reset (enable with ALLOW_LEGACY_TEAM_PASSWORD_RESET) */
+  teamLegacyResetToken: { type: String, select: false, default: null },
+  teamLegacyResetExpires: { type: Date, default: null },
+  teamLegacyResetEmail: encryptedString,
   tier:  {type: String, 
     enum: ["bronze", "silver" , "gold"],
     required: true, 
     default: "bronze"
   },
+  /** Hex brand color for dashboard UI (e.g. #3b6fc9). Empty = Khana default. */
+  dashboardThemeColor: { type: String, default: '', trim: true },
   role: { 
     type: String, 
     enum: ["client", "admin"],
@@ -74,6 +80,28 @@ const clientSchema = new Schema({
     services:  { type: Boolean, default: false },
     products: { type: Boolean, default: false },
     dashboard: { type: Boolean, default: false }
+  },
+  teamActivitySettings: {
+    logCategories: {
+      team: { type: Boolean, default: true },
+      orders: { type: Boolean, default: true },
+      products: { type: Boolean, default: true },
+      bookings: { type: Boolean, default: true },
+      sales: { type: Boolean, default: true },
+      email: { type: Boolean, default: true },
+      campaigns: { type: Boolean, default: true },
+      account: { type: Boolean, default: true },
+    },
+    notifyCategories: {
+      team: { type: Boolean, default: true },
+      orders: { type: Boolean, default: false },
+      products: { type: Boolean, default: false },
+      bookings: { type: Boolean, default: false },
+      sales: { type: Boolean, default: false },
+      email: { type: Boolean, default: true },
+      campaigns: { type: Boolean, default: false },
+      account: { type: Boolean, default: true },
+    },
   },
   deliveryOptions: [
     {

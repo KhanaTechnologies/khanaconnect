@@ -22,6 +22,8 @@ const Client = require('../models/client');
 const { sendContactUsEmail } = require('../utils/email');
 const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../helpers/mailHost');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
+const { createDashboardAuth } = require('../helpers/dashboardAuth');
+const { recordTeamActivityFromRequest } = require('../helpers/teamActivity');
 const newsletterBuilderRouter = require('./newsletterBuilder');
 const { validateNewsletterHtml } = require('../helpers/newsletterBuilder');
 const { isKnownTemplateId } = require('../helpers/newsletterTemplates');
@@ -274,43 +276,34 @@ const signatureUpload = multer({
 });
 
 // --- JWT Middleware ---
+const dashboardEmailAuth = createDashboardAuth('sales');
+
 async function validateClient(req, res, next) {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return res.status(401).json({ ok: false, message: 'Unauthorized - No token provided' });
-    }
+    return dashboardEmailAuth(req, res, async () => {
+        try {
+            const client = await Client.findOne({ clientID: req.clientId });
+            if (!client) {
+                return res.status(404).json({ ok: false, message: 'Client not found' });
+            }
 
-    const token = authHeader.split(' ')[1];
-    try {
-        // Verify JWT
-        const { decoded: payload } = verifyJwtWithAnySecret(jwt, token);
-        if (!payload.clientID) {
-            return res.status(403).json({ ok: false, message: 'Forbidden - Invalid token' });
+            req.client = {
+                clientID: client.clientID,
+                companyName: client.companyName,
+                businessEmail: client.businessEmail,
+                businessEmailPassword: client.businessEmailPassword,
+                emailSignature: client.emailSignature || '',
+                imapHost: client.imapHost,
+                imapPort: client.imapPort,
+                smtpHost: client.smtpHost,
+                smtpPort: client.smtpPort,
+                return_url: client.return_url,
+            };
+
+            next();
+        } catch (err) {
+            return res.status(401).json({ ok: false, message: 'Unauthorized - Invalid token', error: err.message });
         }
-        // Lookup client in MongoDB
-        const client = await Client.findOne({ clientID: payload.clientID });
-        if (!client) {
-            return res.status(404).json({ ok: false, message: 'Client not found' });
-        }
-
-        // Attach client info to request
-        req.client = {
-            clientID: client.clientID,
-            companyName: client.companyName,
-            businessEmail: client.businessEmail,
-            businessEmailPassword: client.businessEmailPassword,
-            emailSignature: client.emailSignature || '',
-            imapHost: client.imapHost,
-            imapPort: client.imapPort,
-            smtpHost: client.smtpHost,
-            smtpPort: client.smtpPort,
-            return_url: client.return_url,
-        };
-
-        next();
-    } catch (err) {
-        return res.status(401).json({ ok: false, message: 'Unauthorized - Invalid token', error: err.message });
-    }
+    });
 }
 
 // --- Thread Helper Function ---
@@ -1637,6 +1630,12 @@ router.post('/newsletter/send', validateClient, upload.array('attachments', 5), 
                     currentDay: rateLimit.daily
                 }
             }
+        });
+        recordTeamActivityFromRequest(req, {
+          category: 'email',
+          action: 'newsletter.sent',
+          summary: `Newsletter sent: "${resolvedSubject}" to ${recipientEstimate} recipient(s)`,
+          metadata: { subject: resolvedSubject, recipientEstimate },
         });
 
         (async () => {

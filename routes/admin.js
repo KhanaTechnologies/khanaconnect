@@ -15,6 +15,16 @@ const DiscountCode = require("../models/discountCode");
 const { getJwtSecret } = require('../helpers/jwtSecret');
 const { requireAdmin } = require('../middleware/requireAdmin');
 const { createClientRecord } = require('../helpers/clientCreate');
+const TeamMember = require('../models/teamMember');
+const {
+  normalizeTeamEmail,
+  teamMemberEmailExists,
+} = require('../helpers/teamMemberLookup');
+const {
+  changeTeamMemberLoginEmail,
+} = require('../helpers/teamMemberEmail');
+const { issueTeamPasswordReset, issueLegacyTeamPasswordReset } = require('../helpers/teamPasswordReset');
+const { fullPermissions, normalizePermissions, permissionsFromClient } = require('../helpers/teamPermissions');
 
 const { wrapRoute } = require('../helpers/failureEmail'); // <- wrapRoute for automatic emails
 
@@ -258,6 +268,173 @@ router.put("/clients/:id/permissions", requireAdmin, wrapRoute(async (req, res) 
       permissions: client.permissions
     }
   });
+}));
+
+function sanitizeTeamMember(member) {
+  const json = member.toJSON ? member.toJSON() : member;
+  delete json.passwordHash;
+  return json;
+}
+
+// Team management for a client (Khana admin only)
+router.get('/clients/:id/team', requireAdmin, wrapRoute(async (req, res) => {
+  const clientID = await getClientIDFromParams(req.params.id);
+  const members = await TeamMember.find({ clientID }).sort({ orgRole: 1, createdAt: 1 });
+  res.json({
+    success: true,
+    clientID,
+    members: members.map(sanitizeTeamMember),
+  });
+}));
+
+router.post('/clients/:id/team', requireAdmin, wrapRoute(async (req, res) => {
+  const clientID = await getClientIDFromParams(req.params.id);
+  const client = await Client.findOne({ clientID });
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  const {
+    email,
+    password,
+    firstName,
+    lastName,
+    orgRole = 'member',
+    permissions,
+  } = req.body;
+
+  const normalizedEmail = normalizeTeamEmail(email);
+  if (!normalizedEmail || !password || String(password).length < 6) {
+    return res.status(400).json({ error: 'Email and password (min 6 characters) are required' });
+  }
+
+  if (orgRole === 'owner') {
+    const existingOwner = await TeamMember.findOne({ clientID, orgRole: 'owner' });
+    if (existingOwner) {
+      return res.status(409).json({ error: 'This client already has an owner. Update the existing owner instead.' });
+    }
+  }
+
+  if (await teamMemberEmailExists(clientID, normalizedEmail)) {
+    return res.status(409).json({ error: 'A team member with this email already exists' });
+  }
+
+  const memberPermissions = permissions
+    ? normalizePermissions(permissions)
+    : orgRole === 'owner'
+      ? fullPermissions()
+      : permissionsFromClient(client);
+
+  const passwordHash = bcrypt.hashSync(password, 10);
+
+  const member = await TeamMember.create({
+    clientID,
+    email: normalizedEmail,
+    firstName: firstName || '',
+    lastName: lastName || '',
+    passwordHash,
+    orgRole: ['owner', 'admin', 'manager', 'member'].includes(orgRole) ? orgRole : 'member',
+    permissions: memberPermissions,
+    status: 'active',
+  });
+
+  if (orgRole === 'owner') {
+    await Client.updateOne({ clientID }, { $set: { password: passwordHash } });
+  }
+
+  res.status(201).json({
+    success: true,
+    message: 'Team member created',
+    member: sanitizeTeamMember(member),
+  });
+}));
+
+router.put('/clients/:id/team/:memberId', requireAdmin, wrapRoute(async (req, res) => {
+  const clientID = await getClientIDFromParams(req.params.id);
+  let member = await TeamMember.findOne({ _id: req.params.memberId, clientID }).select('+passwordHash');
+  if (!member) return res.status(404).json({ error: 'Team member not found' });
+
+  const { email, firstName, lastName, orgRole, status, password } = req.body;
+
+  if (email) {
+    try {
+      await changeTeamMemberLoginEmail({
+        clientID,
+        memberId: member._id,
+        newEmail: email,
+      });
+      member = await TeamMember.findById(member._id).select('+passwordHash');
+    } catch (err) {
+      return res.status(err.status || 500).json({ error: err.message || 'Failed to update login email' });
+    }
+  }
+
+  if (typeof firstName === 'string') member.firstName = firstName;
+  if (typeof lastName === 'string') member.lastName = lastName;
+
+  if (orgRole && member.orgRole !== 'owner') {
+    if (!['admin', 'manager', 'member'].includes(orgRole)) {
+      return res.status(400).json({ error: 'Invalid org role' });
+    }
+    member.orgRole = orgRole;
+  }
+
+  if (status && member.orgRole !== 'owner') {
+    if (!['active', 'disabled', 'invited'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+    member.status = status;
+  }
+
+  if (password && String(password).length >= 6) {
+    member.passwordHash = bcrypt.hashSync(password, 10);
+    if (member.orgRole === 'owner') {
+      await Client.updateOne({ clientID }, { $set: { password: member.passwordHash } });
+    }
+  }
+
+  await member.save();
+  const fresh = await TeamMember.findById(member._id);
+  res.json({ success: true, member: sanitizeTeamMember(fresh) });
+}));
+
+router.delete('/clients/:id/team/:memberId', requireAdmin, wrapRoute(async (req, res) => {
+  const clientID = await getClientIDFromParams(req.params.id);
+  const member = await TeamMember.findOne({ _id: req.params.memberId, clientID });
+  if (!member) return res.status(404).json({ error: 'Team member not found' });
+
+  if (member.orgRole === 'owner') {
+    return res.status(400).json({ error: 'Cannot remove the organization owner' });
+  }
+
+  await TeamMember.deleteOne({ _id: member._id });
+  res.json({ success: true, message: 'Team member removed' });
+}));
+
+router.post('/clients/:id/team/:memberId/send-reset-password', requireAdmin, wrapRoute(async (req, res) => {
+  const clientID = await getClientIDFromParams(req.params.id);
+  try {
+    const result = await issueTeamPasswordReset({
+      clientID,
+      memberId: req.params.memberId,
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message || 'Failed to send reset email' });
+  }
+}));
+
+router.post('/clients/:id/team/send-owner-reset-password', requireAdmin, wrapRoute(async (req, res) => {
+  const clientID = await getClientIDFromParams(req.params.id);
+  const { email } = req.body;
+  try {
+    const result = await issueLegacyTeamPasswordReset({
+      clientID,
+      email,
+      bypassEmailCheck: true,
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message || 'Failed to send owner setup reset email' });
+  }
 }));
 
 module.exports = router;

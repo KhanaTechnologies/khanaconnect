@@ -65,6 +65,8 @@ const authJwt = () => {
      `${api}/customer/registration`,
      `${api}/client/login`,
      `${api}/client/register`,
+     { url: new RegExp(`^${apiEsc}/team/reset-password(/.*)?$`), methods: ['POST', 'OPTIONS'] },
+     { url: new RegExp(`^${apiEsc}/team/accept-invite(/.*)?$`), methods: ['GET', 'POST', 'OPTIONS'] },
      `${api}/discountcode/verify-discount-code`,
     ]
   })

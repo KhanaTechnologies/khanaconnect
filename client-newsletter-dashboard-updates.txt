@@ -1,0 +1,143 @@
+KHANA DASHBOARD — WHAT'S NEW FOR YOUR TEAM
+============================================
+
+Use this as a starting point for your client newsletter. Feel free to edit the tone, add your branding, and link to your help docs or support email.
+
+
+SUBJECT LINE IDEAS
+------------------
+- Your Khana dashboard just got more personal
+- New: team logins, activity tracking, and your own brand colors
+- Khana update: give your team access — and make the dashboard yours
+
+
+---
+
+INTRO (short version)
+---------------------
+
+We've rolled out several improvements to the Khana client dashboard. You can now invite your team to log in with their own email, see what's happening across your account, and personalize the dashboard with your company name and brand colors.
+
+
+WHAT'S NEW
+----------
+
+
+1. TEAM LOGINS — MORE THAN ONE PERSON PER ACCOUNT
+-------------------------------------------------
+
+Each business can now have multiple dashboard users under the same Client ID.
+
+How it works:
+- Sign in with: Client ID + email + password (instead of a single shared login for everyone).
+- Invite colleagues by email so they can set their own password.
+- Assign roles (owner, admin, manager, member) and control what each person can access — products, orders, bookings, campaigns, and more.
+
+Why it matters:
+- No more sharing one password across the whole team.
+- Give staff access to only the areas they need.
+- Owners and admins stay in control of who can join and what they can do.
+
+
+2. TEAM SEAT LIMITS BY PLAN
+---------------------------
+
+Team size follows your subscription tier:
+
+- Bronze: up to 2 team members
+- Silver: up to 5 team members
+- Gold: up to 10 team members
+
+You'll see your current usage on the Team page in the dashboard. If you need more seats, contact Khana support to discuss an upgrade.
+
+
+3. ACTIVITY LOG
+---------------
+
+Owners and admins can review recent activity across the account — team changes, orders, products, bookings, sales, email, and more.
+
+You can choose, per category, whether updates are:
+- Logged in the dashboard only, or
+- Emailed to you as well
+
+Find this under Dashboard → Activity.
+
+
+4. YOUR COMPANY NAME IN THE SIDEBAR
+-----------------------------------
+
+When you log in, the dashboard sidebar now shows your business name prominently — not a generic label.
+
+Your Client ID is still visible for reference, but the focus is on your brand so the space feels like yours.
+
+
+5. CUSTOM DASHBOARD THEME COLOR
+-------------------------------
+
+Account owners and admins can set a brand color for the dashboard under:
+
+Account Management → Profile → Dashboard appearance
+
+You can:
+- Pick from preset colors (ocean blue, teal, emerald, violet, rose, amber, slate)
+- Enter a custom hex color (e.g. #2563eb)
+- Reset to the default Khana theme anytime
+
+The color applies to buttons, accents, and the sidebar for everyone on your team — so the whole dashboard reflects your brand.
+
+Team members who aren't owners/admins will see the chosen theme but cannot change it.
+
+
+6. SECURITY IMPROVEMENTS
+--------------------------
+
+- Team members can change their own dashboard password and login email (with password confirmation).
+- Password reset emails are sent from Khana's secure mailbox.
+- Invite links let new team members accept access and set their password safely.
+
+
+---
+
+HOW TO GET STARTED
+------------------
+
+1. Log in at your usual dashboard URL with Client ID + your email + password.
+2. Open Team (owners/admins) to invite colleagues or review seat usage.
+3. Open Account Management → Profile to update your company name and choose a dashboard theme color.
+4. Open Activity (owners/admins) to review recent changes or adjust notification preferences.
+
+
+WHO CAN DO WHAT (quick reference)
+---------------------------------
+
+| Feature                    | All team members | Managers | Owners / Admins |
+|----------------------------|------------------|----------|-----------------|
+| See company name & theme   | Yes              | Yes      | Yes             |
+| Change dashboard theme     | No               | No       | Yes             |
+| Invite / manage team       | No               | No*      | Yes             |
+| View activity log          | No               | No*      | Yes             |
+
+*Managers have module permissions set by owners/admins but team management and theme changes are reserved for owners and admins.
+
+
+---
+
+SUPPORT
+-------
+
+If you need help migrating from a legacy login, inviting your team, or upgrading for more seats, contact:
+
+[Your support email]
+[Your phone / help link]
+
+
+---
+
+INTERNAL NOTES (remove before sending)
+--------------------------------------
+
+Backend deploy (khanaconnect) should be live before the frontend (dashboard app).
+
+Features depend on team login being enabled for the client account. Legacy single-password clients may need a one-time migration — support can assist.
+
+Theme color is stored per client account (dashboardThemeColor). Company name comes from the company name field on the client profile.
