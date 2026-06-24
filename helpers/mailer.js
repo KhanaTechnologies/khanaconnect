@@ -360,7 +360,8 @@ async function sendMail(options) {
     // Send the email via SMTP
     const info = await transporter.sendMail(mailOptions);
     
-    console.log('✅ Email sent via SMTP:', info.messageId);
+    const persistedMessageId = info.messageId || finalMessageId;
+    console.log('✅ Email sent via SMTP:', persistedMessageId);
 
     // Also save to database
     if (clientID) {
@@ -369,16 +370,16 @@ async function sendMail(options) {
         let threadId;
         if (inReplyTo || references?.length > 0) {
           threadId = await Email.computeThreadId({
-            messageId: finalMessageId,
+            messageId: persistedMessageId,
             inReplyTo,
             references: Array.isArray(references) ? references : references?.split(' ') || [],
             clientID
           });
         } else {
-          threadId = finalMessageId;
+          threadId = persistedMessageId;
         }
 
-        const emailDoc = new Email({
+        const emailPayload = {
           clientID,
           from,
           to,
@@ -387,10 +388,11 @@ async function sendMail(options) {
           subject,
           text: text || '',
           html: htmlOut || '',
-          messageId: finalMessageId,
-          remoteId: finalMessageId,
+          messageId: persistedMessageId,
+          remoteId: persistedMessageId,
           direction: 'outbound',
           flags: ['\\Seen'],
+          date: new Date(),
           attachments: attachmentsOut.map(att => ({
             filename: att.filename,
             contentType: att.contentType,
@@ -404,9 +406,14 @@ async function sendMail(options) {
           isNewsletter: !!isNewsletter,
           newsletterId: newsletterId || undefined,
           recipientName: newsletterRecipient || ''
-        });
+        };
 
-        await emailDoc.save();
+        // Upsert by message id; never persist IMAP uid on SMTP-only sends (avoids null uid dupes).
+        await Email.findOneAndUpdate(
+          { clientID, remoteId: persistedMessageId },
+          { $set: emailPayload, $unset: { uid: '' } },
+          { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
         console.log('✅ Email saved to database with threadId:', threadId);
         
         // Update thread metadata

@@ -343,6 +343,11 @@ mongoose.connect(process.env.CONNECTION_STRING, {
 .then(() => {
   console.log('✅ DB Connected!');
   
+  const { ensureEmailIndexes } = require('./helpers/ensureEmailIndexes');
+  ensureEmailIndexes().catch((err) => {
+    console.error('Failed to ensure email indexes:', err.message);
+  });
+
   // Create indexes for tracking events
   const TrackingEvent = require('./models/TrackingEvent');
   TrackingEvent.createIndexes().catch(err => {
