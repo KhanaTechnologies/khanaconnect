@@ -44,6 +44,8 @@ function moduleAllowed(module, businessType, caps) {
     case 'promotions':
     case 'promo_roi':
       return retail && caps.sales;
+    case 'wishlist':
+      return retail && (caps.sales || caps.products);
     case 'bookings':
       return services && caps.bookings;
     default:

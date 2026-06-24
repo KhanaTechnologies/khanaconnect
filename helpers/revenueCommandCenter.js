@@ -88,10 +88,15 @@ async function getWishlistOpportunities(clientID, limit = 10) {
     { $unwind: '$items' },
     {
       $group: {
-        _id: { productId: '$items.productId', variant: '$items.variantValue' },
+        _id: {
+          productId: { $ifNull: ['$items.product', '$items.productId'] },
+          variant: { $ifNull: ['$items.variantValue', ''] },
+        },
         saveCount: { $sum: 1 },
+        customerCount: { $addToSet: '$customerID' },
       },
     },
+    { $match: { '_id.productId': { $ne: null } } },
     { $sort: { saveCount: -1 } },
     { $limit: limit },
   ]);
@@ -103,14 +108,18 @@ async function getWishlistOpportunities(clientID, limit = 10) {
   const productMap = Object.fromEntries(products.map((p) => [String(p._id), p]));
 
   return ranked.map((r) => {
-    const p = productMap[String(r._id.productId)];
+    const pid = r._id.productId;
+    const p = productMap[String(pid)];
+    const saves = r.saveCount || 0;
+    const shoppers = Array.isArray(r.customerCount) ? r.customerCount.length : saves;
     return {
       type: 'wishlist_demand',
-      productId: r._id.productId,
+      productId: pid,
       productName: p?.productName || 'Product',
-      saveCount: r.saveCount,
+      saveCount: saves,
+      customerCount: shoppers,
       countInStock: p?.countInStock,
-      suggestedAction: 'Create a promo code and email subscribers',
+      suggestedAction: `Promote to ${shoppers} wishlist saver${shoppers === 1 ? '' : 's'} — sale or newsletter`,
     };
   });
 }
@@ -332,7 +341,9 @@ async function buildOverview(clientID, clientDoc) {
       ? getAbandonedCarts(clientID, 10)
       : [],
     capabilities.sales ? getDiscountAttribution(clientID) : [],
-    retailEnabled && capabilities.sales ? getWishlistOpportunities(clientID, 5) : [],
+    retailEnabled && (capabilities.sales || capabilities.products)
+      ? getWishlistOpportunities(clientID, 5)
+      : [],
   ]);
 
   const inventoryOps =
@@ -363,8 +374,8 @@ async function buildOverview(clientID, clientDoc) {
     actions.push({
       id: `wishlist_${w.productId}`,
       priority: 'medium',
-      title: `${w.productName} — ${w.saveCount} wishlist saves`,
-      module: 'promotions',
+      title: `${w.productName} — ${w.saveCount} wishlist save${w.saveCount === 1 ? '' : 's'}${w.customerCount ? ` from ${w.customerCount} customer${w.customerCount === 1 ? '' : 's'}` : ''}`,
+      module: 'wishlist',
       businessTypes: ['retail', 'mixed'],
     });
   }
@@ -399,6 +410,7 @@ async function buildOverview(clientID, clientDoc) {
       activePromoCodes: discountAttribution.length,
       inventoryOpportunities: inventoryOps.length,
       bookingOpportunities: bookingOps.length,
+      wishlistOpportunities: wishlistOps.length,
     },
     actions: actions.filter(
       (a) =>
