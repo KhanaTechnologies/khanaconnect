@@ -3,6 +3,7 @@ const Customer = require('../models/customer');
 const Client = require('../models/client');
 const Product = require('../models/product');
 const WishList = require('../models/wishList');
+const TrackingEvent = require('../models/TrackingEvent');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
@@ -1121,7 +1122,10 @@ router.post('/login', loginLimiter, validateTokenAndExtractClientID, async (req,
       return res.status(401).json({ error: 'Invalid email address or password' });
     }
 
-    const passwordMatch = bcrypt.compareSync(password, customer.passwordHash);
+    const passwordMatch =
+      customer.passwordHash &&
+      typeof customer.passwordHash === 'string' &&
+      bcrypt.compareSync(password, customer.passwordHash);
     if (!passwordMatch) {
       return res.status(401).json({ error: 'Invalid email address or password' });
     }
@@ -1163,7 +1167,7 @@ router.post('/login', loginLimiter, validateTokenAndExtractClientID, async (req,
       clientID: customer.clientID, 
       isActive: true 
     }, getJwtSecret(), { 
-      expiresIn: '1d' 
+      expiresIn: '7d' 
     });
 
     // Update last activity
@@ -1187,24 +1191,28 @@ router.post('/login', loginLimiter, validateTokenAndExtractClientID, async (req,
       ).catch(err => console.error('Error converting anonymous user:', err));
     }
 
-    // Track login event (sessionId must exist — storefront may omit x-session-id)
-    const loginSessionId =
-      (req.headers['x-session-id'] && String(req.headers['x-session-id']).trim()) ||
-      (req.trackingSessionId && String(req.trackingSessionId).trim()) ||
-      `login_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
-    await TrackingEvent.create({
-      clientID: req.clientID,
-      customer: customer._id,
-      sessionId: loginSessionId,
-      eventType: 'USER_LOGIN',
-      metadata: {
-        ip: req.ip,
-        userAgent: req.headers['user-agent'],
-      },
-      source: 'api',
-    });
+    // Track login event (non-fatal — must not block sign-in)
+    try {
+      const loginSessionId =
+        (req.headers['x-session-id'] && String(req.headers['x-session-id']).trim()) ||
+        (req.trackingSessionId && String(req.trackingSessionId).trim()) ||
+        `login_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
+      await TrackingEvent.create({
+        clientID: req.clientID,
+        customer: customer._id,
+        sessionId: loginSessionId,
+        eventType: 'USER_LOGIN',
+        metadata: {
+          ip: req.ip,
+          userAgent: req.headers['user-agent'],
+        },
+        source: 'api',
+      });
+    } catch (trackErr) {
+      console.error('Login tracking event failed (non-fatal):', trackErr.message);
+    }
 
-    res.json({ 
+    res.json({
       success: true,
       message: 'Login successful',
       token, 
@@ -1239,7 +1247,7 @@ router.post('/verify/:token', async (req, res) => {
       clientID: customer.clientID,
       isActive: true,
     }, getJwtSecret(), {
-      expiresIn: '1d',
+      expiresIn: '7d',
     });
 
     const customerResponse = customer.toObject();

@@ -26,8 +26,12 @@ function requireCustomerAuth(req, res, next) {
     req.clientID = String(decoded.clientID);
     req.customerID = String(decoded.customerID);
     next();
-  } catch (e) {
-    return res.status(403).json({ error: 'Invalid or expired token', details: e.message });
+  } catch (err) {
+    const isExpired = err && (err.name === 'TokenExpiredError' || /jwt expired/i.test(String(err.message)));
+    return res.status(isExpired ? 401 : 403).json({
+      error: isExpired ? 'Session expired — please sign in again' : 'Invalid or expired token',
+      details: err.message,
+    });
   }
 }
 
