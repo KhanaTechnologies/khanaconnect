@@ -20,6 +20,7 @@ const {
   applySubscriptionUpdate,
   isClientSubscriptionActive,
 } = require('../helpers/clientSubscription');
+const { deleteAllClientData } = require('../helpers/deleteClientData');
 const TeamMember = require('../models/teamMember');
 const {
   normalizeTeamEmail,
@@ -130,8 +131,11 @@ router.post('/clients/:id/delete-client-token', authJwt(), wrapRoute(async (req,
 function formatClientForAdmin(client) {
   const json = client.toObject ? client.toObject() : client;
   const summary = serializeSubscriptionSummary(client);
+  const mongoId = json._id?.toString?.() || json._id;
   return {
     ...json,
+    id: mongoId,
+    _id: mongoId,
     active: summary.isActive,
     subscriptionSummary: summary,
   };
@@ -159,9 +163,34 @@ router.post("/clients", requireAdmin, wrapRoute(async (req, res) => {
 
 // 🔹 GET a single client by ID
 router.get("/clients/:id", requireAdmin, wrapRoute(async (req, res) => {
+  const client = await Client.findById(req.params.id).select('-password -token -sessionToken');
+  if (!client) return res.status(404).json({ error: "Client not found" });
+  res.json(formatClientForAdmin(client));
+}));
+
+// 🔹 DELETE client and all related data
+router.delete("/clients/:id", requireAdmin, wrapRoute(async (req, res) => {
   const client = await Client.findById(req.params.id);
   if (!client) return res.status(404).json({ error: "Client not found" });
-  res.json(client);
+
+  if (client.role === 'admin') {
+    return res.status(403).json({ error: 'Cannot delete the platform admin account' });
+  }
+
+  const confirmClientID = String(req.body?.confirmClientID || '').trim();
+  if (confirmClientID !== client.clientID) {
+    return res.status(400).json({
+      error: 'Type the exact Client ID in confirmClientID to permanently delete this account',
+    });
+  }
+
+  const deleted = await deleteAllClientData(client);
+
+  res.json({
+    success: true,
+    message: `Client ${client.clientID} and all related data were permanently deleted`,
+    deleted,
+  });
 }));
 
 // 🔹 UPDATE client details

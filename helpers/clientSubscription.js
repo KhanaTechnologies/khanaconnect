@@ -19,7 +19,8 @@ function isPlatformAdminClient(client) {
 }
 
 /**
- * Active when: platform admin, or paidUntil in future, or grace period, or legacy client with no paidUntil set.
+ * Active when: platform admin, or paidUntil in future, or grace period.
+ * Clients without a paidUntil date are inactive until billing is configured.
  */
 function isClientSubscriptionActive(client, now = new Date()) {
   if (!client) return false;
@@ -28,9 +29,7 @@ function isClientSubscriptionActive(client, now = new Date()) {
   const sub = normalizeSubscription(client);
   if (sub.status === 'suspended' || sub.status === 'canceled') return false;
 
-  if (!sub.paidUntil) {
-    return sub.status === 'active' || sub.status === 'trialing' || sub.status === 'past_due';
-  }
+  if (!sub.paidUntil) return false;
 
   if (sub.paidUntil.getTime() > now.getTime()) return true;
   if (sub.graceUntil && sub.graceUntil.getTime() > now.getTime()) return true;
@@ -52,7 +51,7 @@ function subscriptionDisplayStatus(client, now = new Date()) {
   if (sub.status === 'suspended') return 'suspended';
   if (sub.status === 'canceled') return 'canceled';
 
-  if (!sub.paidUntil) return 'active';
+  if (!sub.paidUntil) return 'unset_billing';
 
   const active = isClientSubscriptionActive(client, now);
   if (active) {
