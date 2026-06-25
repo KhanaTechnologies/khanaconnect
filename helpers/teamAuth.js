@@ -2,7 +2,7 @@ const jwt = require('jsonwebtoken');
 const Client = require('../models/client');
 const TeamMember = require('../models/teamMember');
 const { verifyJwtWithAnySecret, getJwtSecret } = require('./jwtSecret');
-const { canManageTeam, fullPermissions } = require('./teamPermissions');
+const { canManageTeam, fullPermissions, applyClientFeatureAccess } = require('./teamPermissions');
 
 function signTeamSessionToken(client, member, options = {}) {
   const payload = {
@@ -36,7 +36,7 @@ async function resolveSessionFromToken(decoded) {
       member,
       platformAdmin,
       orgRole: member.orgRole,
-      permissions: member.permissions,
+      permissions: applyClientFeatureAccess(member.permissions, client),
       canManageTeam: canManageTeam(member.orgRole) || platformAdmin,
     };
   }

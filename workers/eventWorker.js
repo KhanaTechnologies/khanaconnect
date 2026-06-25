@@ -90,6 +90,7 @@ const eventWorker = new Worker('event-processing', async job => {
   }
 }, {
   connection: redis,
+  settings: redis.bullMqSettings,
   concurrency: 5,
   limiter: {
     max: 100,

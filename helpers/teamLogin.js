@@ -2,7 +2,7 @@ const bcrypt = require('bcryptjs');
 const Client = require('../models/client');
 const TeamMember = require('../models/teamMember');
 const { signTeamSessionToken } = require('./teamAuth');
-const { fullPermissions, permissionsFromClient } = require('./teamPermissions');
+const { fullPermissions, permissionsFromClient, applyClientFeatureAccess } = require('./teamPermissions');
 const { normalizeTeamEmail, findTeamMemberByEmail } = require('./teamMemberLookup');
 const {
   serializeSubscriptionSummary,
@@ -34,18 +34,20 @@ function buildLoginResponse(client, member, token) {
   delete clientResponse.businessEmailPassword;
 
   const permissions = member
-    ? { ...member.permissions, hasDashboardAccess: member.permissions?.dashboard !== false }
-    : {
-        ...client.permissions,
-        hasDashboardAccess: client.permissions?.dashboard || false,
-      };
+    ? applyClientFeatureAccess(member.permissions, client)
+    : client.role === 'admin'
+      ? fullPermissions()
+      : permissionsFromClient(client);
 
   return {
     success: true,
     client: clientResponse,
     member: member ? member.toJSON() : null,
     token,
-    permissions,
+    permissions: {
+      ...permissions,
+      hasDashboardAccess: permissions.dashboard !== false,
+    },
     role: client.role,
     orgRole: member?.orgRole || null,
     tier: client.tier,

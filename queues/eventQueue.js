@@ -5,6 +5,7 @@ const redis = require('../config/redis');
 // Create queue for event processing
 const eventQueue = new Queue('event-processing', {
   connection: redis,
+  settings: redis.bullMqSettings,
   defaultJobOptions: {
     attempts: 3,
     backoff: {

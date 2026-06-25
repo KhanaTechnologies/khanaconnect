@@ -27,6 +27,7 @@ const usageWorker = new Worker(
   },
   {
     connection: redis,
+    settings: redis.bullMqSettings,
     concurrency: Number(process.env.SAAS_USAGE_WORKER_CONCURRENCY || 5),
   }
 );

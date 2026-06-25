@@ -336,9 +336,6 @@ app.use(`${api}`, partnershipQuoteRouter);
  */
 
 mongoose.connect(process.env.CONNECTION_STRING, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-    //dbName: 'KhanaConnect_DevDB',
     dbName: 'KhanaConnect_ProdDB',
     maxPoolSize: 10,
     serverSelectionTimeoutMS: 5000,

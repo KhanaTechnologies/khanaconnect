@@ -9,7 +9,26 @@ const DEFAULT_PERMISSIONS = {
   services: false,
   products: false,
   dashboard: true,
+  email_center: false,
+  email_builder: false,
+  newsletter: false,
 };
+
+const MODULE_PERMISSION_KEYS = [
+  'bookings',
+  'orders',
+  'staff',
+  'categories',
+  'preorder',
+  'voting',
+  'sales',
+  'services',
+  'products',
+  'dashboard',
+];
+
+/** Khana-admin toggles — org-wide feature access (sidebar + API). */
+const FEATURE_ACCESS_KEYS = ['email_center', 'email_builder', 'newsletter'];
 
 function fullPermissions() {
   return {
@@ -23,22 +42,29 @@ function fullPermissions() {
     services: true,
     products: true,
     dashboard: true,
+    email_center: true,
+    email_builder: true,
+    newsletter: true,
   };
 }
 
 function permissionsFromClient(client) {
   if (!client?.permissions) return { ...DEFAULT_PERMISSIONS };
+  const p = client.permissions;
   return {
-    bookings: !!client.permissions.bookings,
-    orders: !!client.permissions.orders,
-    staff: !!client.permissions.staff,
-    categories: !!client.permissions.categories,
-    preorder: !!client.permissions.preorder,
-    voting: !!client.permissions.voting,
-    sales: !!client.permissions.sales,
-    services: !!client.permissions.services,
-    products: !!client.permissions.products,
-    dashboard: client.permissions.dashboard !== false,
+    bookings: !!p.bookings,
+    orders: !!p.orders,
+    staff: !!p.staff,
+    categories: !!p.categories,
+    preorder: !!p.preorder,
+    voting: !!p.voting,
+    sales: !!p.sales,
+    services: !!p.services,
+    products: !!p.products,
+    dashboard: p.dashboard !== false,
+    email_center: !!p.email_center,
+    email_builder: !!p.email_builder,
+    newsletter: !!p.newsletter,
   };
 }
 
@@ -54,6 +80,26 @@ function normalizePermissions(input = {}) {
     services: !!input.services,
     products: !!input.products,
     dashboard: input.dashboard !== false,
+    email_center: !!input.email_center,
+    email_builder: !!input.email_builder,
+    newsletter: !!input.newsletter,
+  };
+}
+
+/**
+ * Merge team member module permissions with Khana-granted client feature flags.
+ * Feature links (Email Center, etc.) require dashboard access and the client flag.
+ */
+function applyClientFeatureAccess(memberPerms, client) {
+  const member = normalizePermissions(memberPerms || {});
+  const caps = permissionsFromClient(client);
+  const dashboardOk = member.dashboard !== false && caps.dashboard !== false;
+
+  return {
+    ...member,
+    email_center: dashboardOk && !!caps.email_center,
+    email_builder: dashboardOk && !!caps.email_builder,
+    newsletter: dashboardOk && !!caps.newsletter,
   };
 }
 
@@ -65,9 +111,12 @@ function canManageTeam(orgRole) {
 
 module.exports = {
   DEFAULT_PERMISSIONS,
+  MODULE_PERMISSION_KEYS,
+  FEATURE_ACCESS_KEYS,
   fullPermissions,
   permissionsFromClient,
   normalizePermissions,
+  applyClientFeatureAccess,
   canManageTeam,
   TEAM_MANAGER_ROLES,
 };

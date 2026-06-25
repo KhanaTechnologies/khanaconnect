@@ -18,6 +18,7 @@ const emailOutboxWorker = new Worker(
   },
   {
     connection: redis,
+    settings: redis.bullMqSettings,
     concurrency: Number(process.env.EMAIL_OUTBOX_WORKER_CONCURRENCY || 3),
     limiter: { max: 20, duration: 60000 },
   }

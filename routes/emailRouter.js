@@ -276,45 +276,52 @@ const emailLogoUpload = multer({
 });
 
 // --- JWT Middleware ---
-const dashboardEmailAuth = createDashboardAuth('sales');
+const dashboardEmailAuth = createDashboardAuth('email_center');
+const dashboardEmailBuilderAuth = createDashboardAuth('email_builder');
+
+async function attachEmailClient(req, res, next) {
+  try {
+    const client = await Client.findOne({ clientID: req.clientId });
+    if (!client) {
+      return res.status(404).json({ ok: false, message: 'Client not found' });
+    }
+
+    req.client = {
+      clientID: client.clientID,
+      companyName: client.companyName,
+      businessEmail: client.businessEmail,
+      businessEmailPassword: client.businessEmailPassword,
+      emailSignature: client.emailSignature || '',
+      emailLogoUrl: client.emailLogoUrl || '',
+      imapHost: client.imapHost,
+      imapPort: client.imapPort,
+      smtpHost: client.smtpHost,
+      smtpPort: client.smtpPort,
+      return_url: client.return_url,
+      subscriptionActive: isClientSubscriptionActive(client),
+      _clientDoc: client,
+    };
+
+    if (!isClientSubscriptionActive(client)) {
+      const path = String(req.path || '');
+      const allowWhenInactive = path === '/contact' || path.startsWith('/branding');
+      if (!allowWhenInactive) {
+        return subscriptionBlockedResponse(res, client);
+      }
+    }
+
+    next();
+  } catch (err) {
+    return res.status(401).json({ ok: false, message: 'Unauthorized - Invalid token', error: err.message });
+  }
+}
 
 async function validateClient(req, res, next) {
-    return dashboardEmailAuth(req, res, async () => {
-        try {
-            const client = await Client.findOne({ clientID: req.clientId });
-            if (!client) {
-                return res.status(404).json({ ok: false, message: 'Client not found' });
-            }
+  return dashboardEmailAuth(req, res, () => attachEmailClient(req, res, next));
+}
 
-            req.client = {
-                clientID: client.clientID,
-                companyName: client.companyName,
-                businessEmail: client.businessEmail,
-                businessEmailPassword: client.businessEmailPassword,
-                emailSignature: client.emailSignature || '',
-                emailLogoUrl: client.emailLogoUrl || '',
-                imapHost: client.imapHost,
-                imapPort: client.imapPort,
-                smtpHost: client.smtpHost,
-                smtpPort: client.smtpPort,
-                return_url: client.return_url,
-                subscriptionActive: isClientSubscriptionActive(client),
-                _clientDoc: client,
-            };
-
-            if (!isClientSubscriptionActive(client)) {
-                const path = String(req.path || '');
-                const allowWhenInactive = path === '/contact' || path.startsWith('/branding');
-                if (!allowWhenInactive) {
-                    return subscriptionBlockedResponse(res, client);
-                }
-            }
-
-            next();
-        } catch (err) {
-            return res.status(401).json({ ok: false, message: 'Unauthorized - Invalid token', error: err.message });
-        }
-    });
+async function validateClientEmailBuilder(req, res, next) {
+  return dashboardEmailBuilderAuth(req, res, () => attachEmailClient(req, res, next));
 }
 
 // --- Thread Helper Function ---
@@ -2095,7 +2102,7 @@ router.get('/newsletter/unsubscribe', wrapRoute(async (req, res) => {
 
 // Builder: templates, image upload, preview, drafts (HTML composed on dashboard)
 // Mounted after specific /newsletter/* routes so subscribers/campaigns are not shadowed.
-router.use('/newsletter', validateClient, newsletterBuilderRouter);
+router.use('/newsletter', validateClientEmailBuilder, newsletterBuilderRouter);
 
 // ============================================================================
 // SUBSCRIBER MANAGEMENT ROUTES

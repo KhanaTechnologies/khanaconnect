@@ -5,6 +5,7 @@ const QUEUE_NAME = 'outbound-email';
 
 const outboundEmailQueue = new Queue(QUEUE_NAME, {
   connection: redis,
+  settings: redis.bullMqSettings,
   defaultJobOptions: {
     attempts: Number(process.env.EMAIL_OUTBOX_JOB_ATTEMPTS || 8),
     backoff: {

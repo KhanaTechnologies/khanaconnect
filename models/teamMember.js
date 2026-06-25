@@ -27,6 +27,9 @@ const permissionSchema = {
   services: { type: Boolean, default: false },
   products: { type: Boolean, default: false },
   dashboard: { type: Boolean, default: true },
+  email_center: { type: Boolean, default: false },
+  email_builder: { type: Boolean, default: false },
+  newsletter: { type: Boolean, default: false },
 };
 
 const teamMemberSchema = new mongoose.Schema(

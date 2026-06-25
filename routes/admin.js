@@ -347,9 +347,10 @@ router.put("/clients/:id/permissions", requireAdmin, wrapRoute(async (req, res) 
   }
 
   // Update permissions
+  const { normalizePermissions } = require('../helpers/teamPermissions');
   client.permissions = {
-    ...client.permissions, // Keep existing permissions
-    ...permissions // Override with new permissions
+    ...client.permissions,
+    ...normalizePermissions(permissions || {}),
   };
 
   await client.save();

@@ -3,6 +3,7 @@ const redis = require('../config/redis');
 
 const usageBillingQueue = new Queue('saas-usage-billing', {
   connection: redis,
+  settings: redis.bullMqSettings,
   defaultJobOptions: {
     attempts: 5,
     removeOnComplete: 2000,
@@ -13,6 +14,7 @@ const usageBillingQueue = new Queue('saas-usage-billing', {
 
 const whatsappDispatchQueue = new Queue('saas-whatsapp-dispatch', {
   connection: redis,
+  settings: redis.bullMqSettings,
   defaultJobOptions: {
     attempts: 4,
     removeOnComplete: 2000,

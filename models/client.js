@@ -100,7 +100,10 @@ const clientSchema = new Schema({
     sales: { type: Boolean, default: false },
     services:  { type: Boolean, default: false },
     products: { type: Boolean, default: false },
-    dashboard: { type: Boolean, default: false }
+    dashboard: { type: Boolean, default: false },
+    email_center: { type: Boolean, default: false },
+    email_builder: { type: Boolean, default: false },
+    newsletter: { type: Boolean, default: false },
   },
   teamActivitySettings: {
     logCategories: {
