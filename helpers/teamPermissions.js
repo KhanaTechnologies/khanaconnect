@@ -87,20 +87,30 @@ function normalizePermissions(input = {}) {
 }
 
 /**
- * Merge team member module permissions with Khana-granted client feature flags.
- * Feature links (Email Center, etc.) require dashboard access and the client flag.
+ * Merge team member module permissions with Khana-granted client caps.
+ * Module flags (products, services, etc.) require both member AND client to allow.
+ * Feature flags (Email Center, etc.) follow client-level Khana admin toggles.
  */
 function applyClientFeatureAccess(memberPerms, client) {
   const member = normalizePermissions(memberPerms || {});
   const caps = permissionsFromClient(client);
   const dashboardOk = member.dashboard !== false && caps.dashboard !== false;
 
-  return {
-    ...member,
-    email_center: dashboardOk && !!caps.email_center,
-    email_builder: dashboardOk && !!caps.email_builder,
-    newsletter: dashboardOk && !!caps.newsletter,
-  };
+  const merged = { ...DEFAULT_PERMISSIONS };
+
+  for (const key of MODULE_PERMISSION_KEYS) {
+    if (key === 'dashboard') {
+      merged.dashboard = dashboardOk;
+    } else {
+      merged[key] = !!member[key] && !!caps[key];
+    }
+  }
+
+  for (const key of FEATURE_ACCESS_KEYS) {
+    merged[key] = dashboardOk && !!caps[key];
+  }
+
+  return merged;
 }
 
 const TEAM_MANAGER_ROLES = new Set(['owner', 'admin']);

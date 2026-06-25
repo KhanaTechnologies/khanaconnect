@@ -1604,11 +1604,9 @@ router.get('/:clientId/permissions', wrapRoute(async (req, res) => {
       const { decoded } = verifyJwtWithAnySecret(jwt, token);
       if (decoded.clientID === client.clientID) {
         const session = await resolveSessionFromToken(decoded);
-        if (session?.member) {
-          permissions = session.member.permissions;
-          orgRole = session.member.orgRole;
-        } else if (session?.platformAdmin) {
+        if (session) {
           permissions = session.permissions;
+          orgRole = session.member?.orgRole || session.orgRole || null;
         }
       }
     } catch (_err) {
