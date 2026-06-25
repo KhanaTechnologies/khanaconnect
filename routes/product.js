@@ -4,7 +4,7 @@ const jwt = require('jsonwebtoken');
 const Product = require('../models/product');
 const { Category } = require('../models/category');
 const multer = require('multer');
-const { Octokit } = require("@octokit/rest");
+const { getOctokit } = require('../helpers/octokitClient');
 const { body, validationResult } = require('express-validator');
 const { SalesItem } = require('../models/salesItem');
 const { wrapRoute } = require('../helpers/failureEmail'); // ✅ Import wrapRoute
@@ -15,8 +15,6 @@ const { recordTeamActivityFromRequest } = require('../helpers/teamActivity');
 require('dotenv').config();
 
 const validateClient = createDashboardAuth('products');
-
-const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
 
 const FILE_TYPE_MAP = {
     'image/png': 'png',
@@ -38,6 +36,7 @@ const uploadImageToGitHub = async (file, fileName) => {
     const repo = process.env.GITHUB_REPO.split('/')[1];
     const branch = process.env.GITHUB_BRANCH;
 
+    const octokit = await getOctokit();
     const response = await octokit.repos.createOrUpdateFileContents({
         owner,
         repo,

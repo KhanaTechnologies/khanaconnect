@@ -4,16 +4,12 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
-const { Octokit } = require("@octokit/rest");
+const { getOctokit } = require('../helpers/octokitClient');
 require('dotenv').config();
 
 const { wrapRoute } = require('../helpers/failureEmail'); // ensure correct path
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const { createDashboardAuth } = require('../helpers/dashboardAuth');
-
-const octokit = new Octokit({
-  auth: process.env.GITHUB_TOKEN
-});
 
 const FILE_TYPE_MAP = {
   'image/png': 'png',
@@ -40,6 +36,7 @@ const uploadImageToGitHub = async (file, fileName) => {
     const filePath = createFilePath(fileName);
     const content = file.buffer.toString('base64');
     const [owner, repo] = process.env.GITHUB_REPO.split('/');
+    const octokit = await getOctokit();
     const { data } = await octokit.repos.createOrUpdateFileContents({
       owner,
       repo,

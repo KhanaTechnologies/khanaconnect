@@ -1,5 +1,5 @@
 const path = require('path');
-const { Octokit } = require('@octokit/rest');
+const { getOctokit } = require('./octokitClient');
 
 function githubUploadConfigured() {
   return !!(
@@ -17,7 +17,7 @@ async function uploadBufferToGitHub(buffer, repoRelativePath) {
     throw new Error('GitHub upload is not configured (GITHUB_TOKEN, GITHUB_REPO, GITHUB_BRANCH)');
   }
 
-  const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+  const octokit = await getOctokit();
   const [owner, repo] = process.env.GITHUB_REPO.split('/');
   const branch = process.env.GITHUB_BRANCH;
   const filePath = repoRelativePath.replace(/^\/+/, '');
