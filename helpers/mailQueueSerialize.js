@@ -1,5 +1,5 @@
 /**
- * JSON-safe mail payload for BullMQ outbound-email jobs (no Buffers / functions).
+ * JSON-safe mail payload for Agenda outbound-email jobs (no Buffers / functions).
  */
 
 function serializeMailOptions(mailOptions) {

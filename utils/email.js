@@ -147,7 +147,7 @@ async function deliverQueuedOutboundEmail(bEmail, BEPass, mailOptionsSerialized)
  * @param {object} mailOptions
  * @param {number} retries
  * @param {number} delayMs
- * @param {{ clientID: string, label?: string } | null} queueMeta - when SMTP still fails after retries, enqueue for delayed resend (BullMQ)
+ * @param {{ clientID: string, label?: string } | null} queueMeta - when SMTP still fails after retries, enqueue for delayed resend (Agenda)
  */
 async function sendWithRetry(getTransporter, mailOptions, retries = 5, delayMs = 1600, queueMeta = null) {
     const factory = typeof getTransporter === 'function' ? getTransporter : () => getTransporter;

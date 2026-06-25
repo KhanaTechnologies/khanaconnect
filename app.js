@@ -19,11 +19,8 @@ const errorHandler = require('./helpers/error-handler');
 const trackingRoutes = require('./routes/trackingEvents');
 const eventProcessor = require('./services/eventProcessor');
 
-// Redis and Worker imports
-require('./config/redis');
-require('./workers/eventWorker');
-require('./workers/saasUsageWorker');
-require('./workers/emailOutboxWorker');
+// Job scheduler imports (started after MongoDB connects)
+const { startJobScheduler, stopJobScheduler } = require('./config/agenda');
 
 // failureEmail helper
 const failureEmail = require('./helpers/failureEmail');
@@ -343,7 +340,7 @@ mongoose.connect(process.env.CONNECTION_STRING, {
     autoIndex: true,
     bufferCommands: false,
 })
-.then(() => {
+.then(async () => {
   console.log('✅ DB Connected!');
 
   const { resolvePublicBaseUrl } = require('./helpers/publicBaseUrl');
@@ -384,11 +381,17 @@ mongoose.connect(process.env.CONNECTION_STRING, {
     console.error('❌ Failed to start service wishlist reminder cron:', error);
   }
 
+  try {
+    await startJobScheduler();
+  } catch (error) {
+    console.error('❌ Failed to start job scheduler:', error);
+  }
+
   console.log('📊 Tracking System initialized');
   console.log('   - Event deduplication: Enabled');
   console.log('   - Event processor: Running');
   console.log('   - Batch endpoint: /api/events/batch');
-  console.log('   - Redis Queue: Connected');
+  console.log('   - Job scheduler: MongoDB (Agenda)');
   console.log('   - Workers: Running');
 })
 .catch(err => {
@@ -469,7 +472,7 @@ server.listen(PORT, () => {
   console.log(`   - Endpoint: /api/events/batch`);
   console.log(`   - Rate Limit: 1000 events/minute`);
   console.log(`   - Deduplication: Enabled`);
-  console.log(`   - Redis Queue: Active`);
+  console.log(`   - Job scheduler: MongoDB (Agenda)`);
   console.log(`📚 API Docs: http://localhost:${PORT}/api-docs`);
 });
 
@@ -481,6 +484,12 @@ server.listen(PORT, () => {
 
 const gracefulShutdown = async (signal) => {
   console.log(`\n${signal} received, shutting down gracefully...`);
+
+  try {
+    await stopJobScheduler();
+  } catch (e) {
+    console.error('Error stopping job scheduler:', e.message);
+  }
   
   // Wait for event processor to finish
   if (eventProcessor && eventProcessor.stats?.queued > 0) {

@@ -1,29 +1,27 @@
-const { Queue } = require('bullmq');
-const redis = require('../config/redis');
+const { getAgenda, isSchedulerDisabled, JOB_NAMES } = require('../config/agenda');
 
-const usageBillingQueue = new Queue('saas-usage-billing', {
-  connection: redis,
-  settings: redis.bullMqSettings,
-  defaultJobOptions: {
-    attempts: 5,
-    removeOnComplete: 2000,
-    removeOnFail: 5000,
-    backoff: { type: 'exponential', delay: 2000 },
-  },
-});
+async function enqueueUsageBilling(name, data) {
+  if (isSchedulerDisabled()) {
+    throw new Error('Job scheduler is disabled');
+  }
 
-const whatsappDispatchQueue = new Queue('saas-whatsapp-dispatch', {
-  connection: redis,
-  settings: redis.bullMqSettings,
-  defaultJobOptions: {
-    attempts: 4,
-    removeOnComplete: 2000,
-    removeOnFail: 5000,
-    backoff: { type: 'exponential', delay: 1500 },
-  },
-});
+  const agenda = getAgenda();
+  const sourceRef = data?.sourceRef ? String(data.sourceRef) : `${Date.now()}`;
+
+  const job = agenda
+    .create(JOB_NAMES.SAAS_USAGE, { ...data, bullJobName: name, _attempt: 1 })
+    .unique({ 'data.sourceRef': sourceRef, 'data.clientId': data.clientId });
+
+  job.schedule('now');
+  await job.save();
+
+  return { id: String(job.attrs._id) };
+}
+
+const usageBillingQueue = {
+  add: enqueueUsageBilling,
+};
 
 module.exports = {
   usageBillingQueue,
-  whatsappDispatchQueue,
 };

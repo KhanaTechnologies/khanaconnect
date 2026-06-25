@@ -534,4 +534,17 @@ router.post('/clients/:id/team/send-owner-reset-password', requireAdmin, wrapRou
   }
 }));
 
+router.get('/queues', requireAdmin, wrapRoute(async (req, res) => {
+  const { getQueueDashboard } = require('../helpers/queueDashboard');
+  const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 50);
+  const status = typeof req.query.status === 'string' && req.query.status.trim()
+    ? req.query.status.trim().toLowerCase()
+    : null;
+  const allowed = new Set(['waiting', 'active', 'delayed', 'failed', 'completed']);
+  const statusFilter = status && allowed.has(status) ? status : null;
+
+  const dashboard = await getQueueDashboard({ limitPerQueue: limit, statusFilter });
+  res.json(dashboard);
+}));
+
 module.exports = router;

@@ -550,14 +550,13 @@ router.get('/debug/queue-status', async (req, res) => {
       });
     }
 
-    // Try to check Redis
-    let redisStatus = 'unknown';
+    // Try to check job scheduler
+    let schedulerStatus = 'unknown';
     try {
-      const redis = require('../config/redis');
-      await redis.ping();
-      redisStatus = 'connected';
+      const { isAgendaReady } = require('../config/agenda');
+      schedulerStatus = isAgendaReady() ? 'connected' : 'not started';
     } catch (e) {
-      redisStatus = 'disconnected: ' + e.message;
+      schedulerStatus = 'disconnected: ' + e.message;
     }
 
     // Get queue counts
@@ -583,17 +582,14 @@ router.get('/debug/queue-status', async (req, res) => {
       counts = { waiting, active, completed, failed, delayed };
       
       // Get recent jobs
-      const recentJobs = await eventQueue.getJobs(['waiting', 'active', 'failed', 'completed'], 0, 10).catch(() => []);
-      jobs = recentJobs.map(job => ({
+      const recentJobs = await eventQueue.getJobs().catch(() => []);
+      jobs = recentJobs.map((job) => ({
         id: job.id,
         name: job.name,
-        data: {
-          clientId: job.data?.clientId,
-          eventCount: job.data?.events?.length || (job.data?.event ? 1 : 0)
-        },
-        attempts: job.attemptsMade,
-        timestamp: new Date(job.timestamp).toISOString(),
-        failedReason: job.failedReason || null
+        data: job.data,
+        attempts: job.attempts,
+        timestamp: job.timestamp,
+        failedReason: job.failedReason || null,
       }));
     } catch (e) {
       console.error('Error getting queue stats:', e);
@@ -601,8 +597,9 @@ router.get('/debug/queue-status', async (req, res) => {
 
     res.json({
       success: true,
-      redis: {
-        status: redisStatus
+      scheduler: {
+        status: schedulerStatus,
+        backend: 'mongodb-agenda',
       },
       queue: {
         name: 'event-processing',

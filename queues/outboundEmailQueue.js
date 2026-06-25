@@ -1,25 +1,6 @@
-const { Queue } = require('bullmq');
-const redis = require('../config/redis');
+const { getAgenda, isSchedulerDisabled, JOB_NAMES } = require('../config/agenda');
 
 const QUEUE_NAME = 'outbound-email';
-
-const outboundEmailQueue = new Queue(QUEUE_NAME, {
-  connection: redis,
-  settings: redis.bullMqSettings,
-  defaultJobOptions: {
-    attempts: Number(process.env.EMAIL_OUTBOX_JOB_ATTEMPTS || 8),
-    backoff: {
-      type: 'exponential',
-      delay: Number(process.env.EMAIL_OUTBOX_BACKOFF_MS || 60000),
-    },
-    removeOnComplete: 200,
-    removeOnFail: 300,
-  },
-});
-
-outboundEmailQueue.on('error', (err) => {
-  console.error('outbound-email queue error:', err.message);
-});
 
 function getInitialDelayMs() {
   const raw = process.env.EMAIL_RETRY_QUEUE_DELAY_MS;
@@ -36,31 +17,38 @@ async function enqueueOutboundEmail(payload) {
   if (process.env.EMAIL_OUTBOX_DISABLED === '1' || process.env.EMAIL_OUTBOX_DISABLED === 'true') {
     throw new Error('Outbound email queue is disabled');
   }
+  if (isSchedulerDisabled()) {
+    throw new Error('Job scheduler is disabled');
+  }
   if (!payload || !payload.clientID || !payload.mailOptions) {
     throw new Error('enqueueOutboundEmail: clientID and mailOptions are required');
   }
+
+  const agenda = getAgenda();
   const delay = getInitialDelayMs();
-  const job = await outboundEmailQueue.add(
-    'send',
-    {
-      clientID: String(payload.clientID),
-      mailOptions: payload.mailOptions,
-      label: payload.label || '',
-      lastError: payload.lastError || '',
-      enqueuedAt: new Date().toISOString(),
-    },
-    { delay }
-  );
+  const job = agenda.create(JOB_NAMES.OUTBOUND_EMAIL, {
+    clientID: String(payload.clientID),
+    mailOptions: payload.mailOptions,
+    label: payload.label || '',
+    lastError: payload.lastError || '',
+    enqueuedAt: new Date().toISOString(),
+    _attempt: 1,
+  });
+
+  job.schedule(new Date(Date.now() + delay));
+  await job.save();
+
+  const jobId = String(job.attrs._id);
   console.log(
-    `📬 Outbound email queued (job ${job.id}, delay ${Math.round(delay / 1000)}s) for client ${payload.clientID}` +
+    `📬 Outbound email queued (job ${jobId}, delay ${Math.round(delay / 1000)}s) for client ${payload.clientID}` +
       (payload.label ? ` [${payload.label}]` : '')
   );
-  return job;
+
+  return { id: jobId };
 }
 
 module.exports = {
   QUEUE_NAME,
-  outboundEmailQueue,
   enqueueOutboundEmail,
   getInitialDelayMs,
 };
