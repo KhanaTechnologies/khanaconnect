@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const Client = require('../models/client');
 const { getJwtSecret } = require('./jwtSecret');
+const { defaultPaidUntilForNewClient, applyGracePeriod, DEFAULT_GRACE_DAYS } = require('./clientSubscription');
 
 function generateToken(client) {
   const secret = getJwtSecret();
@@ -96,6 +97,18 @@ function buildClientDefaults(body = {}) {
       dailyQuota: 10000,
       monthlyQuota: 300000,
     },
+    subscription: (() => {
+      const paidUntil = body.paidUntil ? new Date(body.paidUntil) : defaultPaidUntilForNewClient();
+      return {
+        status: body.subscriptionStatus || 'active',
+        plan: body.subscriptionPlan || body.plan || 'partnership',
+        billingCycle: body.billingCycle || 'monthly',
+        paidUntil,
+        graceUntil: applyGracePeriod(paidUntil, DEFAULT_GRACE_DAYS),
+        lastPaymentAt: new Date(),
+        notes: body.subscriptionNotes || '',
+      };
+    })(),
   };
 }
 

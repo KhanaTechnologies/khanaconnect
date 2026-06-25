@@ -27,6 +27,10 @@ const { recordTeamActivityFromRequest } = require('../helpers/teamActivity');
 const { uploadSignatureImage } = require('../helpers/signatureImageUpload');
 const { uploadEmailLogoImage } = require('../helpers/emailLogoUpload');
 const { buildKhanaEmail } = require('../helpers/transactionalEmailLayout');
+const {
+    isClientSubscriptionActive,
+    subscriptionBlockedResponse,
+} = require('../helpers/clientSubscription');
 const newsletterBuilderRouter = require('./newsletterBuilder');
 const { validateNewsletterHtml } = require('../helpers/newsletterBuilder');
 const { isKnownTemplateId } = require('../helpers/newsletterTemplates');
@@ -294,7 +298,17 @@ async function validateClient(req, res, next) {
                 smtpHost: client.smtpHost,
                 smtpPort: client.smtpPort,
                 return_url: client.return_url,
+                subscriptionActive: isClientSubscriptionActive(client),
+                _clientDoc: client,
             };
+
+            if (!isClientSubscriptionActive(client)) {
+                const path = String(req.path || '');
+                const allowWhenInactive = path === '/contact' || path.startsWith('/branding');
+                if (!allowWhenInactive) {
+                    return subscriptionBlockedResponse(res, client);
+                }
+            }
 
             next();
         } catch (err) {

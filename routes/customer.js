@@ -16,6 +16,10 @@ const { getJwtSecret, verifyJwtWithAnySecret } = require('../helpers/jwtSecret')
 const router = express.Router();
 const { findCustomerByEmail, replaceCustomerCart } = require('../helpers/customerCart');
 const { encrypt, decrypt } = require('../helpers/encryption');
+const {
+  isClientSubscriptionActive,
+  subscriptionBlockedResponse,
+} = require('../helpers/clientSubscription');
 
 // Rate limiter for login attempts
 const loginLimiter = rateLimit({
@@ -48,6 +52,27 @@ const validateTokenAndExtractClientID = (req, res, next) => {
     return res.status(401).json({ error: 'Unauthorized - Token validation failed' });
   }
 };
+
+async function requireStorefrontSubscription(req, res, next) {
+  try {
+    if (!req.clientID) {
+      return res.status(401).json({ error: 'Client context missing' });
+    }
+    const client = await Client.findOne({ clientID: req.clientID }).select('role subscription clientID companyName');
+    if (!client) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+    if (!isClientSubscriptionActive(client)) {
+      return subscriptionBlockedResponse(res, client);
+    }
+    req.storefrontClient = client;
+    return next();
+  } catch (err) {
+    return res.status(500).json({ error: 'Subscription check failed', details: err.message });
+  }
+}
+
+const validatePaidStorefrontToken = [validateTokenAndExtractClientID, requireStorefrontSubscription];
 
 // Admin check middleware
 const requireAdmin = async (req, res, next) => {
@@ -109,7 +134,7 @@ const normalizeEmailDomain = (email) => {
  * Get wish lists for a specific customer inside the authenticated tenant.
  * Endpoint: GET /api/v1/customer/wishlists?customerID=<mongoId>
  */
-router.get('/wishlists', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
+router.get('/wishlists', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
   const customerID = String(req.query.customerID || '').trim();
   if (!customerID) {
     return res.status(400).json({ error: 'customerID query parameter is required' });
@@ -335,7 +360,7 @@ router.post('/debug/encrypt', requireAdmin, wrapRoute(async (req, res) => {
 // --------------------
 
 /** Sync cart at checkout (guest or returning shopper) for abandonment tracking */
-router.post('/cart/sync-checkout', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
+router.post('/cart/sync-checkout', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
   const { emailAddress, customerFirstName, customerLastName, phoneNumber, items } = req.body;
 
   if (!emailAddress || !/\S+@\S+\.\S+/.test(emailAddress)) {
@@ -399,7 +424,7 @@ router.post('/cart/sync-checkout', validateTokenAndExtractClientID, wrapRoute(as
 }));
 
 // ADD TO CART
-router.post('/:id/cart', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
+router.post('/:id/cart', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
@@ -518,7 +543,7 @@ router.post('/:id/cart', validateTokenAndExtractClientID, wrapRoute(async (req, 
 }));
 
 // UPDATE CART ITEM QUANTITY
-router.put('/:id/cart/:productId', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
+router.put('/:id/cart/:productId', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
@@ -587,7 +612,7 @@ router.put('/:id/cart/:productId', validateTokenAndExtractClientID, wrapRoute(as
 }));
 
 // REMOVE FROM CART
-router.delete('/:id/cart/:productId', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
+router.delete('/:id/cart/:productId', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
@@ -623,7 +648,7 @@ router.delete('/:id/cart/:productId', validateTokenAndExtractClientID, wrapRoute
 }));
 
 // CLEAR CART
-router.delete('/:id/cart', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
+router.delete('/:id/cart', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
@@ -643,7 +668,7 @@ router.delete('/:id/cart', validateTokenAndExtractClientID, wrapRoute(async (req
 }));
 
 // GET CART
-router.get('/:id/cart', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
+router.get('/:id/cart', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
@@ -690,7 +715,7 @@ router.get('/:id/cart', validateTokenAndExtractClientID, wrapRoute(async (req, r
 // --------------------
 
 // ADD ORDER TO HISTORY
-router.post('/:id/orders', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
+router.post('/:id/orders', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
@@ -791,7 +816,7 @@ router.post('/:id/orders', validateTokenAndExtractClientID, wrapRoute(async (req
 }));
 
 // GET ORDER HISTORY
-router.get('/:id/orders', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
+router.get('/:id/orders', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
@@ -815,7 +840,7 @@ router.get('/:id/orders', validateTokenAndExtractClientID, wrapRoute(async (req,
 // --------------------
 
 // SET CART REMINDER
-router.post('/:id/cart-reminder', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
+router.post('/:id/cart-reminder', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
@@ -844,7 +869,7 @@ router.post('/:id/cart-reminder', validateTokenAndExtractClientID, wrapRoute(asy
 }));
 
 // SEND CART REMINDER MANUALLY
-router.post('/:id/send-cart-reminder', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
+router.post('/:id/send-cart-reminder', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
@@ -881,7 +906,7 @@ router.post('/:id/send-cart-reminder', validateTokenAndExtractClientID, wrapRout
 // --------------------
 
 // GET CUSTOMER SHOPPING HABITS
-router.get('/:id/shopping-habits', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
+router.get('/:id/shopping-habits', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
@@ -899,7 +924,7 @@ router.get('/:id/shopping-habits', validateTokenAndExtractClientID, wrapRoute(as
 }));
 
 // GET CUSTOMER ANALYTICS OVERVIEW
-router.get('/:id/analytics', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
+router.get('/:id/analytics', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
@@ -921,7 +946,7 @@ router.get('/:id/analytics', validateTokenAndExtractClientID, wrapRoute(async (r
 // --------------------
 
 // GET CUSTOMER BEHAVIOR INSIGHTS
-router.get('/analytics/behavior', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
+router.get('/analytics/behavior', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
   try {
     const { period = 'monthly' } = req.query; // weekly, monthly, yearly
     
@@ -940,7 +965,7 @@ router.get('/analytics/behavior', validateTokenAndExtractClientID, wrapRoute(asy
 }));
 
 // GET PRODUCT POPULARITY ANALYTICS
-router.get('/analytics/products/popular', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
+router.get('/analytics/products/popular', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
   try {
     const { limit = 10, period = 'all' } = req.query;
     
@@ -958,7 +983,7 @@ router.get('/analytics/products/popular', validateTokenAndExtractClientID, wrapR
 }));
 
 // GET CUSTOMER PURCHASE PATTERNS
-router.get('/analytics/purchase-patterns', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
+router.get('/analytics/purchase-patterns', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
   try {
     const customers = await Customer.find({ clientID: req.clientID });
     const patterns = analyzePurchasePatterns(customers);
@@ -974,7 +999,7 @@ router.get('/analytics/purchase-patterns', validateTokenAndExtractClientID, wrap
 }));
 
 // GET CART ABANDONMENT ANALYTICS
-router.get('/analytics/cart-abandonment', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
+router.get('/analytics/cart-abandonment', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
   try {
     const customers = await Customer.find({ 
       clientID: req.clientID,
@@ -1093,11 +1118,11 @@ const registerCustomer = async (req, res) => {
   }
 };
 
-router.post('/', validateTokenAndExtractClientID, validateCustomerInput, registerCustomer);
-router.post('/registration', validateTokenAndExtractClientID, validateCustomerInput, registerCustomer);
+router.post('/', validatePaidStorefrontToken, validateCustomerInput, registerCustomer);
+router.post('/registration', validatePaidStorefrontToken, validateCustomerInput, registerCustomer);
 
 // LOGIN CUSTOMER - Updated to handle encrypted email search
-router.post('/login', loginLimiter, validateTokenAndExtractClientID, async (req, res) => {
+router.post('/login', loginLimiter, validatePaidStorefrontToken, async (req, res) => {
   try {
     const { emailAddress, password } = req.body;
     
@@ -1270,7 +1295,7 @@ router.post('/verify/:token', async (req, res) => {
 });
 
 // RESEND VERIFICATION EMAIL
-router.post('/resend-verification', validateTokenAndExtractClientID, async (req, res) => {
+router.post('/resend-verification', validatePaidStorefrontToken, async (req, res) => {
   try {
     const { emailAddress } = req.body;
     
@@ -1340,7 +1365,7 @@ router.post('/resend-verification', validateTokenAndExtractClientID, async (req,
 });
 
 // RESET PASSWORD REQUEST
-router.post('/reset-password', validateTokenAndExtractClientID, async (req, res) => {
+router.post('/reset-password', validatePaidStorefrontToken, async (req, res) => {
   try {
     const { emailAddress } = req.body;
     
@@ -1444,7 +1469,7 @@ router.post('/reset-password/:token', async (req, res) => {
 // --------------------
 
 // GET CUSTOMER BY ID
-router.get('/:id', validateTokenAndExtractClientID, async (req, res) => {
+router.get('/:id', validatePaidStorefrontToken, async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID })
       .select('-passwordHash -emailVerificationToken -resetPasswordToken');
@@ -1464,7 +1489,7 @@ router.get('/:id', validateTokenAndExtractClientID, async (req, res) => {
 });
 
 // GET ALL CUSTOMERS
-router.get('/', validateTokenAndExtractClientID, async (req, res) => {
+router.get('/', validatePaidStorefrontToken, async (req, res) => {
   try {
     const customers = await Customer.find({ clientID: req.clientID })
       .select('-passwordHash -emailVerificationToken -resetPasswordToken');
@@ -1481,7 +1506,7 @@ router.get('/', validateTokenAndExtractClientID, async (req, res) => {
 });
 
 // UPDATE CUSTOMER
-router.put('/:id', validateTokenAndExtractClientID, async (req, res) => {
+router.put('/:id', validatePaidStorefrontToken, async (req, res) => {
   try {
     const updates = { ...req.body };
     
@@ -1542,7 +1567,7 @@ router.put('/:id', validateTokenAndExtractClientID, async (req, res) => {
 });
 
 // DELETE CUSTOMER
-router.delete('/:id', validateTokenAndExtractClientID, async (req, res) => {
+router.delete('/:id', validatePaidStorefrontToken, async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
     if (!customer) {
@@ -1562,7 +1587,7 @@ router.delete('/:id', validateTokenAndExtractClientID, async (req, res) => {
 });
 
 // CUSTOMER COUNT
-router.get('/get/count', validateTokenAndExtractClientID, async (req, res) => {
+router.get('/get/count', validatePaidStorefrontToken, async (req, res) => {
   try {
     const customerCount = await Customer.countDocuments({ clientID: req.clientID });
     

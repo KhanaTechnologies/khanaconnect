@@ -65,6 +65,25 @@ const clientSchema = new Schema({
   dashboardThemeColor: { type: String, default: '', trim: true },
   /** Public URL for logo in transactional email banner. Empty = company name text. */
   emailLogoUrl: { type: String, default: '', trim: true },
+  /** Monthly partnership billing — access gated when paidUntil lapses. */
+  subscription: {
+    status: {
+      type: String,
+      enum: ['trialing', 'active', 'past_due', 'suspended', 'canceled'],
+      default: 'active',
+    },
+    plan: { type: String, default: 'partnership', trim: true },
+    billingCycle: {
+      type: String,
+      enum: ['monthly', 'quarterly', 'yearly', 'custom'],
+      default: 'monthly',
+    },
+    paidUntil: { type: Date, default: null },
+    graceUntil: { type: Date, default: null },
+    lastPaymentAt: { type: Date, default: null },
+    suspendedAt: { type: Date, default: null },
+    notes: { type: String, default: '', trim: true },
+  },
   role: { 
     type: String, 
     enum: ["client", "admin"],

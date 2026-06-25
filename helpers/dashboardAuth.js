@@ -1,6 +1,10 @@
 const jwt = require('jsonwebtoken');
 const { verifyJwtWithAnySecret } = require('./jwtSecret');
 const { resolveSessionFromToken } = require('./teamAuth');
+const {
+  isClientSubscriptionActive,
+  subscriptionBlockedResponse,
+} = require('./clientSubscription');
 
 /**
  * Dashboard API auth + team member permission enforcement.
@@ -32,6 +36,10 @@ function createDashboardAuth(moduleKey = null) {
 
       if (session.platformAdmin) {
         return next();
+      }
+
+      if (!isClientSubscriptionActive(session.client)) {
+        return subscriptionBlockedResponse(res, session.client);
       }
 
       const permissions = session.permissions || {};

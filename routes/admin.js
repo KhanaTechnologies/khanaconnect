@@ -15,6 +15,11 @@ const DiscountCode = require("../models/discountCode");
 const { getJwtSecret } = require('../helpers/jwtSecret');
 const { requireAdmin } = require('../middleware/requireAdmin');
 const { createClientRecord } = require('../helpers/clientCreate');
+const {
+  serializeSubscriptionSummary,
+  applySubscriptionUpdate,
+  isClientSubscriptionActive,
+} = require('../helpers/clientSubscription');
 const TeamMember = require('../models/teamMember');
 const {
   normalizeTeamEmail,
@@ -122,10 +127,20 @@ router.post('/clients/:id/delete-client-token', authJwt(), wrapRoute(async (req,
   res.status(200).json({ message: 'Client token deleted successfully' });
 }));
 
+function formatClientForAdmin(client) {
+  const json = client.toObject ? client.toObject() : client;
+  const summary = serializeSubscriptionSummary(client);
+  return {
+    ...json,
+    active: summary.isActive,
+    subscriptionSummary: summary,
+  };
+}
+
 // 🔹 GET all clients
 router.get("/clients", requireAdmin, wrapRoute(async (req, res) => {
   const clients = await Client.find().select('-password -token -sessionToken');
-  res.json(clients);
+  res.json(clients.map((c) => formatClientForAdmin(c)));
 }));
 
 // 🔹 CREATE a new client (admin dashboard)
@@ -166,7 +181,59 @@ router.put("/clients/:id", requireAdmin, wrapRoute(async (req, res) => {
     .select('-password -token -sessionToken');
 
   if (!updatedClient) return res.status(404).json({ error: "Client not found" });
-  res.json(updatedClient);
+  res.json(formatClientForAdmin(updatedClient));
+}));
+
+// 🔹 Subscription billing (monthly partnership access)
+router.get("/clients/:id/subscription", requireAdmin, wrapRoute(async (req, res) => {
+  const client = await Client.findById(req.params.id);
+  if (!client) return res.status(404).json({ error: "Client not found" });
+  res.json({ success: true, subscription: serializeSubscriptionSummary(client) });
+}));
+
+router.put("/clients/:id/subscription", requireAdmin, wrapRoute(async (req, res) => {
+  const client = await Client.findById(req.params.id);
+  if (!client) return res.status(404).json({ error: "Client not found" });
+
+  const subscription = applySubscriptionUpdate(client, req.body);
+  await client.save();
+
+  res.json({
+    success: true,
+    message: 'Subscription updated',
+    subscription,
+    client: formatClientForAdmin(client),
+  });
+}));
+
+router.post("/clients/:id/subscription/reinstate", requireAdmin, wrapRoute(async (req, res) => {
+  const client = await Client.findById(req.params.id);
+  if (!client) return res.status(404).json({ error: "Client not found" });
+
+  const subscription = applySubscriptionUpdate(client, { ...req.body, action: 'reinstate' });
+  await client.save();
+
+  res.json({
+    success: true,
+    message: 'Access reinstated',
+    subscription,
+    client: formatClientForAdmin(client),
+  });
+}));
+
+router.post("/clients/:id/subscription/suspend", requireAdmin, wrapRoute(async (req, res) => {
+  const client = await Client.findById(req.params.id);
+  if (!client) return res.status(404).json({ error: "Client not found" });
+
+  const subscription = applySubscriptionUpdate(client, { ...req.body, action: 'suspend' });
+  await client.save();
+
+  res.json({
+    success: true,
+    message: 'Client access suspended',
+    subscription,
+    client: formatClientForAdmin(client),
+  });
 }));
 
 // 🔹 GET total number of clients

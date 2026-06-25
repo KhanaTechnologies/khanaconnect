@@ -33,6 +33,7 @@ const {
 } = require('../helpers/teamPermissionPresets');
 const { getTeamSeatUsage, assertTeamSeatAvailable } = require('../helpers/teamSeats');
 const { normalizeDashboardThemeColor } = require('../helpers/dashboardTheme');
+const { serializeSubscriptionSummary, isClientSubscriptionActive } = require('../helpers/clientSubscription');
 const {
   ACTIVITY_CATEGORIES,
   getTeamActivitySettings,
@@ -157,12 +158,15 @@ router.get('/members', wrapRoute(async (req, res) => {
 
 router.get('/me', wrapRoute(async (req, res) => {
   const { client, member, permissions, orgRole, canManageTeam: manageTeam } = req.teamSession;
+  const subscription = serializeSubscriptionSummary(client);
   res.json({
     success: true,
     clientID: client.clientID,
     companyName: client.companyName,
     dashboardThemeColor: client.dashboardThemeColor || '',
     emailLogoUrl: client.emailLogoUrl || '',
+    subscription,
+    subscriptionActive: isClientSubscriptionActive(client),
     member: member ? sanitizeMember(member) : null,
     orgRole,
     permissions,

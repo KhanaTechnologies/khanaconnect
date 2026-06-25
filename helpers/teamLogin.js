@@ -4,6 +4,10 @@ const TeamMember = require('../models/teamMember');
 const { signTeamSessionToken } = require('./teamAuth');
 const { fullPermissions, permissionsFromClient } = require('./teamPermissions');
 const { normalizeTeamEmail, findTeamMemberByEmail } = require('./teamMemberLookup');
+const {
+  serializeSubscriptionSummary,
+  isClientSubscriptionActive,
+} = require('./clientSubscription');
 
 async function ensureOwnerMember(client, email, passwordHash) {
   const existingOwner = await TeamMember.findOne({ clientID: client.clientID, orgRole: 'owner' });
@@ -52,6 +56,8 @@ function buildLoginResponse(client, member, token) {
     canManageTeam: member ? ['owner', 'admin'].includes(member.orgRole) : client.role === 'admin',
     hasAdPlatforms: client.hasEnabledAdPlatforms,
     enabledAdPlatforms: client.getEnabledAdPlatforms(),
+    subscription: serializeSubscriptionSummary(client),
+    subscriptionActive: isClientSubscriptionActive(client),
   };
 }
 
