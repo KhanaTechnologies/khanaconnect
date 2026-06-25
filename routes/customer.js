@@ -1068,7 +1068,8 @@ const registerCustomer = async (req, res) => {
         client.businessEmailPassword, // This will be automatically decrypted
         client.return_url, 
         client.companyName,
-        client.emailSignature || ''
+        client.emailSignature || '',
+        client.emailLogoUrl || ''
       );
     } catch (emailError) {
       console.error('Email failed to send:', emailError.message);
@@ -1150,7 +1151,8 @@ router.post('/login', loginLimiter, validateTokenAndExtractClientID, async (req,
             client.businessEmailPassword, 
             client.return_url, 
             client.companyName,
-            client.emailSignature || ''
+            client.emailSignature || '',
+            client.emailLogoUrl || ''
           );
         } catch (emailError) {
           console.error('Verification email failed to send:', emailError.message);
@@ -1319,7 +1321,8 @@ router.post('/resend-verification', validateTokenAndExtractClientID, async (req,
         client.businessEmailPassword, 
         client.return_url, 
         client.companyName,
-        client.emailSignature || ''
+        client.emailSignature || '',
+        client.emailLogoUrl || ''
       );
     } catch (emailError) {
       console.error('Verification email failed to send:', emailError.message);
@@ -1385,6 +1388,7 @@ router.post('/reset-password', validateTokenAndExtractClientID, async (req, res)
         client.businessEmailPassword, 
         client.companyName,
         client.emailSignature || '',
+        client.emailLogoUrl || '',
         req.clientID
       );
     } catch (emailError) {

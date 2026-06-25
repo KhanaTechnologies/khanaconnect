@@ -63,6 +63,8 @@ const clientSchema = new Schema({
   },
   /** Hex brand color for dashboard UI (e.g. #3b6fc9). Empty = Khana default. */
   dashboardThemeColor: { type: String, default: '', trim: true },
+  /** Public URL for logo in transactional email banner. Empty = company name text. */
+  emailLogoUrl: { type: String, default: '', trim: true },
   role: { 
     type: String, 
     enum: ["client", "admin"],

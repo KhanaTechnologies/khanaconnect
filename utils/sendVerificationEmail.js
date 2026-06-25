@@ -3,6 +3,11 @@ const { decrypt } = require('../helpers/encryption');
 const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../helpers/mailHost');
 const { escapeHtml, mergeEmailSignature } = require('../helpers/signatureHtml');
 const { inlineSignatureImages } = require('../helpers/mailer');
+const {
+    buildKhanaEmail,
+    ctaButton,
+    warnPanel,
+} = require('../helpers/transactionalEmailLayout');
 
 const failedAttempts = new Map();
 const MAX_ATTEMPTS = 1;
@@ -28,7 +33,7 @@ function extractDomain(url) {
     return domain;
 }
 
-async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass, websiteURL, clientName, emailSignature = '') {
+async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass, websiteURL, clientName, emailSignature = '', emailLogoUrl = '') {
     const decryptedEmail = decrypt(bEmail);
     const decryptedPass = decrypt(BEPass);
 
@@ -66,30 +71,28 @@ async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass,
     const safeUrlDisplay = escapeHtml(verificationURL);
     const brandPlain = formattedClientName.replace('The ', '').replace(' Team', '');
 
-    const emailContent = `
-        <div style="font-family: Arial, Helvetica, sans-serif; color: #111827; max-width: 600px; margin: auto;">
-            <h2 style="text-align: center; color: #1f2937;">Confirm your email</h2>
-            <p>Hi there,</p>
-            <p>Thanks for registering with <strong>${escapeHtml(brandPlain)}</strong>. Please confirm this email address belongs to you by using the button below.</p>
-
-            <div style="text-align: center; margin: 28px 0;">
-                <a href="${verificationURL}" style="background-color: #2563eb; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
-                    Verify my email
-                </a>
-            </div>
-
-            <p style="font-size: 14px; color: #4b5563;">If the button does not work, copy and paste this link into your browser:</p>
-            <p style="word-break: break-all; font-size: 13px;"><a href="${verificationURL}">${safeUrlDisplay}</a></p>
-
-            <div style="margin: 24px 0; padding: 14px; background: #fef3c7; border-left: 4px solid #f59e0b; font-size: 14px;">
-                <strong>Security:</strong> this link expires in about one hour. If you did not create an account, you can ignore this message — no changes will be made.
-            </div>
-
-            <p style="margin-top: 28px;">Warm regards,<br>${formattedClientName}</p>
-            <hr style="margin-top: 36px; border: none; border-top: 1px solid #e5e7eb;">
-            <p style="font-size: 12px; color: #6b7280;">Sent by ${escapeHtml(brandPlain)} for account verification only.</p>
-        </div>
+    const bodyHtml = `
+            <p style="margin:0 0 16px;">Hi there,</p>
+            <p style="margin:0 0 16px;">Thanks for registering with <strong>${escapeHtml(brandPlain)}</strong>. Please confirm this email address belongs to you.</p>
+            ${ctaButton({ href: verificationURL, label: 'Verify my email' })}
+            <p style="margin:0 0 8px;font-size:14px;color:#4b5563;">If the button does not work, copy and paste this link into your browser:</p>
+            <p style="margin:0 0 20px;word-break:break-all;font-size:13px;"><a href="${verificationURL}" style="color:#2563eb;">${safeUrlDisplay}</a></p>
+            ${warnPanel({
+                html: '<strong>Security:</strong> this link expires in about one hour. If you did not create an account, you can ignore this message.',
+            })}
+            <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
     `;
+
+    const emailContent = buildKhanaEmail({
+        headline: 'Confirm your email',
+        title: 'Confirm your email address',
+        preheader: `Verify your ${brandPlain} account.`,
+        bodyHtml,
+        brandName: brandPlain,
+        logoUrl: (emailLogoUrl || '').trim() || undefined,
+        showKhanaLogo: false,
+        footerHtml: `Sent by ${escapeHtml(brandPlain)} for account verification only.`,
+    });
 
     let merged = { html: emailContent, text: '' };
     if (emailSignature && String(emailSignature).trim()) {

@@ -162,6 +162,7 @@ router.get('/me', wrapRoute(async (req, res) => {
     clientID: client.clientID,
     companyName: client.companyName,
     dashboardThemeColor: client.dashboardThemeColor || '',
+    emailLogoUrl: client.emailLogoUrl || '',
     member: member ? sanitizeMember(member) : null,
     orgRole,
     permissions,

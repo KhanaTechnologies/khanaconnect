@@ -8,6 +8,45 @@ const { inlineSignatureImages } = require('../helpers/mailer');
 const { enqueueOutboundEmail } = require('../queues/outboundEmailQueue');
 const { serializeMailOptions, deserializeMailOptions } = require('../helpers/mailQueueSerialize');
 const { isNonRetryableSmtpError, isRetryableSmtpError } = require('../helpers/smtpErrors');
+const {
+    buildKhanaEmail,
+    escapeHtml,
+    infoPanel,
+    warnPanel,
+    neutralPanel,
+    ctaButton,
+} = require('../helpers/transactionalEmailLayout');
+
+function brandPlainName(formattedClientName) {
+    return String(formattedClientName || '')
+        .replace(/<[^>]+>/g, '')
+        .replace(/^The\s+/i, '')
+        .replace(/\s+Team$/i, '')
+        .trim() || 'Khana';
+}
+
+function wrapTransactionalEmail(headline, bodyHtml, opts = {}) {
+    const brand = opts.brandName || brandPlainName(opts.formattedClientName);
+    const logoUrl = (opts.logoUrl || opts.emailLogoUrl || '').trim() || undefined;
+    return buildKhanaEmail({
+        headline,
+        title: opts.title || headline,
+        preheader: opts.preheader || headline,
+        bodyHtml,
+        brandName: brand,
+        logoUrl,
+        showKhanaLogo: opts.showKhanaLogo === true,
+        footerHtml: opts.footerHtml,
+    });
+}
+
+function wrapBranding(formattedClientName, emailLogoUrl = '') {
+    const url = String(emailLogoUrl || '').trim();
+    return {
+        formattedClientName,
+        ...(url ? { emailLogoUrl: url, logoUrl: url } : {}),
+    };
+}
 
 /**
  * Same pipeline as the mailbox composer: merge HTML signature, then inline uploaded
@@ -209,21 +248,12 @@ function formatBookingDate(date) {
     });
 }
 
-function escapeHtml(s) {
-    if (s == null) return '';
-    return String(s)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-}
-
 // -----------------------------
 // Booking updated (moved / edited) — customer notification
 // -----------------------------
 async function sendBookingUpdateNotificationEmail(booking, changeRows, bEmail, BEPass, clientName, options = {}) {
     if (!changeRows || changeRows.length === 0) return;
-    const { reason = '', toEmail, emailSignature = '' } = options;
+    const { reason = '', toEmail, emailSignature = '', emailLogoUrl = '' } = options;
     const recipient = toEmail || booking.customerEmail;
     if (!recipient) return;
 
@@ -242,15 +272,15 @@ async function sendBookingUpdateNotificationEmail(booking, changeRows, bEmail, B
         )
         .join('');
 
-    const emailContent = `
-        <div style="font-family: Arial, Helvetica, sans-serif; color: #111827; max-width: 640px; margin: auto;">
-            <h2 style="text-align: center; color: #1f2937;">Your booking was updated</h2>
-            <p>Hi ${escapeHtml(booking.customerName)},</p>
-            <p>We adjusted your booking details. Below is a summary of what changed and your <strong>current</strong> booking information.</p>
-            ${reason ? `<p><strong>Note from the business:</strong> ${escapeHtml(reason)}</p>` : ''}
+    const emailContent = wrapTransactionalEmail(
+        'Your booking was updated',
+        `
+            <p style="margin:0 0 16px;">Hi ${escapeHtml(booking.customerName)},</p>
+            <p style="margin:0 0 16px;">We adjusted your booking details. Below is a summary of what changed and your <strong>current</strong> booking information.</p>
+            ${reason ? `<p style="margin:0 0 16px;"><strong>Note from the business:</strong> ${escapeHtml(reason)}</p>` : ''}
 
-            <div style="margin: 20px 0; padding: 16px; background-color: #fffbeb; border-left: 4px solid #f59e0b;">
-                <h3 style="margin-top: 0;">Changes</h3>
+            <div style="margin: 0 0 20px; padding: 16px; background-color: #fffbeb; border: 1px solid #fde68a; border-radius: 8px;">
+                <h3 style="margin:0 0 12px;font-size:14px;color:#92400e;">Changes</h3>
                 <table style="width:100%;border-collapse:collapse;font-size:14px;">
                     <thead>
                         <tr style="background:#f3f4f6;">
@@ -263,19 +293,21 @@ async function sendBookingUpdateNotificationEmail(booking, changeRows, bEmail, B
                 </table>
             </div>
 
-            <div style="margin: 20px 0; padding: 16px; background-color: #eff6ff; border-left: 4px solid #3b82f6;">
-                <h3 style="margin-top: 0;">Current booking</h3>
-                <p><strong>Date:</strong> ${escapeHtml(formattedDate)}</p>
-                <p><strong>Time:</strong> ${escapeHtml(booking.time || '')}${booking.endTime ? ` – ${escapeHtml(booking.endTime)}` : ''}</p>
-                <p><strong>Services:</strong></p>
-                <ul>${servicesList}</ul>
-                <p><strong>Status:</strong> ${escapeHtml(booking.status || '')}</p>
-            </div>
+            ${infoPanel({
+                title: 'Current booking',
+                rows: [
+                    ['Date', escapeHtml(formattedDate)],
+                    ['Time', `${escapeHtml(booking.time || '')}${booking.endTime ? ` – ${escapeHtml(booking.endTime)}` : ''}`],
+                    ['Status', escapeHtml(booking.status || '')],
+                ],
+                html: `<p style="margin:0 0 8px;"><strong>Services:</strong></p><ul style="margin:0;padding-left:20px;">${servicesList}</ul>`,
+            })}
 
-            <p style="margin-top: 24px;">If something looks wrong, reply to this email or call us.</p>
-            <p>Warm regards,<br>${formattedClientName}</p>
-        </div>
-    `;
+            <p style="margin:0 0 16px;">If something looks wrong, reply to this email or call us.</p>
+            <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
+        `,
+        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+    );
 
     await sendWithRetry(
         () => createTransporter(bEmail, BEPass),
@@ -293,17 +325,19 @@ async function sendBookingUpdateNotificationEmail(booking, changeRows, bEmail, B
 }
 
 /** When the booking email address changes, notify the previous address once. */
-async function sendBookingEmailReassignedNotice(prevEmail, booking, bEmail, BEPass, clientName, emailSignature = '') {
+async function sendBookingEmailReassignedNotice(prevEmail, booking, bEmail, BEPass, clientName, emailSignature = '', emailLogoUrl = '') {
     if (!prevEmail) return;
     const formattedClientName = getFormattedClientName(clientName);
-    const html = `
-        <div style="font-family: Arial, Helvetica, sans-serif; color: #111827; max-width: 600px; margin: auto;">
-            <h2 style="color:#1f2937;">Booking notifications moved</h2>
-            <p>This address is no longer the primary contact on a booking for <strong>${escapeHtml(booking.customerName || 'a guest')}</strong>.</p>
-            <p>Future updates will be sent to: <strong>${escapeHtml(booking.customerEmail)}</strong>.</p>
-            <p>If you did not request this change, please contact ${formattedClientName.replace(/<[^>]+>/g, '')}.</p>
-            <p style="margin-top:24px;">${formattedClientName}</p>
-        </div>`;
+    const html = wrapTransactionalEmail(
+        'Booking notifications moved',
+        `
+            <p style="margin:0 0 16px;">This address is no longer the primary contact on a booking for <strong>${escapeHtml(booking.customerName || 'a guest')}</strong>.</p>
+            <p style="margin:0 0 16px;">Future updates will be sent to: <strong>${escapeHtml(booking.customerEmail)}</strong>.</p>
+            <p style="margin:0 0 16px;">If you did not request this change, please contact ${formattedClientName.replace(/<[^>]+>/g, '')}.</p>
+            <p style="margin:0;">${formattedClientName}</p>
+        `,
+        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+    );
     await sendWithRetry(
         () => createTransporter(bEmail, BEPass),
         {
@@ -321,7 +355,7 @@ async function sendBookingEmailReassignedNotice(prevEmail, booking, bEmail, BEPa
 // -----------------------------
 // Booking statement — paid activity record (not a payment request)
 // -----------------------------
-async function sendBookingStatementEmail(booking, bEmail, BEPass, clientName, emailSignature = '') {
+async function sendBookingStatementEmail(booking, bEmail, BEPass, clientName, emailSignature = '', emailLogoUrl = '') {
     const formattedClientName = getFormattedClientName(clientName);
     const formattedDate = formatBookingDate(booking.date);
     const servicesList = (booking.services || []).map((service) => `<li>${escapeHtml(service)}</li>`).join('');
@@ -331,39 +365,40 @@ async function sendBookingStatementEmail(booking, bEmail, BEPass, clientName, em
     const deposit = pay.depositAmount != null ? `R${Number(pay.depositAmount).toFixed(2)}` : '';
     const balance = pay.balanceDue != null ? `R${Number(pay.balanceDue).toFixed(2)}` : '';
 
-    const emailContent = `
-        <div style="font-family: Arial, Helvetica, sans-serif; color: #111827; max-width: 640px; margin: auto;">
-            <h2 style="text-align: center; color: #1f2937;">Booking statement</h2>
-            <p>Hi ${escapeHtml(booking.customerName)},</p>
-            <p>Here is a summary of your booking and any recorded payment — <strong>for your records only</strong>. This is <strong>not</strong> a bill and <strong>no action is required</strong> unless we have contacted you separately.</p>
-
-            <div style="margin:16px 0;padding:14px;background:#ecfdf5;border-left:4px solid #10b981;">
-                <strong>Record only</strong> — not a payment request.
-            </div>
-
-            <div style="margin: 20px 0; padding: 16px; background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px;">
-                <h3 style="margin-top: 0;">Booking</h3>
-                <p><strong>Date:</strong> ${escapeHtml(formattedDate)}</p>
-                <p><strong>Time:</strong> ${escapeHtml(booking.time || '')}${booking.endTime ? ` – ${escapeHtml(booking.endTime)}` : ''}</p>
-                <p><strong>Services:</strong></p>
-                <ul>${servicesList}</ul>
-                <p><strong>Booking status:</strong> ${escapeHtml(booking.status || '')}</p>
-            </div>
-
-            <div style="margin: 20px 0; padding: 16px; background-color: #eff6ff; border-left: 4px solid #3b82f6;">
-                <h3 style="margin-top: 0;">Payment on file</h3>
-                <p><strong>Payment status:</strong> ${escapeHtml(status)}</p>
-                <p><strong>Recorded amount:</strong> ${escapeHtml(amount)}</p>
-                ${deposit ? `<p><strong>Deposit recorded:</strong> ${escapeHtml(deposit)}</p>` : ''}
-                ${balance ? `<p><strong>Balance noted:</strong> ${escapeHtml(balance)}</p>` : ''}
-                ${pay.transactionId ? `<p><strong>Reference / transaction id:</strong> ${escapeHtml(String(pay.transactionId))}</p>` : ''}
-                ${pay.paidAt ? `<p><strong>Recorded paid at:</strong> ${escapeHtml(new Date(pay.paidAt).toLocaleString())}</p>` : ''}
-            </div>
-
-            <p style="margin-top: 24px;">Questions? Reply to this email.</p>
-            <p>Warm regards,<br>${formattedClientName}</p>
-        </div>
-    `;
+    const emailContent = wrapTransactionalEmail(
+        'Booking statement',
+        `
+            <p style="margin:0 0 16px;">Hi ${escapeHtml(booking.customerName)},</p>
+            <p style="margin:0 0 16px;">Here is a summary of your booking and any recorded payment — <strong>for your records only</strong>. This is <strong>not</strong> a bill and <strong>no action is required</strong> unless we have contacted you separately.</p>
+            ${neutralPanel({
+                title: 'Record only',
+                html: '<p style="margin:0;color:#047857;"><strong>Not a payment request.</strong></p>',
+            })}
+            ${neutralPanel({
+                title: 'Booking',
+                html: `
+                    <p style="margin:0 0 8px;"><strong>Date:</strong> ${escapeHtml(formattedDate)}</p>
+                    <p style="margin:0 0 8px;"><strong>Time:</strong> ${escapeHtml(booking.time || '')}${booking.endTime ? ` – ${escapeHtml(booking.endTime)}` : ''}</p>
+                    <p style="margin:0 0 8px;"><strong>Services:</strong></p><ul style="margin:0;padding-left:20px;">${servicesList}</ul>
+                    <p style="margin:8px 0 0;"><strong>Booking status:</strong> ${escapeHtml(booking.status || '')}</p>
+                `,
+            })}
+            ${infoPanel({
+                title: 'Payment on file',
+                html: `
+                    <p style="margin:0 0 8px;"><strong>Payment status:</strong> ${escapeHtml(status)}</p>
+                    <p style="margin:0 0 8px;"><strong>Recorded amount:</strong> ${escapeHtml(amount)}</p>
+                    ${deposit ? `<p style="margin:0 0 8px;"><strong>Deposit recorded:</strong> ${escapeHtml(deposit)}</p>` : ''}
+                    ${balance ? `<p style="margin:0 0 8px;"><strong>Balance noted:</strong> ${escapeHtml(balance)}</p>` : ''}
+                    ${pay.transactionId ? `<p style="margin:0 0 8px;"><strong>Reference / transaction id:</strong> ${escapeHtml(String(pay.transactionId))}</p>` : ''}
+                    ${pay.paidAt ? `<p style="margin:0;"><strong>Recorded paid at:</strong> ${escapeHtml(new Date(pay.paidAt).toLocaleString())}</p>` : ''}
+                `,
+            })}
+            <p style="margin:0 0 16px;">Questions? Reply to this email.</p>
+            <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
+        `,
+        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+    );
 
     await sendWithRetry(
         () => createTransporter(bEmail, BEPass),
@@ -383,39 +418,37 @@ async function sendBookingStatementEmail(booking, bEmail, BEPass, clientName, em
 // -----------------------------
 // Booking Confirmation Email
 // -----------------------------
-async function sendBookingConfirmationEmail(booking, bEmail, BEPass, clientName, emailSignature = '') {
+async function sendBookingConfirmationEmail(booking, bEmail, BEPass, clientName, emailSignature = '', emailLogoUrl = '') {
     console.log('Sending booking confirmation with decrypted credentials');
     const formattedClientName = getFormattedClientName(clientName);
     const formattedDate = formatBookingDate(booking.date);
 
-    const servicesList = booking.services.map(service => `<li>${service}</li>`).join('');
+    const servicesList = booking.services.map(service => `<li>${escapeHtml(service)}</li>`).join('');
 
-    const emailContent = `
-        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
-            <h2 style="text-align: center; color: #444;">Booking Confirmed! 🎉</h2>
-            <p>Hi ${booking.customerName},</p>
-            <p>Your booking has been confirmed. We're looking forward to seeing you!</p>
-
-            <div style="margin: 20px 0; padding: 15px; background-color: #eef6fc; border-left: 4px solid #2196F3;">
-                <h3 style="margin-top: 0;">Booking Details</h3>
-                <p><strong>Date:</strong> ${formattedDate}</p>
-                <p><strong>Time:</strong> ${booking.time} - ${booking.endTime}</p>
-                <p><strong>Services:</strong></p>
-                <ul>${servicesList}</ul>
-                ${booking.notes ? `<p><strong>Notes:</strong> ${booking.notes}</p>` : ''}
-                ${booking.payment.amount ? `<p><strong>Amount:</strong> R${booking.payment.amount}</p>` : ''}
-            </div>
-
-            <div style="margin: 20px 0; padding: 15px; background-color: #fff3cd; border-left: 4px solid #ffc107;">
-                <h4 style="margin-top: 0;">📍 Location & Preparation</h4>
-                <p>Please arrive 10 minutes before your scheduled time.</p>
-                <p>If you need to reschedule or cancel, please contact us at least 24 hours in advance.</p>
-            </div>
-
-            <p style="margin-top: 30px;">If you have any questions, feel free to reply to this email.</p>
-            <p>Warm regards,<br>${formattedClientName}</p>
-        </div>
-    `;
+    const emailContent = wrapTransactionalEmail(
+        'Booking confirmed!',
+        `
+            <p style="margin:0 0 16px;">Hi ${escapeHtml(booking.customerName)},</p>
+            <p style="margin:0 0 16px;">Your booking has been confirmed. We're looking forward to seeing you!</p>
+            ${infoPanel({
+                title: 'Booking details',
+                html: `
+                    <p style="margin:0 0 8px;"><strong>Date:</strong> ${escapeHtml(formattedDate)}</p>
+                    <p style="margin:0 0 8px;"><strong>Time:</strong> ${escapeHtml(booking.time)} – ${escapeHtml(booking.endTime)}</p>
+                    <p style="margin:0 0 8px;"><strong>Services:</strong></p><ul style="margin:0;padding-left:20px;">${servicesList}</ul>
+                    ${booking.notes ? `<p style="margin:8px 0 0;"><strong>Notes:</strong> ${escapeHtml(booking.notes)}</p>` : ''}
+                    ${booking.payment.amount ? `<p style="margin:8px 0 0;"><strong>Amount:</strong> R${escapeHtml(booking.payment.amount)}</p>` : ''}
+                `,
+            })}
+            ${warnPanel({
+                title: 'Location & preparation',
+                html: '<p style="margin:0 0 8px;">Please arrive 10 minutes before your scheduled time.</p><p style="margin:0;">If you need to reschedule or cancel, please contact us at least 24 hours in advance.</p>',
+            })}
+            <p style="margin:0 0 16px;">If you have any questions, feel free to reply to this email.</p>
+            <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
+        `,
+        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+    );
 
     const parts = buildTransactionalMailParts(emailContent, '', emailSignature);
     const qm = qBooking(booking);
@@ -458,37 +491,34 @@ async function sendBookingConfirmationEmail(booking, bEmail, BEPass, clientName,
 // -----------------------------
 // Booking Reminder Email
 // -----------------------------
-async function sendBookingReminderEmail(booking, bEmail, BEPass, clientName, emailSignature = '') {
+async function sendBookingReminderEmail(booking, bEmail, BEPass, clientName, emailSignature = '', emailLogoUrl = '') {
     const formattedClientName = getFormattedClientName(clientName);
     const formattedDate = formatBookingDate(booking.date);
 
-    const servicesList = booking.services.map(service => `<li>${service}</li>`).join('');
+    const servicesList = booking.services.map(service => `<li>${escapeHtml(service)}</li>`).join('');
 
-    const emailContent = `
-        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
-            <h2 style="text-align: center; color: #444;">Friendly Reminder: Booking Tomorrow! ⏰</h2>
-            <p>Hi ${booking.customerName},</p>
-            <p>This is a friendly reminder about your booking scheduled for tomorrow.</p>
-
-            <div style="margin: 20px 0; padding: 15px; background-color: #eef6fc; border-left: 4px solid #2196F3;">
-                <h3 style="margin-top: 0;">Booking Details</h3>
-                <p><strong>Date:</strong> ${formattedDate}</p>
-                <p><strong>Time:</strong> ${booking.time} - ${booking.endTime}</p>
-                <p><strong>Services:</strong></p>
-                <ul>${servicesList}</ul>
-            </div>
-
-            <div style="margin: 20px 0; padding: 15px; background-color: #d4edda; border-left: 4px solid #28a745;">
-                <h4 style="margin-top: 0;">💡 Tips for Your Visit</h4>
-                <p>• Please arrive 10 minutes early</p>
-                <p>• Bring any necessary documents or items</p>
-                <p>• Contact us if you're running late</p>
-            </div>
-
-            <p>We're looking forward to seeing you!</p>
-            <p>Warm regards,<br>${formattedClientName}</p>
-        </div>
-    `;
+    const emailContent = wrapTransactionalEmail(
+        'Booking reminder',
+        `
+            <p style="margin:0 0 16px;">Hi ${escapeHtml(booking.customerName)},</p>
+            <p style="margin:0 0 16px;">This is a friendly reminder about your booking scheduled for tomorrow.</p>
+            ${infoPanel({
+                title: 'Booking details',
+                html: `
+                    <p style="margin:0 0 8px;"><strong>Date:</strong> ${escapeHtml(formattedDate)}</p>
+                    <p style="margin:0 0 8px;"><strong>Time:</strong> ${escapeHtml(booking.time)} – ${escapeHtml(booking.endTime)}</p>
+                    <p style="margin:0 0 8px;"><strong>Services:</strong></p><ul style="margin:0;padding-left:20px;">${servicesList}</ul>
+                `,
+            })}
+            ${neutralPanel({
+                title: 'Tips for your visit',
+                html: '<p style="margin:0 0 6px;">• Please arrive 10 minutes early</p><p style="margin:0 0 6px;">• Bring any necessary documents or items</p><p style="margin:0;">• Contact us if you\'re running late</p>',
+            })}
+            <p style="margin:0 0 16px;">We're looking forward to seeing you!</p>
+            <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
+        `,
+        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+    );
 
     await sendWithRetry(
         () => createTransporter(bEmail, BEPass),
@@ -509,34 +539,36 @@ async function sendBookingReminderEmail(booking, bEmail, BEPass, clientName, ema
 // -----------------------------
 // Payment Confirmation Email
 // -----------------------------
-async function sendPaymentConfirmationEmail(booking, bEmail, BEPass, clientName, emailSignature = '') {
+async function sendPaymentConfirmationEmail(booking, bEmail, BEPass, clientName, emailSignature = '', emailLogoUrl = '') {
     const formattedClientName = getFormattedClientName(clientName);
     const formattedDate = formatBookingDate(booking.date);
 
-    const emailContent = `
-        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
-            <h2 style="text-align: center; color: #444;">Payment Confirmed! ✅</h2>
-            <p>Hi ${booking.customerName},</p>
-            <p>Your payment for the upcoming booking has been successfully processed.</p>
-
-            <div style="margin: 20px 0; padding: 15px; background-color: #eef6fc; border-left: 4px solid #2196F3;">
-                <h3 style="margin-top: 0;">Payment Details</h3>
-                <p><strong>Amount:</strong> R${booking.payment.amount}</p>
-                <p><strong>Date:</strong> ${new Date(booking.payment.paidAt).toLocaleDateString()}</p>
-                <p><strong>Transaction ID:</strong> ${booking.payment.transactionId}</p>
-            </div>
-
-            <div style="margin: 20px 0; padding: 15px; background-color: #eef6fc; border-left: 4px solid #2196F3;">
-                <h3 style="margin-top: 0;">Booking Details</h3>
-                <p><strong>Date:</strong> ${formattedDate}</p>
-                <p><strong>Time:</strong> ${booking.time} - ${booking.endTime}</p>
-                <p><strong>Services:</strong> ${booking.services.join(', ')}</p>
-            </div>
-
-            <p>Your booking is now confirmed and we're looking forward to seeing you!</p>
-            <p>Warm regards,<br>${formattedClientName}</p>
-        </div>
-    `;
+    const emailContent = wrapTransactionalEmail(
+        'Payment confirmed',
+        `
+            <p style="margin:0 0 16px;">Hi ${escapeHtml(booking.customerName)},</p>
+            <p style="margin:0 0 16px;">Your payment for the upcoming booking has been successfully processed.</p>
+            ${infoPanel({
+                title: 'Payment details',
+                rows: [
+                    ['Amount', `R${escapeHtml(booking.payment.amount)}`],
+                    ['Date', escapeHtml(new Date(booking.payment.paidAt).toLocaleDateString())],
+                    ['Transaction ID', escapeHtml(booking.payment.transactionId)],
+                ],
+            })}
+            ${infoPanel({
+                title: 'Booking details',
+                rows: [
+                    ['Date', escapeHtml(formattedDate)],
+                    ['Time', `${escapeHtml(booking.time)} – ${escapeHtml(booking.endTime)}`],
+                    ['Services', escapeHtml(booking.services.join(', '))],
+                ],
+            })}
+            <p style="margin:0 0 16px;">Your booking is now confirmed and we're looking forward to seeing you!</p>
+            <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
+        `,
+        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+    );
 
     await sendWithRetry(
         () => createTransporter(bEmail, BEPass),
@@ -557,35 +589,33 @@ async function sendPaymentConfirmationEmail(booking, bEmail, BEPass, clientName,
 // -----------------------------
 // Booking Cancellation Email
 // -----------------------------
-async function sendBookingCancellationEmail(booking, bEmail, BEPass, clientName, reason = '', emailSignature = '') {
+async function sendBookingCancellationEmail(booking, bEmail, BEPass, clientName, reason = '', emailSignature = '', emailLogoUrl = '') {
     const formattedClientName = getFormattedClientName(clientName);
     const formattedDate = formatBookingDate(booking.date);
 
-    const emailContent = `
-        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
-            <h2 style="text-align: center; color: #444;">Booking Cancelled</h2>
-            <p>Hi ${booking.customerName},</p>
-            <p>Your booking has been cancelled.</p>
-
-            <div style="margin: 20px 0; padding: 15px; background-color: #f8d7da; border-left: 4px solid #dc3545;">
-                <h3 style="margin-top: 0;">Cancelled Booking Details</h3>
-                <p><strong>Date:</strong> ${formattedDate}</p>
-                <p><strong>Time:</strong> ${booking.time}</p>
-                <p><strong>Services:</strong> ${booking.services.join(', ')}</p>
-                ${reason ? `<p><strong>Reason:</strong> ${reason}</p>` : ''}
-            </div>
-
-            ${booking.payment.status === 'paid' ? `
-            <div style="margin: 20px 0; padding: 15px; background-color: #fff3cd; border-left: 4px solid #ffc107;">
-                <h4 style="margin-top: 0;">Refund Information</h4>
-                <p>Your payment will be refunded within 5-7 business days.</p>
-            </div>
-            ` : ''}
-
-            <p>We hope to see you again in the future!</p>
-            <p>Warm regards,<br>${formattedClientName}</p>
-        </div>
-    `;
+    const emailContent = wrapTransactionalEmail(
+        'Booking cancelled',
+        `
+            <p style="margin:0 0 16px;">Hi ${escapeHtml(booking.customerName)},</p>
+            <p style="margin:0 0 16px;">Your booking has been cancelled.</p>
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 20px;">
+              <tr><td style="padding:16px 18px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;">
+                <p style="margin:0 0 8px;font-size:14px;font-weight:700;color:#991b1b;">Cancelled booking</p>
+                <p style="margin:0 0 8px;"><strong>Date:</strong> ${escapeHtml(formattedDate)}</p>
+                <p style="margin:0 0 8px;"><strong>Time:</strong> ${escapeHtml(booking.time)}</p>
+                <p style="margin:0 0 8px;"><strong>Services:</strong> ${escapeHtml(booking.services.join(', '))}</p>
+                ${reason ? `<p style="margin:0;"><strong>Reason:</strong> ${escapeHtml(reason)}</p>` : ''}
+              </td></tr>
+            </table>
+            ${booking.payment.status === 'paid' ? warnPanel({
+                title: 'Refund information',
+                html: '<p style="margin:0;">Your payment will be refunded within 5–7 business days.</p>',
+            }) : ''}
+            <p style="margin:0 0 16px;">We hope to see you again in the future!</p>
+            <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
+        `,
+        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+    );
 
     await sendWithRetry(
         () => createTransporter(bEmail, BEPass),
@@ -606,35 +636,37 @@ async function sendBookingCancellationEmail(booking, bEmail, BEPass, clientName,
 // -----------------------------
 // Booking Rescheduling Email
 // -----------------------------
-async function sendReschedulingEmail(booking, oldDetails, bEmail, BEPass, clientName, reason, emailSignature = '') {
+async function sendReschedulingEmail(booking, oldDetails, bEmail, BEPass, clientName, reason, emailSignature = '', emailLogoUrl = '') {
     const formattedClientName = getFormattedClientName(clientName);
     const newFormattedDate = formatBookingDate(booking.date);
     const oldFormattedDate = formatBookingDate(oldDetails.date);
 
-    const emailContent = `
-        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
-            <h2 style="text-align: center; color: #444;">Booking Rescheduled 🔄</h2>
-            <p>Hi ${booking.customerName},</p>
-            <p>Your booking has been successfully rescheduled.</p>
-
-            <div style="margin: 20px 0; padding: 15px; background-color: #fff3cd; border-left: 4px solid #ffc107;">
-                <h4 style="margin-top: 0;">Previous Booking</h4>
-                <p><strong>Date:</strong> ${oldFormattedDate}</p>
-                <p><strong>Time:</strong> ${oldDetails.time} - ${oldDetails.endTime}</p>
-                ${reason ? `<p><strong>Reason:</strong> ${reason}</p>` : ''}
-            </div>
-
-            <div style="margin: 20px 0; padding: 15px; background-color: #eef6fc; border-left: 4px solid #2196F3;">
-                <h3 style="margin-top: 0;">New Booking Details</h3>
-                <p><strong>Date:</strong> ${newFormattedDate}</p>
-                <p><strong>Time:</strong> ${booking.time} - ${booking.endTime}</p>
-                <p><strong>Services:</strong> ${booking.services.join(', ')}</p>
-            </div>
-
-            <p>We look forward to seeing you at your new scheduled time!</p>
-            <p>Warm regards,<br>${formattedClientName}</p>
-        </div>
-    `;
+    const emailContent = wrapTransactionalEmail(
+        'Booking rescheduled',
+        `
+            <p style="margin:0 0 16px;">Hi ${escapeHtml(booking.customerName)},</p>
+            <p style="margin:0 0 16px;">Your booking has been successfully rescheduled.</p>
+            ${warnPanel({
+                title: 'Previous booking',
+                html: `
+                    <p style="margin:0 0 8px;"><strong>Date:</strong> ${escapeHtml(oldFormattedDate)}</p>
+                    <p style="margin:0 0 8px;"><strong>Time:</strong> ${escapeHtml(oldDetails.time)} – ${escapeHtml(oldDetails.endTime)}</p>
+                    ${reason ? `<p style="margin:0;"><strong>Reason:</strong> ${escapeHtml(reason)}</p>` : ''}
+                `,
+            })}
+            ${infoPanel({
+                title: 'New booking details',
+                rows: [
+                    ['Date', escapeHtml(newFormattedDate)],
+                    ['Time', `${escapeHtml(booking.time)} – ${escapeHtml(booking.endTime)}`],
+                    ['Services', escapeHtml(booking.services.join(', '))],
+                ],
+            })}
+            <p style="margin:0 0 16px;">We look forward to seeing you at your new scheduled time!</p>
+            <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
+        `,
+        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+    );
 
     await sendWithRetry(
         () => createTransporter(bEmail, BEPass),
@@ -664,6 +696,7 @@ async function sendOrderConfirmationEmail(
     clientName,
     orderID,
     emailSignature = '',
+    emailLogoUrl = '',
     tenantClientId = null
 ) {
     const formattedClientName = getFormattedClientName(clientName);
@@ -702,50 +735,43 @@ async function sendOrderConfirmationEmail(
 
     const decryptedEmail = decrypt(bEmail); // Decrypt once for reuse
 
-    const emailContent = `
-        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
-            <h2 style="text-align: center; color: #444;">Thank You for Your Order!</h2>
-            <p>Hi there,</p>
-            <p>We're thrilled you've chosen to shop with us. Here's your order summary:</p>
-
-            <div style="margin: 20px 0; padding: 10px; background-color: #eef6fc; border-left: 4px solid #2196F3;">
-                <h4>Order ID</h4>
-                <p>${orderID}</p>
-            </div>
-
-            <div style="margin: 20px 0; padding: 10px; background-color: #f9f9f9; border-left: 4px solid #4CAF50;">
-                <h4>Delivery Address</h4>
-                <p><strong>Name:</strong> ${parentOrder.customer.customerFirstName} ${parentOrder.customer.customerLastName}</p>
-                <p><strong>Address:</strong> ${parentOrder.address}</p>
-                <p><strong>Postal Code:</strong> ${parentOrder.postalCode}</p>
-            </div>
-
-            <table style="width: 100%; border-collapse: collapse; margin-top: 20px;">
+    const emailContent = wrapTransactionalEmail(
+        'Thank you for your order!',
+        `
+            <p style="margin:0 0 16px;">Hi there,</p>
+            <p style="margin:0 0 16px;">We're thrilled you've chosen to shop with us. Here's your order summary:</p>
+            ${infoPanel({ title: 'Order ID', html: `<p style="margin:0;">${escapeHtml(orderID)}</p>` })}
+            ${neutralPanel({
+                title: 'Delivery address',
+                html: `
+                    <p style="margin:0 0 8px;"><strong>Name:</strong> ${escapeHtml(parentOrder.customer.customerFirstName)} ${escapeHtml(parentOrder.customer.customerLastName)}</p>
+                    <p style="margin:0 0 8px;"><strong>Address:</strong> ${escapeHtml(parentOrder.address)}</p>
+                    <p style="margin:0;"><strong>Postal code:</strong> ${escapeHtml(parentOrder.postalCode)}</p>
+                `,
+            })}
+            <table style="width:100%;border-collapse:collapse;margin:0 0 20px;font-size:14px;">
                 <thead>
-                    <tr style="background-color: #f5f5f5;">
-                        <th style="padding: 10px; border: 1px solid #ddd;"></th>
-                        <th style="padding: 10px; border: 1px solid #ddd;">Product</th>
-                        <th style="padding: 10px; border: 1px solid #ddd;">Qty</th>
-                        <th style="padding: 10px; border: 1px solid #ddd;">Price</th>
-                        <th style="padding: 10px; border: 1px solid #ddd;">Total</th>
+                    <tr style="background-color:#f5f5f5;">
+                        <th style="padding:10px;border:1px solid #ddd;"></th>
+                        <th style="padding:10px;border:1px solid #ddd;text-align:left;">Product</th>
+                        <th style="padding:10px;border:1px solid #ddd;text-align:left;">Qty</th>
+                        <th style="padding:10px;border:1px solid #ddd;text-align:left;">Price</th>
+                        <th style="padding:10px;border:1px solid #ddd;text-align:left;">Total</th>
                     </tr>
                 </thead>
                 <tbody>${orderItemsHtml}</tbody>
             </table>
-
-            <div style="margin-top: 20px;">
-                <p><strong>Subtotal:</strong> R${subtotal.toFixed(2)}</p>
-                <p><strong>Shipping:</strong> R${shipping.toFixed(2)}</p>
-                <p style="font-size: 18px;"><strong>Total Price:</strong> R${total.toFixed(2)}</p>
-            </div>
-
-            <p style="margin-top: 30px;">If you have any questions, feel free to reply to this email.</p>
-            <p>Warm regards,<br>${formattedClientName}</p>
-
-            <hr style="margin-top: 40px;">
-            <p style="font-size: 12px; color: #888;">This email is a confirmation of your recent purchase from ${formattedClientName.replace('The ', '').replace(' Team', '')}.</p>
-        </div>
-    `;
+            <p style="margin:0 0 8px;"><strong>Subtotal:</strong> R${subtotal.toFixed(2)}</p>
+            <p style="margin:0 0 8px;"><strong>Shipping:</strong> R${shipping.toFixed(2)}</p>
+            <p style="margin:0 0 20px;font-size:18px;"><strong>Total price:</strong> R${total.toFixed(2)}</p>
+            <p style="margin:0 0 16px;">If you have any questions, feel free to reply to this email.</p>
+            <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
+        `,
+        {
+            formattedClientName,
+            footerHtml: `This email confirms your recent purchase from ${escapeHtml(brandPlainName(formattedClientName))}.`,
+        }
+    );
 
     const parts = buildTransactionalMailParts(emailContent, '', emailSignature);
     const qOrder = qTenant(tenantClientId);
@@ -798,6 +824,7 @@ async function sendOrderStatusUpdateEmail(
     trackingID,
     trackingLink,
     emailSignature = '',
+    emailLogoUrl = '',
     tenantClientId = null
 ) {
     const formattedClientName = getFormattedClientName(clientName);
@@ -815,20 +842,18 @@ async function sendOrderStatusUpdateEmail(
     const viewOrderLink = `${websiteURL}/login`;
     const trackOrderLink = `${trackingLink || viewOrderLink}`;
 
-    const emailContent = `
-        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
-            <h2 style="text-align: center; color: #444;">Order Update: ${status.toUpperCase()}</h2>
-            <p>Hi ${customerName},</p>
-            <p>${message}</p>
-            <div style="margin: 20px 0; padding: 10px; background-color: #eef6fc; border-left: 4px solid #2196F3;">
-                <h4>Order ID</h4>
-                <p>${orderID}</p>
-            </div>
-            <p><a href="${viewOrderLink}" style="background-color: #2196F3; color: white; padding: 10px 15px; text-decoration: none; border-radius: 5px;">View My Order</a></p>
-            ${status === 'shipped' ? `<p><a href="${trackOrderLink}" style="background-color: #4CAF50; color: white; padding: 10px 15px; text-decoration: none; border-radius: 5px;">Track My Order</a></p>` : ''}
-            <p>Warm regards,<br>${formattedClientName}</p>
-        </div>
-    `;
+    const emailContent = wrapTransactionalEmail(
+        `Order update: ${status.toUpperCase()}`,
+        `
+            <p style="margin:0 0 16px;">Hi ${escapeHtml(customerName)},</p>
+            <p style="margin:0 0 16px;">${escapeHtml(message)}</p>
+            ${infoPanel({ title: 'Order ID', html: `<p style="margin:0;">${escapeHtml(orderID)}</p>` })}
+            ${ctaButton({ href: viewOrderLink, label: 'View my order' })}
+            ${status === 'shipped' ? ctaButton({ href: trackOrderLink, label: 'Track my order' }) : ''}
+            <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
+        `,
+        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+    );
 
     const parts = buildTransactionalMailParts(emailContent, '', emailSignature);
     const qOrder = qTenant(tenantClientId);
@@ -868,48 +893,46 @@ async function sendOrderStatusUpdateEmail(
 // -----------------------------
 // Accommodation Confirmation Email
 // -----------------------------
-async function sendAccommodationConfirmationEmail(booking, bEmail, BEPass, clientName, emailSignature = '') {
+async function sendAccommodationConfirmationEmail(booking, bEmail, BEPass, clientName, emailSignature = '', emailLogoUrl = '') {
     const formattedClientName = getFormattedClientName(clientName);
     const decryptedEmail = decrypt(bEmail);
     
     const checkInDate = formatBookingDate(booking.accommodation.checkIn);
     const checkOutDate = formatBookingDate(booking.accommodation.checkOut);
 
-    const emailContent = `
-        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
-            <h2 style="text-align: center; color: #444;">Accommodation Booking Confirmed! 🏨</h2>
-            <p>Hi ${booking.customerName},</p>
-            <p>Your accommodation booking has been confirmed. We look forward to hosting you!</p>
-
-            <div style="margin: 20px 0; padding: 15px; background-color: #eef6fc; border-left: 4px solid #2196F3;">
-                <h3 style="margin-top: 0;">Accommodation Details</h3>
-                <p><strong>Check-in:</strong> ${checkInDate} (from 14:00)</p>
-                <p><strong>Check-out:</strong> ${checkOutDate} (until 11:00)</p>
-                <p><strong>Duration:</strong> ${booking.accommodation.numberOfNights} night(s)</p>
-                <p><strong>Guests:</strong> ${booking.accommodation.numberOfGuests}</p>
-                <p><strong>Room Type:</strong> ${booking.accommodation.roomType}</p>
-                ${booking.accommodation.specialRequests ? `<p><strong>Special Requests:</strong> ${booking.accommodation.specialRequests}</p>` : ''}
-            </div>
-
-            <div style="margin: 20px 0; padding: 15px; background-color: #fff3cd; border-left: 4px solid #ffc107;">
-                <h4 style="margin-top: 0;">📍 Location & Arrival</h4>
-                <p>Please bring your ID/document for check-in.</p>
-                <p>Early check-in and late check-out are subject to availability.</p>
-            </div>
-
-            ${booking.payment.amount ? `
-            <div style="margin: 20px 0; padding: 15px; background-color: #d4edda; border-left: 4px solid #28a745;">
-                <h4 style="margin-top: 0;">💰 Payment Details</h4>
-                <p><strong>Total Amount:</strong> R${booking.payment.amount}</p>
-                ${booking.payment.depositAmount ? `<p><strong>Deposit Paid:</strong> R${booking.payment.depositAmount}</p>` : ''}
-                ${booking.payment.balanceDue ? `<p><strong>Balance Due:</strong> R${booking.payment.balanceDue} (before ${new Date(booking.payment.dueDate).toLocaleDateString()})</p>` : ''}
-            </div>
-            ` : ''}
-
-            <p style="margin-top: 30px;">If you have any questions about your stay, feel free to reply to this email.</p>
-            <p>Warm regards,<br>${formattedClientName}</p>
-        </div>
-    `;
+    const emailContent = wrapTransactionalEmail(
+        'Accommodation confirmed',
+        `
+            <p style="margin:0 0 16px;">Hi ${escapeHtml(booking.customerName)},</p>
+            <p style="margin:0 0 16px;">Your accommodation booking has been confirmed. We look forward to hosting you!</p>
+            ${infoPanel({
+                title: 'Accommodation details',
+                html: `
+                    <p style="margin:0 0 8px;"><strong>Check-in:</strong> ${escapeHtml(checkInDate)} (from 14:00)</p>
+                    <p style="margin:0 0 8px;"><strong>Check-out:</strong> ${escapeHtml(checkOutDate)} (until 11:00)</p>
+                    <p style="margin:0 0 8px;"><strong>Duration:</strong> ${escapeHtml(booking.accommodation.numberOfNights)} night(s)</p>
+                    <p style="margin:0 0 8px;"><strong>Guests:</strong> ${escapeHtml(booking.accommodation.numberOfGuests)}</p>
+                    <p style="margin:0 0 8px;"><strong>Room type:</strong> ${escapeHtml(booking.accommodation.roomType)}</p>
+                    ${booking.accommodation.specialRequests ? `<p style="margin:0;"><strong>Special requests:</strong> ${escapeHtml(booking.accommodation.specialRequests)}</p>` : ''}
+                `,
+            })}
+            ${warnPanel({
+                title: 'Location & arrival',
+                html: '<p style="margin:0 0 8px;">Please bring your ID/document for check-in.</p><p style="margin:0;">Early check-in and late check-out are subject to availability.</p>',
+            })}
+            ${booking.payment.amount ? neutralPanel({
+                title: 'Payment details',
+                html: `
+                    <p style="margin:0 0 8px;"><strong>Total amount:</strong> R${escapeHtml(booking.payment.amount)}</p>
+                    ${booking.payment.depositAmount ? `<p style="margin:0 0 8px;"><strong>Deposit paid:</strong> R${escapeHtml(booking.payment.depositAmount)}</p>` : ''}
+                    ${booking.payment.balanceDue ? `<p style="margin:0;"><strong>Balance due:</strong> R${escapeHtml(booking.payment.balanceDue)} (before ${escapeHtml(new Date(booking.payment.dueDate).toLocaleDateString())})</p>` : ''}
+                `,
+            }) : ''}
+            <p style="margin:0 0 16px;">If you have any questions about your stay, feel free to reply to this email.</p>
+            <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
+        `,
+        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+    );
 
     const parts = buildTransactionalMailParts(emailContent, '', emailSignature);
     const qm = qBooking(booking);
@@ -952,37 +975,39 @@ async function sendAccommodationConfirmationEmail(booking, bEmail, BEPass, clien
 // -----------------------------
 // Mixed Booking Confirmation Email
 // -----------------------------
-async function sendMixedBookingConfirmationEmail(booking, bEmail, BEPass, clientName, emailSignature = '') {
+async function sendMixedBookingConfirmationEmail(booking, bEmail, BEPass, clientName, emailSignature = '', emailLogoUrl = '') {
     const formattedClientName = getFormattedClientName(clientName);
     const decryptedEmail = decrypt(bEmail);
     
     const serviceDate = formatBookingDate(booking.date);
     const checkInDate = formatBookingDate(booking.accommodation.checkIn);
 
-    const emailContent = `
-        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
-            <h2 style="text-align: center; color: #444;">Booking Confirmed! 🎉🏨</h2>
-            <p>Hi ${booking.customerName},</p>
-            <p>Your combined service and accommodation booking has been confirmed!</p>
-
-            <div style="margin: 20px 0; padding: 15px; background-color: #eef6fc; border-left: 4px solid #2196F3;">
-                <h3 style="margin-top: 0;">Service Details</h3>
-                <p><strong>Date:</strong> ${serviceDate}</p>
-                <p><strong>Time:</strong> ${booking.time} - ${booking.endTime}</p>
-                <p><strong>Services:</strong> ${booking.services.join(', ')}</p>
-            </div>
-
-            <div style="margin: 20px 0; padding: 15px; background-color: #e8f5e8; border-left: 4px solid #4CAF50;">
-                <h3 style="margin-top: 0;">Accommodation Details</h3>
-                <p><strong>Check-in:</strong> ${checkInDate}</p>
-                <p><strong>Duration:</strong> ${booking.accommodation.numberOfNights} night(s)</p>
-                <p><strong>Room Type:</strong> ${booking.accommodation.roomType}</p>
-            </div>
-
-            <p style="margin-top: 30px;">We look forward to serving you and providing a comfortable stay!</p>
-            <p>Warm regards,<br>${formattedClientName}</p>
-        </div>
-    `;
+    const emailContent = wrapTransactionalEmail(
+        'Booking confirmed',
+        `
+            <p style="margin:0 0 16px;">Hi ${escapeHtml(booking.customerName)},</p>
+            <p style="margin:0 0 16px;">Your combined service and accommodation booking has been confirmed!</p>
+            ${infoPanel({
+                title: 'Service details',
+                rows: [
+                    ['Date', escapeHtml(serviceDate)],
+                    ['Time', `${escapeHtml(booking.time)} – ${escapeHtml(booking.endTime)}`],
+                    ['Services', escapeHtml(booking.services.join(', '))],
+                ],
+            })}
+            ${neutralPanel({
+                title: 'Accommodation details',
+                html: `
+                    <p style="margin:0 0 8px;"><strong>Check-in:</strong> ${escapeHtml(checkInDate)}</p>
+                    <p style="margin:0 0 8px;"><strong>Duration:</strong> ${escapeHtml(booking.accommodation.numberOfNights)} night(s)</p>
+                    <p style="margin:0;"><strong>Room type:</strong> ${escapeHtml(booking.accommodation.roomType)}</p>
+                `,
+            })}
+            <p style="margin:0 0 16px;">We look forward to serving you and providing a comfortable stay!</p>
+            <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
+        `,
+        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+    );
 
     await sendWithRetry(
         () => createTransporter(bEmail, BEPass),
@@ -1012,26 +1037,24 @@ async function sendResetPasswordEmail(
     BEPass,
     clientName,
     emailSignature = '',
+    emailLogoUrl = '',
     tenantClientId = null
 ) {
     const formattedClientName = getFormattedClientName(clientName);
     const decryptedEmail = decrypt(bEmail);
     const qm = qTenant(tenantClientId);
 
-    const emailContent = `
-        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
-            <h2 style="text-align: center; color: #444;">Reset Your Password</h2>
-            <p>Hi ${customerName},</p>
-            <p>We received a request to reset your password for your account at <strong>${websiteURL}</strong>.</p>
-            <div style="text-align: center; margin: 30px 0;">
-              <a href="${resetLink}" style="background-color: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px;">
-                Reset My Password
-              </a>
-            </div>
-            <p>This link will expire shortly. If you did not request this, please ignore this email.</p>
-            <p>Warm regards,<br>${formattedClientName}</p>
-        </div>
-    `;
+    const emailContent = wrapTransactionalEmail(
+        'Reset your password',
+        `
+            <p style="margin:0 0 16px;">Hi ${escapeHtml(customerName)},</p>
+            <p style="margin:0 0 16px;">We received a request to reset your password for your account at <strong>${escapeHtml(websiteURL)}</strong>.</p>
+            ${ctaButton({ href: resetLink, label: 'Reset my password' })}
+            <p style="margin:0 0 16px;">This link will expire shortly. If you did not request this, please ignore this email.</p>
+            <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
+        `,
+        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+    );
 
     await sendWithRetry(
         () => createTransporter(bEmail, BEPass),
@@ -1067,22 +1090,23 @@ async function sendTeamDashboardResetEmail({
   const decryptedFrom = decrypt(adminBusinessEmail);
   const qm = qTenant(adminClientId);
 
-  const emailContent = `
-        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
-            <h2 style="text-align: center; color: #444;">Reset your dashboard password</h2>
-            <p>Hi ${memberName || memberEmail},</p>
-            <p>We received a request to reset the password for your <strong>${companyName}</strong> dashboard account.</p>
-            <p><strong>Client ID:</strong> ${clientID}</p>
-            <p><strong>Login email:</strong> ${memberEmail}</p>
-            <div style="text-align: center; margin: 30px 0;">
-              <a href="${resetLink}" style="background-color: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px;">
-                Reset my password
-              </a>
-            </div>
-            <p>This link expires in 1 hour. If you did not request this, please ignore this email.</p>
-            <p>Warm regards,<br>${formattedClientName}</p>
-        </div>
-    `;
+  const emailContent = wrapTransactionalEmail(
+    'Reset your dashboard password',
+    `
+            <p style="margin:0 0 16px;">Hi ${escapeHtml(memberName || memberEmail)},</p>
+            <p style="margin:0 0 16px;">We received a request to reset the password for your <strong>${escapeHtml(companyName)}</strong> dashboard account.</p>
+            ${neutralPanel({
+              html: `
+                <p style="margin:0 0 8px;"><strong>Client ID:</strong> ${escapeHtml(clientID)}</p>
+                <p style="margin:0;"><strong>Login email:</strong> ${escapeHtml(memberEmail)}</p>
+              `,
+            })}
+            ${ctaButton({ href: resetLink, label: 'Reset my password' })}
+            <p style="margin:0 0 16px;">This link expires in 1 hour. If you did not request this, please ignore this email.</p>
+            <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
+        `,
+    { formattedClientName, showKhanaLogo: true }
+  );
 
   const result = await sendWithRetry(
     () => createTransporter(adminBusinessEmail, adminBusinessEmailPassword),
@@ -1127,23 +1151,24 @@ async function sendTeamDashboardInviteEmail({
   const decryptedFrom = decrypt(adminBusinessEmail);
   const qm = qTenant(adminClientId);
 
-  const emailContent = `
-        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
-            <h2 style="text-align: center; color: #444;">You're invited to the dashboard</h2>
-            <p>Hi ${memberName || memberEmail},</p>
-            <p><strong>${companyName}</strong> has invited you to access their Khana dashboard.</p>
-            <p><strong>Client ID:</strong> ${clientID}</p>
-            <p><strong>Your login email:</strong> ${memberEmail}</p>
-            <p>Click below to choose your password and activate your account.</p>
-            <div style="text-align: center; margin: 30px 0;">
-              <a href="${inviteLink}" style="background-color: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px;">
-                Accept invite
-              </a>
-            </div>
-            <p>This link expires in 7 days. After activating, sign in with Client ID, your email, and the password you choose.</p>
-            <p>Warm regards,<br>${formattedClientName}</p>
-        </div>
-    `;
+  const emailContent = wrapTransactionalEmail(
+    "You're invited to the dashboard",
+    `
+            <p style="margin:0 0 16px;">Hi ${escapeHtml(memberName || memberEmail)},</p>
+            <p style="margin:0 0 16px;"><strong>${escapeHtml(companyName)}</strong> has invited you to access their Khana dashboard.</p>
+            ${neutralPanel({
+              html: `
+                <p style="margin:0 0 8px;"><strong>Client ID:</strong> ${escapeHtml(clientID)}</p>
+                <p style="margin:0;"><strong>Your login email:</strong> ${escapeHtml(memberEmail)}</p>
+              `,
+            })}
+            <p style="margin:0 0 16px;">Click below to choose your password and activate your account.</p>
+            ${ctaButton({ href: inviteLink, label: 'Accept invite' })}
+            <p style="margin:0 0 16px;">This link expires in 7 days. After activating, sign in with Client ID, your email, and the password you choose.</p>
+            <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
+        `,
+    { formattedClientName, showKhanaLogo: true }
+  );
 
   const result = await sendWithRetry(
     () => createTransporter(adminBusinessEmail, adminBusinessEmailPassword),
@@ -1190,21 +1215,18 @@ async function sendTeamActivityNotifyEmail({
   const decryptedFrom = decrypt(adminBusinessEmail);
   const qm = qTenant(adminClientId);
 
-  const emailContent = `
-        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
-            <h2 style="text-align: center; color: #444;">Dashboard activity</h2>
-            <p>Hi ${ownerName || ownerEmail},</p>
-            <p><strong>${categoryLabel}</strong> — ${summary}</p>
-            <p><strong>Organization:</strong> ${companyName} (Client ID: ${clientID})</p>
-            <div style="text-align: center; margin: 30px 0;">
-              <a href="${activityUrl}" style="background-color: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px;">
-                View activity log
-              </a>
-            </div>
-            <p>You receive this because you enabled email alerts for this category in Activity settings.</p>
-            <p>Warm regards,<br>${formattedClientName}</p>
-        </div>
-    `;
+  const emailContent = wrapTransactionalEmail(
+    'Dashboard activity',
+    `
+            <p style="margin:0 0 16px;">Hi ${escapeHtml(ownerName || ownerEmail)},</p>
+            <p style="margin:0 0 16px;"><strong>${escapeHtml(categoryLabel)}</strong> — ${escapeHtml(summary)}</p>
+            <p style="margin:0 0 16px;"><strong>Organization:</strong> ${escapeHtml(companyName)} (Client ID: ${escapeHtml(clientID)})</p>
+            ${ctaButton({ href: activityUrl, label: 'View activity log' })}
+            <p style="margin:0 0 16px;">You receive this because you enabled email alerts for this category in Activity settings.</p>
+            <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
+        `,
+    { formattedClientName, showKhanaLogo: true }
+  );
 
   const result = await sendWithRetry(
     () => createTransporter(adminBusinessEmail, adminBusinessEmailPassword),
@@ -1233,63 +1255,66 @@ async function sendTeamActivityNotifyEmail({
 // -----------------------------
 // Contact Us Email
 // -----------------------------
-async function sendContactUsEmail(contactData, bEmail, BEPass, clientName, emailSignature = '', tenantClientId = null) {
+async function sendContactUsEmail(contactData, bEmail, BEPass, clientName, emailSignature = '', tenantClientId = null, emailLogoUrl = '') {
     const { name, email, phone, subject, message } = contactData;
     const formattedClientName = getFormattedClientName(clientName);
     const decryptedEmail = decrypt(bEmail);
     const qm = qTenant(tenantClientId);
 
-    // Email to the business/website owner
-    const businessEmailContent = `
-        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
-            <h2 style="text-align: center; color: #444;">New Contact Form Submission</h2>
-            <p>You have received a new message from your website contact form.</p>
+    const safeName = escapeHtml(name);
+    const safeEmail = escapeHtml(email);
+    const safePhone = escapeHtml(phone || 'Not provided');
+    const safeSubject = escapeHtml(subject);
+    const safeMessage = escapeHtml(message);
 
-            <div style="margin: 20px 0; padding: 15px; background-color: #eef6fc; border-left: 4px solid #2196F3;">
-                <h3 style="margin-top: 0;">Contact Details</h3>
-                <p><strong>Name:</strong> ${name}</p>
-                <p><strong>Email:</strong> <a href="mailto:${email}">${email}</a></p>
-                <p><strong>Phone:</strong> ${phone || 'Not provided'}</p>
-                <p><strong>Subject:</strong> ${subject}</p>
-            </div>
+    const businessEmailContent = wrapTransactionalEmail(
+        'New contact form submission',
+        `
+            <p style="margin:0 0 16px;">You have received a new message from your website contact form.</p>
+            ${infoPanel({
+                title: 'Contact details',
+                rows: [
+                    ['Name', safeName],
+                    ['Email', `<a href="mailto:${safeEmail}" style="color:#2563eb;text-decoration:none;">${safeEmail}</a>`],
+                    ['Phone', safePhone],
+                    ['Subject', safeSubject],
+                ],
+            })}
+            ${neutralPanel({
+                title: 'Message',
+                html: `<p style="margin:0;white-space:pre-line;">${safeMessage}</p>`,
+            })}
+            <p style="margin:0 0 16px;">Please respond to this inquiry as soon as possible.</p>
+            <p style="margin:0;">Warm regards,<br>Your Website System</p>
+        `,
+        {
+            formattedClientName,
+            footerHtml: 'Automated notification from your website contact form.',
+        }
+    );
 
-            <div style="margin: 20px 0; padding: 15px; background-color: #f9f9f9; border-left: 4px solid #4CAF50;">
-                <h3 style="margin-top: 0;">Message</h3>
-                <p style="white-space: pre-line;">${message}</p>
-            </div>
-
-            <p style="margin-top: 30px;">Please respond to this inquiry as soon as possible.</p>
-            <p>Warm regards,<br>Your Website System</p>
-            
-            <hr style="margin-top: 40px;">
-            <p style="font-size: 12px; color: #888;">This is an automated notification from your website contact form.</p>
-        </div>
-    `;
-
-    // Auto-reply email to the person who submitted the form
-    const autoReplyContent = `
-        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
-            <h2 style="text-align: center; color: #444;">Thank You for Contacting Us</h2>
-            <p>Hi ${name},</p>
-            <p>Thank you for reaching out to us. We have received your message and will get back to you as soon as possible.</p>
-
-            <div style="margin: 20px 0; padding: 15px; background-color: #eef6fc; border-left: 4px solid #2196F3;">
-                <h3 style="margin-top: 0;">Your Message Summary</h3>
-                <p><strong>Subject:</strong> ${subject}</p>
-                <p><strong>Message:</strong></p>
-                <p style="white-space: pre-line; background-color: #f5f5f5; padding: 10px; border-radius: 5px;">${message}</p>
-            </div>
-
-            <div style="margin: 20px 0; padding: 15px; background-color: #fff3cd; border-left: 4px solid #ffc107;">
-                <h4 style="margin-top: 0;">⏰ Response Time</h4>
-                <p>We typically respond within 24-48 hours during business days.</p>
-                <p>If your matter is urgent, please call us directly.</p>
-            </div>
-
-            <p>We appreciate your interest in our services!</p>
-            <p>Warm regards,<br>${formattedClientName}</p>
-        </div>
-    `;
+    const autoReplyContent = wrapTransactionalEmail(
+        'Thank you for contacting us',
+        `
+            <p style="margin:0 0 16px;">Hi ${safeName},</p>
+            <p style="margin:0 0 16px;">Thank you for reaching out to us. We have received your message and will get back to you as soon as possible.</p>
+            ${infoPanel({
+                title: 'Your message summary',
+                html: `
+                    <p style="margin:0 0 8px;"><strong>Subject:</strong> ${safeSubject}</p>
+                    <p style="margin:0 0 8px;"><strong>Message:</strong></p>
+                    <p style="margin:0;white-space:pre-line;padding:12px;background:#f5f5f5;border-radius:6px;">${safeMessage}</p>
+                `,
+            })}
+            ${warnPanel({
+                title: 'Response time',
+                html: '<p style="margin:0 0 8px;">We typically respond within 24–48 hours during business days.</p><p style="margin:0;">If your matter is urgent, please call us directly.</p>',
+            })}
+            <p style="margin:0 0 16px;">We appreciate your interest in our services!</p>
+            <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
+        `,
+        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+    );
 
     const businessBody = mimeFrom(businessEmailContent, '', emailSignature);
     const autoReplyBody = mimeFrom(autoReplyContent, '', emailSignature);
@@ -1393,17 +1418,19 @@ async function sendPlanQuoteEmails({
 // -----------------------------
 // Accommodation check-in / check-out reminders (cron / reminder service)
 // -----------------------------
-async function sendCheckInReminderEmail(booking, bEmail, BEPass, clientName, emailSignature = '') {
+async function sendCheckInReminderEmail(booking, bEmail, BEPass, clientName, emailSignature = '', emailLogoUrl = '') {
     const formattedClientName = getFormattedClientName(clientName);
     const checkInDate = formatBookingDate(booking.accommodation?.checkIn || booking.date);
-    const html = `
-        <div style="font-family: Arial, Helvetica, sans-serif; color: #111827; max-width: 600px; margin: auto;">
-            <h2 style="color: #1f2937;">Check-in reminder</h2>
-            <p>Hi ${escapeHtml(booking.customerName)},</p>
-            <p>This is a reminder that your check-in is on <strong>${escapeHtml(checkInDate)}</strong>.</p>
-            <p>If you have questions, reply to this email.</p>
-            <p>Warm regards,<br>${formattedClientName}</p>
-        </div>`;
+    const html = wrapTransactionalEmail(
+        'Check-in reminder',
+        `
+            <p style="margin:0 0 16px;">Hi ${escapeHtml(booking.customerName)},</p>
+            <p style="margin:0 0 16px;">This is a reminder that your check-in is on <strong>${escapeHtml(checkInDate)}</strong>.</p>
+            <p style="margin:0 0 16px;">If you have questions, reply to this email.</p>
+            <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
+        `,
+        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+    );
     await sendWithRetry(
         () => createTransporter(bEmail, BEPass),
         {
@@ -1418,17 +1445,19 @@ async function sendCheckInReminderEmail(booking, bEmail, BEPass, clientName, ema
     );
 }
 
-async function sendCheckOutReminderEmail(booking, bEmail, BEPass, clientName, emailSignature = '') {
+async function sendCheckOutReminderEmail(booking, bEmail, BEPass, clientName, emailSignature = '', emailLogoUrl = '') {
     const formattedClientName = getFormattedClientName(clientName);
     const checkOutDate = formatBookingDate(booking.accommodation?.checkOut || booking.date);
-    const html = `
-        <div style="font-family: Arial, Helvetica, sans-serif; color: #111827; max-width: 600px; margin: auto;">
-            <h2 style="color: #1f2937;">Check-out reminder</h2>
-            <p>Hi ${escapeHtml(booking.customerName)},</p>
-            <p>This is a reminder that your check-out is on <strong>${escapeHtml(checkOutDate)}</strong>.</p>
-            <p>We hope you enjoy your stay. Reply to this email if you need anything.</p>
-            <p>Warm regards,<br>${formattedClientName}</p>
-        </div>`;
+    const html = wrapTransactionalEmail(
+        'Check-out reminder',
+        `
+            <p style="margin:0 0 16px;">Hi ${escapeHtml(booking.customerName)},</p>
+            <p style="margin:0 0 16px;">This is a reminder that your check-out is on <strong>${escapeHtml(checkOutDate)}</strong>.</p>
+            <p style="margin:0 0 16px;">We hope you enjoy your stay. Reply to this email if you need anything.</p>
+            <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
+        `,
+        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+    );
     await sendWithRetry(
         () => createTransporter(bEmail, BEPass),
         {

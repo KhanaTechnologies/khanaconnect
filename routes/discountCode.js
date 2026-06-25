@@ -12,6 +12,7 @@ const WishList = require('../models/wishList');
 const NewsletterService = require('../helpers/newsletterService');
 const { buildPromoNewsletterBuilderPayload } = require('../helpers/promoNewsletterBuilder');
 const { escapeHtml } = require('../helpers/signatureHtml');
+const { buildKhanaEmail, ctaButton, neutralPanel } = require('../helpers/transactionalEmailLayout');
 const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../helpers/mailHost');
 const { sendMail } = require('../helpers/mailer');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
@@ -107,32 +108,28 @@ async function sendWishlistCheckoutCodeAlerts({
     const firstName = escapeHtml(String(customer.customerFirstName || 'there'));
     const company = escapeHtml(String(clientDoc.companyName || 'Our store'));
     const websiteUrl = clientDoc.return_url ? String(clientDoc.return_url).replace(/\/$/, '') : '';
-    const html = `
-      <div style="font-family: Arial, Helvetica, sans-serif; max-width: 640px; margin: 0 auto; color: #111827; background: #ffffff;">
-        <div style="background: linear-gradient(135deg, #111827, #374151); color: #fff; padding: 24px; border-radius: 12px 12px 0 0;">
-          <h2 style="margin: 0; font-size: 24px;">${company}</h2>
-          <p style="margin: 8px 0 0; opacity: 0.95;">Wish list match found</p>
-        </div>
-        <div style="padding: 22px; border: 1px solid #e5e7eb; border-top: 0; border-radius: 0 0 12px 12px;">
-          <p style="margin-top: 0;">Hi ${firstName},</p>
-          <p>Good news - a new discount code now applies to item(s) on your wish list:</p>
-          <ul style="list-style: none; padding: 0; margin: 14px 0 16px;">${listItemsHtml}</ul>
-          <div style="margin: 16px 0; padding: 14px; background: #f3f4f6; border-radius: 10px; border: 1px solid #e5e7eb;">
-            <p style="margin: 6px 0;"><strong>Code:</strong> ${escapeHtml(String(code))}</p>
-            <p style="margin: 6px 0;"><strong>Discount:</strong> ${escapeHtml(String(discount))}% off</p>
-          </div>
-          ${
-            websiteUrl
-              ? `<p style="margin: 22px 0 10px;">
-                  <a href="${escapeHtml(
-                    websiteUrl
-                  )}" style="display: inline-block; background: #111827; color: #fff; text-decoration: none; padding: 12px 18px; border-radius: 8px; font-weight: 600;">Visit website</a>
-                </p>`
-              : ''
-          }
-          <p style="font-size: 12px; color: #6b7280; margin-bottom: 0;">You are receiving this because sale alerts are enabled for your wish list items.</p>
-        </div>
-      </div>`;
+    const bodyHtml = `
+          <p style="margin:0 0 16px;">Hi ${firstName},</p>
+          <p style="margin:0 0 16px;">Good news — a new discount code now applies to item(s) on your wish list:</p>
+          <ul style="list-style:none;padding:0;margin:0 0 20px;">${listItemsHtml}</ul>
+          ${neutralPanel({
+            html: `
+              <p style="margin:0 0 8px;"><strong>Code:</strong> ${escapeHtml(String(code))}</p>
+              <p style="margin:0;"><strong>Discount:</strong> ${escapeHtml(String(discount))}% off</p>
+            `,
+          })}
+          ${websiteUrl ? ctaButton({ href: websiteUrl, label: 'Visit website' }) : ''}
+    `;
+    const html = buildKhanaEmail({
+      headline: 'Wish list match found',
+      title: `Wish list match — ${company}`,
+      preheader: `Code ${code} (${discount}% off) applies to your wish list.`,
+      bodyHtml,
+      brandName: String(clientDoc.companyName || 'Our store'),
+      logoUrl: (clientDoc.emailLogoUrl || '').trim() || undefined,
+      showKhanaLogo: false,
+      footerHtml: 'You receive this because sale alerts are enabled for your wish list items.',
+    });
     const text = `Hi ${customer.customerFirstName || 'there'},
 
 A new discount code matches item(s) in your wish list.

@@ -209,6 +209,7 @@ router.post('/', authenticateToken, [
                 req.clientId,
                 order._id,
                 client.emailSignature || '',
+                client.emailLogoUrl || '',
                 req.clientId
             );
         } catch (emailError) {
@@ -266,6 +267,7 @@ router.put('/:id', authenticateToken, wrapRoute(async (req, res) => {
                 setStatus === 'shipped' ? order._id : 'nothing',
                 setStatus === 'shipped' ? order.orderTrackingLink : 'nothing',
                 client.emailSignature || '',
+                client.emailLogoUrl || '',
                 req.clientId
             );
         } catch (emailError) {

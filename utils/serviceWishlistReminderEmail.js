@@ -2,6 +2,10 @@ const { sendMail } = require('../helpers/mailer');
 const { decrypt } = require('../helpers/encryption');
 const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../helpers/mailHost');
 const { mergeEmailSignature, escapeHtml } = require('../helpers/signatureHtml');
+const {
+  buildKhanaEmail,
+  ctaButton,
+} = require('../helpers/transactionalEmailLayout');
 
 /**
  * One email per customer listing all service wishlist rows due this month.
@@ -50,17 +54,24 @@ async function sendServiceWishlistMonthlyReminder(customer, client, rows, period
     ? String(client.return_url).replace(/\/$/, '') + '/bookings'
     : '#';
 
-  const innerHtml = `
-    <div style="font-family: Arial, Helvetica, sans-serif; max-width: 600px; margin: 0 auto; color: #111827;">
-      <h2 style="color: #1f2937;">Hi ${firstName},</h2>
-      <p>You asked us to remind you in <strong>${escapeHtml(label)}</strong> about these services on your wish list:</p>
-      <ul style="padding-left: 20px; margin: 16px 0;">${lines}</ul>
-      <p style="margin: 20px 0;">When you are ready, you can book or browse services on our site.</p>
-      <div style="text-align: center; margin: 28px 0;">
-        <a href="${escapeHtml(bookingUrl)}" style="background-color: #111827; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">View / book services</a>
-      </div>
-      <p style="color: #6b7280; font-size: 12px;">This is an automated reminder from ${escapeHtml(String(client.companyName || 'us'))}.</p>
-    </div>`;
+  const bodyHtml = `
+      <p style="margin:0 0 16px;">Hi ${firstName},</p>
+      <p style="margin:0 0 16px;">You asked us to remind you in <strong>${escapeHtml(label)}</strong> about these services on your wish list:</p>
+      <ul style="padding-left:20px;margin:0 0 20px;">${lines}</ul>
+      <p style="margin:0 0 16px;">When you are ready, you can book or browse services on our site.</p>
+      ${ctaButton({ href: bookingUrl, label: 'View / book services' })}
+  `;
+
+  const innerHtml = buildKhanaEmail({
+    headline: 'Your service wish list',
+    title: `Service wish list — ${label}`,
+    preheader: `Reminder for services on your wish list in ${label}.`,
+    bodyHtml,
+    brandName: String(client.companyName || 'us'),
+    logoUrl: (client.emailLogoUrl || '').trim() || undefined,
+    showKhanaLogo: false,
+    footerHtml: `Automated reminder from ${escapeHtml(String(client.companyName || 'us'))}.`,
+  });
 
   const merged = mergeEmailSignature(innerHtml, '', client.emailSignature || '');
   const text = `Hi ${customer.customerFirstName || 'there'},

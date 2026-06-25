@@ -25,6 +25,8 @@ const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const { createDashboardAuth } = require('../helpers/dashboardAuth');
 const { recordTeamActivityFromRequest } = require('../helpers/teamActivity');
 const { uploadSignatureImage } = require('../helpers/signatureImageUpload');
+const { uploadEmailLogoImage } = require('../helpers/emailLogoUpload');
+const { buildKhanaEmail } = require('../helpers/transactionalEmailLayout');
 const newsletterBuilderRouter = require('./newsletterBuilder');
 const { validateNewsletterHtml } = require('../helpers/newsletterBuilder');
 const { isKnownTemplateId } = require('../helpers/newsletterTemplates');
@@ -259,6 +261,16 @@ const signatureUpload = multer({
   },
 });
 
+const emailLogoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ok = /\.(png|jpg|jpeg|gif|webp|svg)$/i.test(file.originalname) ||
+      ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml'].includes(file.mimetype);
+    cb(ok ? null : new Error('Only PNG, JPG, GIF, WebP, or SVG images allowed'), ok);
+  },
+});
+
 // --- JWT Middleware ---
 const dashboardEmailAuth = createDashboardAuth('sales');
 
@@ -276,6 +288,7 @@ async function validateClient(req, res, next) {
                 businessEmail: client.businessEmail,
                 businessEmailPassword: client.businessEmailPassword,
                 emailSignature: client.emailSignature || '',
+                emailLogoUrl: client.emailLogoUrl || '',
                 imapHost: client.imapHost,
                 imapPort: client.imapPort,
                 smtpHost: client.smtpHost,
@@ -2203,6 +2216,105 @@ router.get('/subscribers/export', validateClient, wrapRoute(async (req, res) => 
 }));
 
 /**
+ * GET /branding — current transactional email logo for this client
+ */
+router.get('/branding', validateClient, wrapRoute(async (req, res) => {
+    const doc = await Client.findOne({ clientID: req.client.clientID }).select('emailLogoUrl companyName');
+    res.json({
+        ok: true,
+        emailLogoUrl: (doc?.emailLogoUrl || '').trim(),
+        companyName: doc?.companyName || req.client.companyName || '',
+    });
+}));
+
+/**
+ * POST /branding/preview — HTML preview of transactional email banner + sample body
+ */
+router.post('/branding/preview', validateClient, wrapRoute(async (req, res) => {
+    const headline = String(req.body?.headline || 'Booking confirmed!').trim().slice(0, 120);
+    const logoUrl = String(req.body?.logoUrl ?? req.client.emailLogoUrl ?? '').trim();
+    const companyName = req.client.companyName || 'Your business';
+
+    const bodyHtml = `
+      <p style="margin:0 0 16px;">Hi Alex,</p>
+      <p style="margin:0 0 16px;">This is a sample of how your automated emails will look to customers.</p>
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 20px;">
+        <tr>
+          <td style="padding:16px 18px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;font-size:14px;line-height:22px;color:#404d57;">
+            <strong style="display:block;margin-bottom:8px;color:#111827;">Sample details</strong>
+            Date: Tomorrow · 10:00 AM<br />
+            Service: Consultation
+          </td>
+        </tr>
+      </table>
+      <p style="margin:0;">Warm regards,<br><strong>${String(companyName).replace(/</g, '')}</strong></p>
+    `;
+
+    const html = buildKhanaEmail({
+        headline,
+        title: `Email preview — ${companyName}`,
+        preheader: `Preview of your ${companyName} transactional email.`,
+        bodyHtml,
+        brandName: companyName,
+        logoUrl: logoUrl || undefined,
+        showKhanaLogo: false,
+        footerHtml: `Automated email from ${companyName}.`,
+    });
+
+    res.json({ ok: true, html, emailLogoUrl: logoUrl });
+}));
+
+/**
+ * POST /branding/logo — multipart field `logo`. Saves public URL on Client.emailLogoUrl
+ */
+router.post(
+    '/branding/logo',
+    validateClient,
+    emailLogoUpload.single('logo'),
+    wrapRoute(async (req, res) => {
+        if (!req.file) {
+            return res.status(400).json({
+                ok: false,
+                message: 'Missing file field "logo" (multipart/form-data, max 2MB)',
+            });
+        }
+
+        const uploaded = await uploadEmailLogoImage(
+            req.file.buffer,
+            req.file.originalname,
+            req.client.clientID,
+            req,
+            req.file.mimetype
+        );
+
+        await Client.updateOne(
+            { clientID: req.client.clientID },
+            { $set: { emailLogoUrl: uploaded.url } }
+        );
+
+        res.json({
+            ok: true,
+            message: 'Email logo saved. It will appear in your automated customer emails.',
+            emailLogoUrl: uploaded.url,
+            logoUrl: uploaded.url,
+            storage: uploaded.storage,
+        });
+    })
+);
+
+/**
+ * DELETE /branding/logo — remove custom logo (banner falls back to company name text)
+ */
+router.delete('/branding/logo', validateClient, wrapRoute(async (req, res) => {
+    await Client.updateOne({ clientID: req.client.clientID }, { $set: { emailLogoUrl: '' } });
+    res.json({
+        ok: true,
+        message: 'Email logo removed. Automated emails will show your company name in the banner.',
+        emailLogoUrl: '',
+    });
+}));
+
+/**
  * POST /signature/image — multipart field `signature` (image). Saves HTML on Client.emailSignature
  * with a public `<img src>` URL for previews; outbound mail inlines the file from disk as a `cid:` attachment so Gmail always shows it (no fetch to localhost/private URLs).
  * Query: mode=append to keep existing HTML and add the image below it.
@@ -2375,7 +2487,8 @@ router.post('/contact', validateClient, wrapRoute(async (req, res) => {
             req.client.businessEmailPassword,
             req.client.companyName,
             req.client.emailSignature || '',
-            req.client.clientID
+            req.client.clientID,
+            req.client.emailLogoUrl || ''
         );
 
         // Return success response

@@ -210,6 +210,10 @@ app.use("/public/uploads", express.static(path.join(__dirname, "public/uploads")
   }
 }));
 
+app.use("/public/email", express.static(path.join(__dirname, "public/email"), {
+  setHeaders: setPublicUploadHeaders,
+}));
+
 // Legacy local campaign paths + GitHub-backed assets under /public/uploads
 app.use("/uploads", express.static(path.join(__dirname, "uploads"), {
   setHeaders: setPublicUploadHeaders,

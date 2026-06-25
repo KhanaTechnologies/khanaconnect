@@ -1,13 +1,9 @@
-const QUOTE_VALIDITY_DAYS = 30;
+const {
+  escapeHtml,
+  buildKhanaEmail,
+} = require('./transactionalEmailLayout');
 
-function escapeHtml(s) {
-  if (s == null) return '';
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
+const QUOTE_VALIDITY_DAYS = 30;
 
 function formatZar(amount) {
   if (amount == null || Number.isNaN(Number(amount))) return 'On enquiry';
@@ -42,47 +38,8 @@ function yesNo(value) {
   return value ? 'Yes' : 'No';
 }
 
-function emailShell({ title, preheader, bodyHtml }) {
-  return `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${escapeHtml(title)}</title>
-</head>
-<body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#111827;">
-  <span style="display:none;max-height:0;overflow:hidden;">${escapeHtml(preheader)}</span>
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f3f4f6;padding:32px 16px;">
-    <tr>
-      <td align="center">
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 4px 24px rgba(15,23,42,0.08);">
-          <tr>
-            <td style="background:linear-gradient(135deg,#0f172a 0%,#1e3a5f 55%,#2563eb 100%);padding:28px 32px;">
-              <p style="margin:0 0 6px;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.72);">Khana Technologies</p>
-              <h1 style="margin:0;font-size:24px;line-height:1.3;color:#ffffff;font-weight:700;">${escapeHtml(title)}</h1>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:32px;">
-              ${bodyHtml}
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:20px 32px 28px;border-top:1px solid #e5e7eb;background:#f9fafb;">
-              <p style="margin:0;font-size:12px;line-height:1.6;color:#6b7280;text-align:center;">
-                Khana Technologies · Partnership enquiries<br />
-                <a href="https://khanatechnologies.co.za" style="color:#2563eb;text-decoration:none;">khanatechnologies.co.za</a>
-              </p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>`;
-}
+const PLAN_QUOTE_FOOTER =
+  'Khana Technologies · Partnership enquiries · <a href="https://khanatechnologies.co.za" style="color:#2563eb;text-decoration:none;">khanatechnologies.co.za</a>';
 
 function buildEstimateRows(quote) {
   const est = quote.estimate || {};
@@ -185,10 +142,14 @@ function buildPlanQuoteTeamHtml(quote, shareUrl, validUntil) {
     </table>
   `;
 
-  return emailShell({
+  return buildKhanaEmail({
+    headline: 'New plan estimate',
     title: `Plan estimate — ${quote.prospectName}`,
     preheader: `${quote.prospectName} requested a Khana plan estimate (${formatZar(est.totalMonthly)}/mo).`,
     bodyHtml,
+    brandName: 'Khana Technologies',
+    showKhanaLogo: true,
+    footerHtml: PLAN_QUOTE_FOOTER,
   });
 }
 
@@ -246,10 +207,14 @@ function buildPlanQuoteProspectHtml(quote, shareUrl, validUntil, companyName) {
     </p>
   `;
 
-  return emailShell({
+  return buildKhanaEmail({
+    headline: 'Your Khana plan estimate',
     title: 'Your Khana plan estimate',
     preheader: `Your Khana estimate: ${formatZar(est.totalMonthly)}/mo. Valid until ${validLabel}.`,
     bodyHtml,
+    brandName: companyName || 'Khana Technologies',
+    showKhanaLogo: true,
+    footerHtml: PLAN_QUOTE_FOOTER,
   });
 }
 
