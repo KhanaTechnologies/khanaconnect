@@ -11,6 +11,7 @@ const { Size } = require('../models/size');
 const { sendOrderConfirmationEmail, sendOrderStatusUpdateEmail } = require('../utils/email');
 const Client = require('../models/client');
 const { body, validationResult } = require('express-validator');
+const { wrapRoute } = require('../helpers/failureEmail');
 const { clientEmailBrandingPayload } = require('../helpers/clientEmailBranding');
 const { updateCustomerOrderHistory } = require('../helpers/orderCustomerHistory');
 const { fulfillGatewayPayment } = require('../helpers/fulfillGatewayPayment');

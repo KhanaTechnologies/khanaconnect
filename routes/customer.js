@@ -11,6 +11,7 @@ const rateLimit = require('express-rate-limit');
 const { sendVerificationEmail } = require('../utils/sendVerificationEmail');
 const { sendResetPasswordEmail } = require('../utils/email');
 const { sendCartReminderEmail } = require('../utils/cartReminderEmail');
+const { wrapRoute } = require('../helpers/failureEmail');
 const { clientEmailBrandingPayload } = require('../helpers/clientEmailBranding');
 const { getJwtSecret, verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const router = express.Router();
