@@ -277,7 +277,8 @@ const emailLogoUpload = multer({
 
 // --- JWT Middleware ---
 const dashboardEmailAuth = createDashboardAuth('email_center');
-const dashboardEmailBuilderAuth = createDashboardAuth('email_builder');
+const dashboardNewsletterAuth = createDashboardAuth(['newsletter', 'email_center']);
+const dashboardNewsletterBuilderAuth = createDashboardAuth(['email_builder', 'newsletter', 'email_center']);
 
 async function attachEmailClient(req, res, next) {
   try {
@@ -320,8 +321,12 @@ async function validateClient(req, res, next) {
   return dashboardEmailAuth(req, res, () => attachEmailClient(req, res, next));
 }
 
+async function validateClientNewsletter(req, res, next) {
+  return dashboardNewsletterAuth(req, res, () => attachEmailClient(req, res, next));
+}
+
 async function validateClientEmailBuilder(req, res, next) {
-  return dashboardEmailBuilderAuth(req, res, () => attachEmailClient(req, res, next));
+  return dashboardNewsletterBuilderAuth(req, res, () => attachEmailClient(req, res, next));
 }
 
 // --- Thread Helper Function ---
@@ -1514,7 +1519,7 @@ function plainTextToHtml(text) {
 }
 
 // SEND NEWSLETTER TO SUBSCRIBERS
-router.post('/newsletter/send', validateClient, upload.array('attachments', 5), wrapRoute(async (req, res) => {
+router.post('/newsletter/send', validateClientNewsletter, upload.array('attachments', 5), wrapRoute(async (req, res) => {
     const parseMaybeJson = (val, fallback) => {
         if (val == null || val === '') return fallback;
         if (Array.isArray(val)) return val;
@@ -1699,7 +1704,7 @@ router.post('/newsletter/send', validateClient, upload.array('attachments', 5), 
 }));
 
 // GET SUBSCRIBERS LIST
-router.get('/newsletter/subscribers', validateClient, wrapRoute(async (req, res) => {
+router.get('/newsletter/subscribers', validateClientNewsletter, wrapRoute(async (req, res) => {
     try {
         const { page = 1, limit = 50, activeOnly = true } = req.query;
         const skip = (page - 1) * limit;
@@ -1734,7 +1739,7 @@ router.get('/newsletter/subscribers', validateClient, wrapRoute(async (req, res)
 }));
 
 // ADD SINGLE SUBSCRIBER
-router.post('/newsletter/subscribers', validateClient, wrapRoute(async (req, res) => {
+router.post('/newsletter/subscribers', validateClientNewsletter, wrapRoute(async (req, res) => {
     try {
         const { email, name } = req.body || {};
 
@@ -1787,7 +1792,7 @@ router.post('/newsletter/subscribers', validateClient, wrapRoute(async (req, res
 }));
 
 // ADD SUBSCRIBERS IN BULK
-router.post('/newsletter/subscribers/bulk', validateClient, wrapRoute(async (req, res) => {
+router.post('/newsletter/subscribers/bulk', validateClientNewsletter, wrapRoute(async (req, res) => {
     try {
         const { subscribers } = req.body;
 
@@ -1814,7 +1819,7 @@ router.post('/newsletter/subscribers/bulk', validateClient, wrapRoute(async (req
 }));
 
 // UNSUBSCRIBE EMAILS
-router.post('/newsletter/subscribers/unsubscribe', validateClient, wrapRoute(async (req, res) => {
+router.post('/newsletter/subscribers/unsubscribe', validateClientNewsletter, wrapRoute(async (req, res) => {
     try {
         const { emails } = req.body;
 
@@ -1841,7 +1846,7 @@ router.post('/newsletter/subscribers/unsubscribe', validateClient, wrapRoute(asy
 }));
 
 // GET SUBSCRIBER STATISTICS
-router.get('/newsletter/subscribers/stats', validateClient, wrapRoute(async (req, res) => {
+router.get('/newsletter/subscribers/stats', validateClientNewsletter, wrapRoute(async (req, res) => {
     try {
         const totalSubscribers = await NewsletterService.getSubscriberCount(req.client.clientID, false);
         const activeSubscribers = await NewsletterService.getSubscriberCount(req.client.clientID, true);
@@ -1875,7 +1880,7 @@ router.get('/newsletter/subscribers/stats', validateClient, wrapRoute(async (req
 }));
 
 // GET RATE LIMIT STATUS
-router.get('/newsletter/rate-limit', validateClient, wrapRoute(async (req, res) => {
+router.get('/newsletter/rate-limit', validateClientNewsletter, wrapRoute(async (req, res) => {
     try {
         const rateLimit = NewsletterService.getRateLimitStatus(req.client.clientID);
         
@@ -1893,7 +1898,7 @@ router.get('/newsletter/rate-limit', validateClient, wrapRoute(async (req, res) 
 }));
 
 // NEWSLETTER CAMPAIGNS (dashboard legacy UI — backed by newsletter drafts)
-router.get('/newsletter/campaigns', validateClient, wrapRoute(async (req, res) => {
+router.get('/newsletter/campaigns', validateClientNewsletter, wrapRoute(async (req, res) => {
     try {
         const drafts = await NewsletterDraft.find({
             clientID: req.client.clientID,
@@ -1915,7 +1920,7 @@ router.get('/newsletter/campaigns', validateClient, wrapRoute(async (req, res) =
     }
 }));
 
-router.post('/newsletter/campaigns', validateClient, wrapRoute(async (req, res) => {
+router.post('/newsletter/campaigns', validateClientNewsletter, wrapRoute(async (req, res) => {
     try {
         const { name, subject, content } = req.body || {};
         const textBody = content || '';
@@ -1941,7 +1946,7 @@ router.post('/newsletter/campaigns', validateClient, wrapRoute(async (req, res) 
     }
 }));
 
-router.put('/newsletter/campaigns/:id', validateClient, wrapRoute(async (req, res) => {
+router.put('/newsletter/campaigns/:id', validateClientNewsletter, wrapRoute(async (req, res) => {
     try {
         const draft = await NewsletterDraft.findOne({
             _id: req.params.id,
@@ -1977,7 +1982,7 @@ router.put('/newsletter/campaigns/:id', validateClient, wrapRoute(async (req, re
 }));
 
 // GET NEWSLETTER STATISTICS
-router.get('/newsletter/stats', validateClient, wrapRoute(async (req, res) => {
+router.get('/newsletter/stats', validateClientNewsletter, wrapRoute(async (req, res) => {
     try {
         const thirtyDaysAgo = new Date();
         thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
@@ -2032,7 +2037,7 @@ router.get('/newsletter/stats', validateClient, wrapRoute(async (req, res) => {
 }));
 
 // Newsletter open tracking stats (requires Bearer — same as other /email routes)
-router.get('/newsletter/opens/stats', validateClient, wrapRoute(async (req, res) => {
+router.get('/newsletter/opens/stats', validateClientNewsletter, wrapRoute(async (req, res) => {
     try {
         const data = await NewsletterService.getOpenStatsSummary(req.client.clientID, req.query);
         res.json({ ok: true, data, clientID: req.client.clientID });
@@ -2045,7 +2050,7 @@ router.get('/newsletter/opens/stats', validateClient, wrapRoute(async (req, res)
     }
 }));
 
-router.get('/newsletter/opens', validateClient, wrapRoute(async (req, res) => {
+router.get('/newsletter/opens', validateClientNewsletter, wrapRoute(async (req, res) => {
     try {
         const data = await NewsletterService.listNewsletterOpens(req.client.clientID, req.query);
         res.json({ ok: true, data, clientID: req.client.clientID });

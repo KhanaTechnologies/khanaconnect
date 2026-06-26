@@ -8,9 +8,20 @@ const {
 
 /**
  * Dashboard API auth + team member permission enforcement.
- * @param {string|null} moduleKey - e.g. 'products', 'orders'. null = dashboard access only.
+ * @param {string|string[]|null} moduleKey - one key, or any-of list (e.g. ['newsletter','email_center'])
  */
 function createDashboardAuth(moduleKey = null) {
+  const moduleKeys = moduleKey == null
+    ? []
+    : Array.isArray(moduleKey)
+      ? moduleKey
+      : [moduleKey];
+
+  function hasModuleAccess(permissions) {
+    if (!moduleKeys.length) return true;
+    return moduleKeys.some((key) => !!permissions[key]);
+  }
+
   return async function dashboardAuthMiddleware(req, res, next) {
     try {
       const authHeader = req.headers.authorization;
@@ -46,8 +57,10 @@ function createDashboardAuth(moduleKey = null) {
 
       if (!session.member) {
         if (session.isApiToken) {
-          if (moduleKey && !permissions[moduleKey]) {
-            return res.status(403).json({ error: `You do not have permission to access ${moduleKey}` });
+          if (moduleKeys.length && !hasModuleAccess(permissions)) {
+            return res.status(403).json({
+              error: `You do not have permission to access ${moduleKeys.join(' or ')}`,
+            });
           }
           return next();
         }
@@ -61,8 +74,10 @@ function createDashboardAuth(moduleKey = null) {
         return res.status(403).json({ error: 'Dashboard access denied' });
       }
 
-      if (moduleKey && !permissions[moduleKey]) {
-        return res.status(403).json({ error: `You do not have permission to access ${moduleKey}` });
+      if (moduleKeys.length && !hasModuleAccess(permissions)) {
+        return res.status(403).json({
+          error: `You do not have permission to access ${moduleKeys.join(' or ')}`,
+        });
       }
 
       return next();
