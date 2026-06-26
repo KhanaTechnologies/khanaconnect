@@ -3,13 +3,16 @@ const router = express.Router();
 const NodeCache = require("node-cache");
 const jwt = require("jsonwebtoken");
 const Client = require("../models/client"); // Assuming you have a Client model
+const Customer = require("../models/customer");
 const gaClient = require("../helpers/gaClient");
+const NewsletterService = require("../helpers/newsletterService");
 const cache = new NodeCache({ stdTTL: 300 }); // 5 min cache
 const { decrypt } = require("../helpers/encryption"); // Add this import
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const { createDashboardAuth } = require('../helpers/dashboardAuth');
 
 const validateClient = createDashboardAuth('sales');
+const validateDashboard = createDashboardAuth();
 
 // ---------------- Helper: Aggregate Visits ---------------- //
 const aggregateVisits = (rows, period) => {
@@ -40,6 +43,41 @@ const aggregateVisits = (rows, period) => {
         .sort()
         .map(k => ({ period: k, visits: map[k] }));
 };
+
+// ---------------- /audience Route (dashboard summary — no module gate) ---------------- //
+router.get("/audience", validateDashboard, async (req, res) => {
+    try {
+        const clientID = req.clientId;
+        const cacheKey = `audience:${clientID}`;
+
+        if (cache.has(cacheKey)) {
+            return res.json(cache.get(cacheKey));
+        }
+
+        const [customers, totalSubscribers, activeSubscribers] = await Promise.all([
+            Customer.countDocuments({ clientID }),
+            NewsletterService.getSubscriberCount(clientID, false),
+            NewsletterService.getSubscriberCount(clientID, true),
+        ]);
+
+        const result = {
+            ok: true,
+            data: {
+                customers,
+                newsletterSubscribers: {
+                    total: totalSubscribers,
+                    active: activeSubscribers,
+                },
+            },
+        };
+
+        cache.set(cacheKey, result);
+        return res.json(result);
+    } catch (err) {
+        console.error("AUDIENCE ERROR:", err.message);
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+});
 
 // ---------------- /overview Route ---------------- //
 router.get("/overview", validateClient, async (req, res) => {
