@@ -84,6 +84,54 @@ class NewsletterService {
     return `${base}${api}/email/newsletter/unsubscribe?${q.toString()}`;
   }
 
+  static hasUnsubscribeMarkup(content) {
+    const value = String(content || '');
+    return (
+      /\{\{\s*unsubscribe_(url|link)\s*\}\}/i.test(value) ||
+      /\/email\/newsletter\/unsubscribe/i.test(value) ||
+      /data-khana-unsubscribe/i.test(value)
+    );
+  }
+
+  static buildUnsubscribeFooterHtml(link) {
+    return `
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" data-khana-unsubscribe="true">
+  <tr>
+    <td style="padding:24px;text-align:center;border-top:1px solid #e5e7eb;">
+      <p style="margin:0 0 12px;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.5;color:#9ca3af;">
+        You received this email because you are subscribed to our newsletter.
+      </p>
+      <a href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:10px 20px;background:#f3f4f6;color:#374151;text-decoration:none;font-family:Arial,Helvetica,sans-serif;font-size:13px;font-weight:600;border-radius:6px;border:1px solid #d1d5db;">
+        Unsubscribe
+      </a>
+    </td>
+  </tr>
+</table>`;
+  }
+
+  static appendUnsubscribeFooterHtml(html, link) {
+    const footer = this.buildUnsubscribeFooterHtml(link);
+    if (/<\/body>/i.test(html)) {
+      return html.replace(/<\/body>/i, `${footer}</body>`);
+    }
+    return `${html || ''}${footer}`;
+  }
+
+  static replaceUnsubscribePlaceholders(content, link) {
+    return String(content || '')
+      .replace(/\{\{\s*unsubscribe_url\s*\}\}/gi, link)
+      .replace(/\{\{\s*unsubscribe_link\s*\}\}/gi, link);
+  }
+
+  static applyPreviewUnsubscribe(html, clientId) {
+    const link = this.buildUnsubscribeUrl('preview@example.com', clientId);
+    let outHtml = this.replaceUnsubscribePlaceholders(html, link);
+    if (!this.hasUnsubscribeMarkup(outHtml)) {
+      outHtml = this.appendUnsubscribeFooterHtml(outHtml, link);
+    }
+    return outHtml;
+  }
+
   static buildOpenPixelUrl(clientId, newsletterId, email) {
     const base = publicBaseUrl();
     const api = apiBasePath();
@@ -109,18 +157,20 @@ class NewsletterService {
 
   static addUnsubscribeFooter(html, text, email, clientId) {
     const link = this.buildUnsubscribeUrl(email, clientId);
-    const htmlFooter = `
-            <br><br>
-            <hr>
-            <p style="color: #666; font-size: 12px;">
-                If you no longer wish to receive these emails,
-                <a href="${escapeHtml(link)}">unsubscribe here</a>.
-            </p>`;
-    const textFooter = `\n\n---\nUnsubscribe: ${link}\n`;
-    return {
-      html: (html || '') + htmlFooter,
-      text: (text || '') + textFooter,
-    };
+    let outHtml = this.replaceUnsubscribePlaceholders(html, link);
+    let outText = this.replaceUnsubscribePlaceholders(text, link);
+
+    if (this.hasUnsubscribeMarkup(outHtml)) {
+      if (!outText.includes(link)) {
+        outText += `\n\nUnsubscribe: ${link}\n`;
+      }
+      return { html: outHtml, text: outText };
+    }
+
+    outHtml = this.appendUnsubscribeFooterHtml(outHtml, link);
+    outText += `\n\n---\nUnsubscribe: ${link}\n`;
+
+    return { html: outHtml, text: outText };
   }
 
   static checkRateLimit(clientId) {
@@ -251,12 +301,19 @@ class NewsletterService {
     };
   }
 
-  static personalizeContent(content, recipient) {
+  static personalizeContent(content, recipient, clientId) {
     if (!content) return '';
-    return String(content)
+    let out = String(content)
       .replace(/{{name}}/g, recipient.name || '')
       .replace(/{{email}}/g, recipient.address || '')
       .replace(/{{firstName}}/g, recipient.name?.split(' ')[0] || '');
+
+    if (clientId && recipient?.address) {
+      const unsubUrl = this.buildUnsubscribeUrl(recipient.address, clientId);
+      out = this.replaceUnsubscribePlaceholders(out, unsubUrl);
+    }
+
+    return out;
   }
 
   static parseRecipients(recipientList) {
@@ -332,10 +389,11 @@ class NewsletterService {
 
     for (const email of emails) {
       try {
-        let personalizedHtml = this.personalizeContent(newsletterData.html, email);
+        let personalizedHtml = this.personalizeContent(newsletterData.html, email, client.clientID);
         let personalizedText = this.personalizeContent(
           newsletterData.text || newsletterData.html.replace(/<[^>]*>/g, ' '),
-          email
+          email,
+          client.clientID
         );
 
         const sigMerged = mergeEmailSignature(

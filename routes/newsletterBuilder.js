@@ -12,6 +12,7 @@ const {
   uploadNewsletterImage,
   validateNewsletterHtml,
 } = require('../helpers/newsletterBuilder');
+const NewsletterService = require('../helpers/newsletterService');
 
 const router = express.Router();
 
@@ -120,11 +121,16 @@ router.post('/preview', wrapRoute(async (req, res) => {
     return res.status(400).json({ ok: false, message: validated.error, warnings: validated.warnings });
   }
 
+  const previewHtml = NewsletterService.applyPreviewUnsubscribe(
+    validated.html,
+    req.client.clientID
+  );
+
   res.json({
     ok: true,
     data: {
       subject: subject || '',
-      html: validated.html,
+      html: previewHtml,
       text: text || validated.text,
       templateId: templateId || null,
       payload: parseJsonBody(payload, {}),
