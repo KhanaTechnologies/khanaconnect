@@ -11,7 +11,7 @@ const { Size } = require('../models/size');
 const { sendOrderConfirmationEmail, sendOrderStatusUpdateEmail } = require('../utils/email');
 const Client = require('../models/client');
 const { body, validationResult } = require('express-validator');
-const { wrapRoute } = require('../helpers/failureEmail');
+const { clientEmailBrandingPayload } = require('../helpers/clientEmailBranding');
 const { updateCustomerOrderHistory } = require('../helpers/orderCustomerHistory');
 const { fulfillGatewayPayment } = require('../helpers/fulfillGatewayPayment');
 const { orderPaymentWebhookOk } = require('../helpers/webhookAuth');
@@ -209,7 +209,7 @@ router.post('/', authenticateToken, [
                 req.clientId,
                 order._id,
                 client.emailSignature || '',
-                client.emailLogoUrl || '',
+                clientEmailBrandingPayload(client),
                 req.clientId
             );
         } catch (emailError) {
@@ -267,7 +267,7 @@ router.put('/:id', authenticateToken, wrapRoute(async (req, res) => {
                 setStatus === 'shipped' ? order._id : 'nothing',
                 setStatus === 'shipped' ? order.orderTrackingLink : 'nothing',
                 client.emailSignature || '',
-                client.emailLogoUrl || '',
+                clientEmailBrandingPayload(client),
                 req.clientId
             );
         } catch (emailError) {

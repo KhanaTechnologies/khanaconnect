@@ -1,5 +1,6 @@
 // utils/cartReminderEmail.js
 const { sendMail } = require('../helpers/mailer');
+const { resolveEmailBrand } = require('../helpers/emailDesignTokens');
 const { decrypt } = require('../helpers/encryption');
 const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../helpers/mailHost');
 const {
@@ -7,7 +8,6 @@ const {
   escapeHtml,
   ctaButton,
 } = require('../helpers/transactionalEmailLayout');
-const { resolveClientEmailLogoUrl } = require('../helpers/clientEmailBranding');
 
 async function sendCartReminderEmail(customer, client) {
   try {
@@ -36,8 +36,9 @@ async function sendCartReminderEmail(customer, client) {
 
     const total = customer.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
     const cartUrl = `${client.return_url}/cart`;
+    const brand = resolveEmailBrand(client);
     const brandName = String(client.companyName || 'Our store');
-    const logoUrl = resolveClientEmailLogoUrl(client);
+    const logoUrl = brand.logoUrl || undefined;
 
     const bodyHtml = `
       <p style="margin:0 0 16px;">Hi ${escapeHtml(customer.customerFirstName)},</p>
@@ -64,9 +65,10 @@ async function sendCartReminderEmail(customer, client) {
       preheader: `You have ${customer.cart.length} item(s) waiting in your cart.`,
       bodyHtml,
       brandName,
-      logoUrl: logoUrl || undefined,
+      logoUrl,
       showKhanaLogo: false,
       footerHtml: `Automated reminder from ${escapeHtml(brandName)}. Manage cart reminders in your account settings.`,
+      primaryColor: brand.primaryColor,
     });
 
     const text = `Hi ${customer.customerFirstName},

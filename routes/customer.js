@@ -11,7 +11,7 @@ const rateLimit = require('express-rate-limit');
 const { sendVerificationEmail } = require('../utils/sendVerificationEmail');
 const { sendResetPasswordEmail } = require('../utils/email');
 const { sendCartReminderEmail } = require('../utils/cartReminderEmail');
-const { wrapRoute } = require('../helpers/failureEmail');
+const { clientEmailBrandingPayload } = require('../helpers/clientEmailBranding');
 const { getJwtSecret, verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const router = express.Router();
 const { findCustomerByEmail, replaceCustomerCart } = require('../helpers/customerCart');
@@ -1094,7 +1094,7 @@ const registerCustomer = async (req, res) => {
         client.return_url, 
         client.companyName,
         client.emailSignature || '',
-        client.emailLogoUrl || ''
+        clientEmailBrandingPayload(client)
       );
     } catch (emailError) {
       console.error('Email failed to send:', emailError.message);
@@ -1177,7 +1177,7 @@ router.post('/login', loginLimiter, validatePaidStorefrontToken, async (req, res
             client.return_url, 
             client.companyName,
             client.emailSignature || '',
-            client.emailLogoUrl || ''
+            clientEmailBrandingPayload(client)
           );
         } catch (emailError) {
           console.error('Verification email failed to send:', emailError.message);
@@ -1347,7 +1347,7 @@ router.post('/resend-verification', validatePaidStorefrontToken, async (req, res
         client.return_url, 
         client.companyName,
         client.emailSignature || '',
-        client.emailLogoUrl || ''
+        clientEmailBrandingPayload(client)
       );
     } catch (emailError) {
       console.error('Verification email failed to send:', emailError.message);
@@ -1413,7 +1413,7 @@ router.post('/reset-password', validatePaidStorefrontToken, async (req, res) => 
         client.businessEmailPassword, 
         client.companyName,
         client.emailSignature || '',
-        client.emailLogoUrl || '',
+        clientEmailBrandingPayload(client),
         req.clientID
       );
     } catch (emailError) {

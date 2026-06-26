@@ -16,6 +16,8 @@ const {
     neutralPanel,
     ctaButton,
 } = require('../helpers/transactionalEmailLayout');
+const { normalizeEmailBranding } = require('../helpers/clientEmailBranding');
+const { resolveEmailBrand } = require('../helpers/emailDesignTokens');
 
 function brandPlainName(formattedClientName) {
     return String(formattedClientName || '')
@@ -28,6 +30,7 @@ function brandPlainName(formattedClientName) {
 function wrapTransactionalEmail(headline, bodyHtml, opts = {}) {
     const brand = opts.brandName || brandPlainName(opts.formattedClientName);
     const logoUrl = (opts.logoUrl || opts.emailLogoUrl || '').trim() || undefined;
+    const primaryColor = opts.primaryColor || opts.emailPrimaryColor || undefined;
     return buildKhanaEmail({
         headline,
         title: opts.title || headline,
@@ -37,14 +40,23 @@ function wrapTransactionalEmail(headline, bodyHtml, opts = {}) {
         logoUrl,
         showKhanaLogo: opts.showKhanaLogo === true,
         footerHtml: opts.footerHtml,
+        primaryColor,
     });
 }
 
-function wrapBranding(formattedClientName, emailLogoUrl = '') {
-    const url = String(emailLogoUrl || '').trim();
+function wrapBranding(formattedClientName, branding = '') {
+    const normalized = normalizeEmailBranding(branding);
+    const url = normalized.emailLogoUrl || '';
+    const resolved = resolveEmailBrand({
+        emailLogoUrl: url,
+        emailPrimaryColor: normalized.emailPrimaryColor,
+        dashboardThemeColor: normalized.dashboardThemeColor,
+    });
     return {
         formattedClientName,
         ...(url ? { emailLogoUrl: url, logoUrl: url } : {}),
+        primaryColor: resolved.primaryColor,
+        emailPrimaryColor: resolved.primaryColor,
     };
 }
 
@@ -253,7 +265,16 @@ function formatBookingDate(date) {
 // -----------------------------
 async function sendBookingUpdateNotificationEmail(booking, changeRows, bEmail, BEPass, clientName, options = {}) {
     if (!changeRows || changeRows.length === 0) return;
-    const { reason = '', toEmail, emailSignature = '', emailLogoUrl = '' } = options;
+    const {
+        reason = '',
+        toEmail,
+        emailSignature = '',
+        emailLogoUrl = '',
+        emailPrimaryColor = '',
+        dashboardThemeColor = '',
+        branding: brandingOpt,
+    } = options;
+    const branding = brandingOpt || { emailLogoUrl, emailPrimaryColor, dashboardThemeColor };
     const recipient = toEmail || booking.customerEmail;
     if (!recipient) return;
 
@@ -306,7 +327,7 @@ async function sendBookingUpdateNotificationEmail(booking, changeRows, bEmail, B
             <p style="margin:0 0 16px;">If something looks wrong, reply to this email or call us.</p>
             <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
         `,
-        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+        { ...wrapBranding(formattedClientName, branding) }
     );
 
     await sendWithRetry(
@@ -325,7 +346,7 @@ async function sendBookingUpdateNotificationEmail(booking, changeRows, bEmail, B
 }
 
 /** When the booking email address changes, notify the previous address once. */
-async function sendBookingEmailReassignedNotice(prevEmail, booking, bEmail, BEPass, clientName, emailSignature = '', emailLogoUrl = '') {
+async function sendBookingEmailReassignedNotice(prevEmail, booking, bEmail, BEPass, clientName, emailSignature = '', branding = '') {
     if (!prevEmail) return;
     const formattedClientName = getFormattedClientName(clientName);
     const html = wrapTransactionalEmail(
@@ -336,7 +357,7 @@ async function sendBookingEmailReassignedNotice(prevEmail, booking, bEmail, BEPa
             <p style="margin:0 0 16px;">If you did not request this change, please contact ${formattedClientName.replace(/<[^>]+>/g, '')}.</p>
             <p style="margin:0;">${formattedClientName}</p>
         `,
-        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+        { ...wrapBranding(formattedClientName, branding) }
     );
     await sendWithRetry(
         () => createTransporter(bEmail, BEPass),
@@ -355,7 +376,7 @@ async function sendBookingEmailReassignedNotice(prevEmail, booking, bEmail, BEPa
 // -----------------------------
 // Booking statement — paid activity record (not a payment request)
 // -----------------------------
-async function sendBookingStatementEmail(booking, bEmail, BEPass, clientName, emailSignature = '', emailLogoUrl = '') {
+async function sendBookingStatementEmail(booking, bEmail, BEPass, clientName, emailSignature = '', branding = '') {
     const formattedClientName = getFormattedClientName(clientName);
     const formattedDate = formatBookingDate(booking.date);
     const servicesList = (booking.services || []).map((service) => `<li>${escapeHtml(service)}</li>`).join('');
@@ -397,7 +418,7 @@ async function sendBookingStatementEmail(booking, bEmail, BEPass, clientName, em
             <p style="margin:0 0 16px;">Questions? Reply to this email.</p>
             <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
         `,
-        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+        { ...wrapBranding(formattedClientName, branding) }
     );
 
     await sendWithRetry(
@@ -418,7 +439,7 @@ async function sendBookingStatementEmail(booking, bEmail, BEPass, clientName, em
 // -----------------------------
 // Booking Confirmation Email
 // -----------------------------
-async function sendBookingConfirmationEmail(booking, bEmail, BEPass, clientName, emailSignature = '', emailLogoUrl = '') {
+async function sendBookingConfirmationEmail(booking, bEmail, BEPass, clientName, emailSignature = '', branding = '') {
     console.log('Sending booking confirmation with decrypted credentials');
     const formattedClientName = getFormattedClientName(clientName);
     const formattedDate = formatBookingDate(booking.date);
@@ -447,7 +468,7 @@ async function sendBookingConfirmationEmail(booking, bEmail, BEPass, clientName,
             <p style="margin:0 0 16px;">If you have any questions, feel free to reply to this email.</p>
             <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
         `,
-        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+        { ...wrapBranding(formattedClientName, branding) }
     );
 
     const parts = buildTransactionalMailParts(emailContent, '', emailSignature);
@@ -491,7 +512,7 @@ async function sendBookingConfirmationEmail(booking, bEmail, BEPass, clientName,
 // -----------------------------
 // Booking Reminder Email
 // -----------------------------
-async function sendBookingReminderEmail(booking, bEmail, BEPass, clientName, emailSignature = '', emailLogoUrl = '') {
+async function sendBookingReminderEmail(booking, bEmail, BEPass, clientName, emailSignature = '', branding = '') {
     const formattedClientName = getFormattedClientName(clientName);
     const formattedDate = formatBookingDate(booking.date);
 
@@ -517,7 +538,7 @@ async function sendBookingReminderEmail(booking, bEmail, BEPass, clientName, ema
             <p style="margin:0 0 16px;">We're looking forward to seeing you!</p>
             <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
         `,
-        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+        { ...wrapBranding(formattedClientName, branding) }
     );
 
     await sendWithRetry(
@@ -539,7 +560,7 @@ async function sendBookingReminderEmail(booking, bEmail, BEPass, clientName, ema
 // -----------------------------
 // Payment Confirmation Email
 // -----------------------------
-async function sendPaymentConfirmationEmail(booking, bEmail, BEPass, clientName, emailSignature = '', emailLogoUrl = '') {
+async function sendPaymentConfirmationEmail(booking, bEmail, BEPass, clientName, emailSignature = '', branding = '') {
     const formattedClientName = getFormattedClientName(clientName);
     const formattedDate = formatBookingDate(booking.date);
 
@@ -567,7 +588,7 @@ async function sendPaymentConfirmationEmail(booking, bEmail, BEPass, clientName,
             <p style="margin:0 0 16px;">Your booking is now confirmed and we're looking forward to seeing you!</p>
             <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
         `,
-        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+        { ...wrapBranding(formattedClientName, branding) }
     );
 
     await sendWithRetry(
@@ -589,7 +610,7 @@ async function sendPaymentConfirmationEmail(booking, bEmail, BEPass, clientName,
 // -----------------------------
 // Booking Cancellation Email
 // -----------------------------
-async function sendBookingCancellationEmail(booking, bEmail, BEPass, clientName, reason = '', emailSignature = '', emailLogoUrl = '') {
+async function sendBookingCancellationEmail(booking, bEmail, BEPass, clientName, reason = '', emailSignature = '', branding = '') {
     const formattedClientName = getFormattedClientName(clientName);
     const formattedDate = formatBookingDate(booking.date);
 
@@ -614,7 +635,7 @@ async function sendBookingCancellationEmail(booking, bEmail, BEPass, clientName,
             <p style="margin:0 0 16px;">We hope to see you again in the future!</p>
             <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
         `,
-        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+        { ...wrapBranding(formattedClientName, branding) }
     );
 
     await sendWithRetry(
@@ -636,7 +657,7 @@ async function sendBookingCancellationEmail(booking, bEmail, BEPass, clientName,
 // -----------------------------
 // Booking Rescheduling Email
 // -----------------------------
-async function sendReschedulingEmail(booking, oldDetails, bEmail, BEPass, clientName, reason, emailSignature = '', emailLogoUrl = '') {
+async function sendReschedulingEmail(booking, oldDetails, bEmail, BEPass, clientName, reason, emailSignature = '', branding = '') {
     const formattedClientName = getFormattedClientName(clientName);
     const newFormattedDate = formatBookingDate(booking.date);
     const oldFormattedDate = formatBookingDate(oldDetails.date);
@@ -665,7 +686,7 @@ async function sendReschedulingEmail(booking, oldDetails, bEmail, BEPass, client
             <p style="margin:0 0 16px;">We look forward to seeing you at your new scheduled time!</p>
             <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
         `,
-        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+        { ...wrapBranding(formattedClientName, branding) }
     );
 
     await sendWithRetry(
@@ -696,7 +717,7 @@ async function sendOrderConfirmationEmail(
     clientName,
     orderID,
     emailSignature = '',
-    emailLogoUrl = '',
+    branding = '',
     tenantClientId = null
 ) {
     const formattedClientName = getFormattedClientName(clientName);
@@ -824,7 +845,7 @@ async function sendOrderStatusUpdateEmail(
     trackingID,
     trackingLink,
     emailSignature = '',
-    emailLogoUrl = '',
+    branding = '',
     tenantClientId = null
 ) {
     const formattedClientName = getFormattedClientName(clientName);
@@ -852,7 +873,7 @@ async function sendOrderStatusUpdateEmail(
             ${status === 'shipped' ? ctaButton({ href: trackOrderLink, label: 'Track my order' }) : ''}
             <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
         `,
-        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+        { ...wrapBranding(formattedClientName, branding) }
     );
 
     const parts = buildTransactionalMailParts(emailContent, '', emailSignature);
@@ -893,7 +914,7 @@ async function sendOrderStatusUpdateEmail(
 // -----------------------------
 // Accommodation Confirmation Email
 // -----------------------------
-async function sendAccommodationConfirmationEmail(booking, bEmail, BEPass, clientName, emailSignature = '', emailLogoUrl = '') {
+async function sendAccommodationConfirmationEmail(booking, bEmail, BEPass, clientName, emailSignature = '', branding = '') {
     const formattedClientName = getFormattedClientName(clientName);
     const decryptedEmail = decrypt(bEmail);
     
@@ -931,7 +952,7 @@ async function sendAccommodationConfirmationEmail(booking, bEmail, BEPass, clien
             <p style="margin:0 0 16px;">If you have any questions about your stay, feel free to reply to this email.</p>
             <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
         `,
-        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+        { ...wrapBranding(formattedClientName, branding) }
     );
 
     const parts = buildTransactionalMailParts(emailContent, '', emailSignature);
@@ -975,7 +996,7 @@ async function sendAccommodationConfirmationEmail(booking, bEmail, BEPass, clien
 // -----------------------------
 // Mixed Booking Confirmation Email
 // -----------------------------
-async function sendMixedBookingConfirmationEmail(booking, bEmail, BEPass, clientName, emailSignature = '', emailLogoUrl = '') {
+async function sendMixedBookingConfirmationEmail(booking, bEmail, BEPass, clientName, emailSignature = '', branding = '') {
     const formattedClientName = getFormattedClientName(clientName);
     const decryptedEmail = decrypt(bEmail);
     
@@ -1006,7 +1027,7 @@ async function sendMixedBookingConfirmationEmail(booking, bEmail, BEPass, client
             <p style="margin:0 0 16px;">We look forward to serving you and providing a comfortable stay!</p>
             <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
         `,
-        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+        { ...wrapBranding(formattedClientName, branding) }
     );
 
     await sendWithRetry(
@@ -1037,7 +1058,7 @@ async function sendResetPasswordEmail(
     BEPass,
     clientName,
     emailSignature = '',
-    emailLogoUrl = '',
+    branding = '',
     tenantClientId = null
 ) {
     const formattedClientName = getFormattedClientName(clientName);
@@ -1053,7 +1074,7 @@ async function sendResetPasswordEmail(
             <p style="margin:0 0 16px;">This link will expire shortly. If you did not request this, please ignore this email.</p>
             <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
         `,
-        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+        { ...wrapBranding(formattedClientName, branding) }
     );
 
     await sendWithRetry(
@@ -1255,7 +1276,7 @@ async function sendTeamActivityNotifyEmail({
 // -----------------------------
 // Contact Us Email
 // -----------------------------
-async function sendContactUsEmail(contactData, bEmail, BEPass, clientName, emailSignature = '', tenantClientId = null, emailLogoUrl = '') {
+async function sendContactUsEmail(contactData, bEmail, BEPass, clientName, emailSignature = '', tenantClientId = null, branding = '') {
     const { name, email, phone, subject, message } = contactData;
     const formattedClientName = getFormattedClientName(clientName);
     const decryptedEmail = decrypt(bEmail);
@@ -1313,7 +1334,7 @@ async function sendContactUsEmail(contactData, bEmail, BEPass, clientName, email
             <p style="margin:0 0 16px;">We appreciate your interest in our services!</p>
             <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
         `,
-        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+        { ...wrapBranding(formattedClientName, branding) }
     );
 
     const businessBody = mimeFrom(businessEmailContent, '', emailSignature);
@@ -1418,7 +1439,7 @@ async function sendPlanQuoteEmails({
 // -----------------------------
 // Accommodation check-in / check-out reminders (cron / reminder service)
 // -----------------------------
-async function sendCheckInReminderEmail(booking, bEmail, BEPass, clientName, emailSignature = '', emailLogoUrl = '') {
+async function sendCheckInReminderEmail(booking, bEmail, BEPass, clientName, emailSignature = '', branding = '') {
     const formattedClientName = getFormattedClientName(clientName);
     const checkInDate = formatBookingDate(booking.accommodation?.checkIn || booking.date);
     const html = wrapTransactionalEmail(
@@ -1429,7 +1450,7 @@ async function sendCheckInReminderEmail(booking, bEmail, BEPass, clientName, ema
             <p style="margin:0 0 16px;">If you have questions, reply to this email.</p>
             <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
         `,
-        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+        { ...wrapBranding(formattedClientName, branding) }
     );
     await sendWithRetry(
         () => createTransporter(bEmail, BEPass),
@@ -1445,7 +1466,7 @@ async function sendCheckInReminderEmail(booking, bEmail, BEPass, clientName, ema
     );
 }
 
-async function sendCheckOutReminderEmail(booking, bEmail, BEPass, clientName, emailSignature = '', emailLogoUrl = '') {
+async function sendCheckOutReminderEmail(booking, bEmail, BEPass, clientName, emailSignature = '', branding = '') {
     const formattedClientName = getFormattedClientName(clientName);
     const checkOutDate = formatBookingDate(booking.accommodation?.checkOut || booking.date);
     const html = wrapTransactionalEmail(
@@ -1456,7 +1477,7 @@ async function sendCheckOutReminderEmail(booking, bEmail, BEPass, clientName, em
             <p style="margin:0 0 16px;">We hope you enjoy your stay. Reply to this email if you need anything.</p>
             <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
         `,
-        { ...wrapBranding(formattedClientName, emailLogoUrl) }
+        { ...wrapBranding(formattedClientName, branding) }
     );
     await sendWithRetry(
         () => createTransporter(bEmail, BEPass),

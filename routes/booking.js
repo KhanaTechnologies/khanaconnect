@@ -21,6 +21,7 @@ const {
     sendBookingStatementEmail,
 } = require('../utils/email');
 const { diffBookingForCustomer, normalizeCustomerNotifyChanges } = require('../utils/bookingEmailHelpers');
+const { clientEmailBrandingPayload } = require('../helpers/clientEmailBranding');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const { createDashboardAuth } = require('../helpers/dashboardAuth');
 const { recordTeamActivityFromRequest } = require('../helpers/teamActivity');
@@ -269,7 +270,7 @@ router.post('/', validateClient, wrapRoute(async (req, res) => {
 
     const displayName = client.companyName || client.clientName || clientId;
     const emailSig = client.emailSignature || '';
-    const emailLogo = client.emailLogoUrl || '';
+    const emailBranding = clientEmailBrandingPayload(client);
 
     setImmediate(async () => {
         try {
@@ -287,7 +288,7 @@ router.post('/', validateClient, wrapRoute(async (req, res) => {
                         client.businessEmailPassword,
                         displayName,
                         emailSig,
-                        emailLogo
+                        emailBranding
                     );
                 } else if (bookingType === 'mixed') {
                     await sendMixedBookingConfirmationEmail(
@@ -296,7 +297,7 @@ router.post('/', validateClient, wrapRoute(async (req, res) => {
                         client.businessEmailPassword,
                         displayName,
                         emailSig,
-                        emailLogo
+                        emailBranding
                     );
                 } else {
                     await sendBookingConfirmationEmail(
@@ -305,7 +306,7 @@ router.post('/', validateClient, wrapRoute(async (req, res) => {
                         client.businessEmailPassword,
                         displayName,
                         emailSig,
-                        emailLogo
+                        emailBranding
                     );
                 }
                 console.log('✅ Background confirmation email sent successfully');
@@ -527,7 +528,7 @@ router.put('/:id', validateClient, wrapRoute(async (req, res) => {
     const customerNotifyReason =
         typeof req.body.customerNotifyReason === 'string' ? req.body.customerNotifyReason.trim() : '';
     const emailSig = client.emailSignature || '';
-    const emailLogo = client.emailLogoUrl || '';
+    const emailBranding = clientEmailBrandingPayload(client);
     
     // ============ ASYNC EMAIL SENDING - NON BLOCKING ============
     // Send response immediately, then handle emails in the background
@@ -562,7 +563,7 @@ router.put('/:id', validateClient, wrapRoute(async (req, res) => {
                         client.businessEmailPassword,
                         displayName,
                         emailSig,
-                        emailLogo
+                        emailBranding
                     );
                     const gapMs = Math.max(0, parseInt(String(process.env.SMTP_BETWEEN_MESSAGES_MS || '450'), 10) || 450);
                     if (gapMs > 0 && newEmailRaw) await new Promise((r) => setTimeout(r, gapMs));
@@ -574,7 +575,7 @@ router.put('/:id', validateClient, wrapRoute(async (req, res) => {
                         client.businessEmail,
                         client.businessEmailPassword,
                         displayName,
-                        { reason: customerNotifyReason, toEmail: newEmailRaw, emailSignature: emailSig, emailLogoUrl: emailLogo }
+                        { reason: customerNotifyReason, toEmail: newEmailRaw, emailSignature: emailSig, branding: emailBranding }
                     );
                 }
             } catch (emailError) {
@@ -610,7 +611,7 @@ router.put('/:id', validateClient, wrapRoute(async (req, res) => {
                                 client.businessEmailPassword,
                                 client.clientName || booking.clientID,
                                 client.emailSignature || '',
-                                client.emailLogoUrl || ''
+                                clientEmailBrandingPayload(client)
                             );
                             console.log(`✅ Background notification sent for booking ${booking._id}`);
                         }
@@ -659,7 +660,7 @@ router.post('/:id/send-statement', validateClient, wrapRoute(async (req, res) =>
         client.businessEmailPassword,
         displayName,
         client.emailSignature || '',
-        client.emailLogoUrl || ''
+        clientEmailBrandingPayload(client)
     );
 
     res.json({
@@ -707,7 +708,7 @@ router.post('/:id/payment-confirmation', wrapRoute(async (req, res) => {
                 client.businessEmailPassword,
                 client.clientName || booking.clientID,
                 client.emailSignature || '',
-                client.emailLogoUrl || ''
+                clientEmailBrandingPayload(client)
             );
         } catch (emailError) {
             console.error('Failed to send payment confirmation email:', emailError);
@@ -782,7 +783,7 @@ router.delete('/:id', validateClient, wrapRoute(async (req, res) => {
             client.clientName || clientId,
             reason,
             client.emailSignature || '',
-            client.emailLogoUrl || ''
+            clientEmailBrandingPayload(client)
         );
     } catch (emailError) {
         console.error('Failed to send cancellation email:', emailError);
@@ -1088,7 +1089,7 @@ router.post('/waitlist/:id/convert-to-booking', validateClient, wrapRoute(async 
             client.businessEmailPassword,
             client.clientName || clientId,
             client.emailSignature || '',
-            client.emailLogoUrl || ''
+            clientEmailBrandingPayload(client)
         );
     } catch (emailError) {
         console.error('Failed to send confirmation email:', emailError);

@@ -294,6 +294,7 @@ async function attachEmailClient(req, res, next) {
       businessEmailPassword: client.businessEmailPassword,
       emailSignature: client.emailSignature || '',
       emailLogoUrl: client.emailLogoUrl || '',
+      emailPrimaryColor: client.emailPrimaryColor || '',
       dashboardThemeColor: client.dashboardThemeColor || '',
       imapHost: client.imapHost,
       imapPort: client.imapPort,
@@ -2274,13 +2275,50 @@ router.get('/subscribers/export', validateClient, wrapRoute(async (req, res) => 
  */
 router.get('/branding', validateClient, wrapRoute(async (req, res) => {
     const doc = await Client.findOne({ clientID: req.client.clientID }).select(
-        'emailLogoUrl companyName dashboardThemeColor'
+        'emailLogoUrl companyName dashboardThemeColor emailPrimaryColor'
     );
+    const { resolveEmailBrand } = require('../helpers/emailDesignTokens');
+    const brand = resolveEmailBrand(doc || req.client);
     res.json({
         ok: true,
         emailLogoUrl: (doc?.emailLogoUrl || '').trim(),
         companyName: doc?.companyName || req.client.companyName || '',
         dashboardThemeColor: (doc?.dashboardThemeColor || '').trim(),
+        emailPrimaryColor: (doc?.emailPrimaryColor || '').trim(),
+        effectivePrimaryColor: brand.primaryColor,
+    });
+}));
+
+/**
+ * PUT /branding/color — save email accent color (hex) or clear to use Khana default
+ */
+router.put('/branding/color', validateClient, wrapRoute(async (req, res) => {
+    const raw = req.body?.emailPrimaryColor;
+    const value = raw == null || raw === '' ? '' : String(raw).trim();
+
+    if (value && !/^#[0-9a-fA-F]{3,8}$/.test(value)) {
+        return res.status(400).json({
+            ok: false,
+            message: 'emailPrimaryColor must be a hex color (e.g. #2563eb) or empty to reset',
+        });
+    }
+
+    await Client.updateOne(
+        { clientID: req.client.clientID },
+        { $set: { emailPrimaryColor: value } }
+    );
+
+    const { resolveEmailBrand } = require('../helpers/emailDesignTokens');
+    const brand = resolveEmailBrand({
+        emailPrimaryColor: value,
+        dashboardThemeColor: req.client.dashboardThemeColor,
+    });
+
+    res.json({
+        ok: true,
+        message: value ? 'Email accent color saved' : 'Email accent color reset to default',
+        emailPrimaryColor: value,
+        effectivePrimaryColor: brand.primaryColor,
     });
 }));
 
@@ -2291,6 +2329,12 @@ router.post('/branding/preview', validateClient, wrapRoute(async (req, res) => {
     const headline = String(req.body?.headline || 'Booking confirmed!').trim().slice(0, 120);
     const logoUrl = String(req.body?.logoUrl ?? req.client.emailLogoUrl ?? '').trim();
     const companyName = req.client.companyName || 'Your business';
+    const { resolveEmailBrand } = require('../helpers/emailDesignTokens');
+    const previewColor = String(req.body?.emailPrimaryColor ?? req.body?.primaryColor ?? '').trim();
+    const brand = resolveEmailBrand({
+        emailPrimaryColor: previewColor || req.client.emailPrimaryColor,
+        dashboardThemeColor: req.client.dashboardThemeColor,
+    });
 
     const bodyHtml = `
       <p style="margin:0 0 16px;">Hi Alex,</p>
@@ -2316,9 +2360,10 @@ router.post('/branding/preview', validateClient, wrapRoute(async (req, res) => {
         logoUrl: logoUrl || undefined,
         showKhanaLogo: false,
         footerHtml: `Automated email from ${companyName}.`,
+        primaryColor: brand.primaryColor,
     });
 
-    res.json({ ok: true, html, emailLogoUrl: logoUrl });
+    res.json({ ok: true, html, emailLogoUrl: logoUrl, effectivePrimaryColor: brand.primaryColor });
 }));
 
 /**

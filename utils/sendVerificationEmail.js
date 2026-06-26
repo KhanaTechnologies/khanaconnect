@@ -8,6 +8,8 @@ const {
     ctaButton,
     warnPanel,
 } = require('../helpers/transactionalEmailLayout');
+const { normalizeEmailBranding } = require('../helpers/clientEmailBranding');
+const { resolveEmailBrand } = require('../helpers/emailDesignTokens');
 
 const failedAttempts = new Map();
 const MAX_ATTEMPTS = 1;
@@ -33,7 +35,7 @@ function extractDomain(url) {
     return domain;
 }
 
-async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass, websiteURL, clientName, emailSignature = '', emailLogoUrl = '') {
+async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass, websiteURL, clientName, emailSignature = '', branding = '') {
     const decryptedEmail = decrypt(bEmail);
     const decryptedPass = decrypt(BEPass);
 
@@ -83,15 +85,19 @@ async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass,
             <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
     `;
 
+    const normalized = normalizeEmailBranding(branding);
+    const brand = resolveEmailBrand(normalized);
+
     const emailContent = buildKhanaEmail({
         headline: 'Confirm your email',
         title: 'Confirm your email address',
         preheader: `Verify your ${brandPlain} account.`,
         bodyHtml,
         brandName: brandPlain,
-        logoUrl: (emailLogoUrl || '').trim() || undefined,
+        logoUrl: brand.logoUrl || undefined,
         showKhanaLogo: false,
         footerHtml: `Sent by ${escapeHtml(brandPlain)} for account verification only.`,
+        primaryColor: brand.primaryColor,
     });
 
     let merged = { html: emailContent, text: '' };

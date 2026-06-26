@@ -4,7 +4,13 @@
  */
 
 const { resolvePublicBaseUrl } = require('./publicBaseUrl');
-const { EMAIL_TOKENS, resolveKhanaEmailLogoUrl: resolveLogoFromTokens } = require('./emailDesignTokens');
+const {
+  EMAIL_TOKENS,
+  resolveKhanaEmailLogoUrl: resolveLogoFromTokens,
+  buildBrandGradient,
+  buildBrandGradientFallback,
+  sanitizeHexColor,
+} = require('./emailDesignTokens');
 
 const KHANA_EMAIL_LOGO_PATH = EMAIL_TOKENS.brand.logoPath;
 
@@ -57,7 +63,12 @@ function buildKhanaEmail({
   showKhanaLogo,
   footerHtml,
   maxWidth = 560,
+  primaryColor,
 }) {
+  const accent = sanitizeHexColor(primaryColor, EMAIL_TOKENS.brand.primary);
+  const gradientCss = buildBrandGradient(accent);
+  const gradientFallback = buildBrandGradientFallback(accent);
+
   const pageTitle = escapeHtml(title || headline || 'Notification');
   const headlineText = escapeHtml(headline || title || 'Notification');
   const bannerBrand = renderBannerBrand({ brandName, logoUrl, showKhanaLogo });
@@ -78,12 +89,12 @@ function buildKhanaEmail({
     <table role="presentation" border="0" align="center" cellpadding="0" cellspacing="0" width="100%" style="width:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#404d57;font-size:16px;border-spacing:0;mso-table-lspace:0pt;mso-table-rspace:0pt;">
       <tbody>
         <tr>
-          <td align="center" style="color:#ffffff;background:${GRADIENT_CSS};padding:40px 24px 28px;" bgcolor="${GRADIENT_FALLBACK}">
+          <td align="center" style="color:#ffffff;background:${gradientCss};padding:40px 24px 28px;" bgcolor="${gradientFallback}">
             ${bannerBrand}
           </td>
         </tr>
         <tr>
-          <td align="center" style="background:${GRADIENT_CSS};padding:0 0 0;" bgcolor="${GRADIENT_FALLBACK}">
+          <td align="center" style="background:${gradientCss};padding:0 0 0;" bgcolor="${gradientFallback}">
             <!--[if (gte mso 9)|(IE)]><table align="center" border="0" cellspacing="0" cellpadding="0" width="${maxWidth}"><tr><td align="center" valign="top" width="${maxWidth}"><![endif]-->
             <table role="presentation" border="0" align="center" cellpadding="0" cellspacing="0" width="100%" style="width:95% !important;max-width:${maxWidth}px;border-radius:8px 8px 0 0;mso-table-lspace:0pt;mso-table-rspace:0pt;border:1px solid #e6e6e6;border-bottom:none;" bgcolor="#ffffff">
               <tbody>

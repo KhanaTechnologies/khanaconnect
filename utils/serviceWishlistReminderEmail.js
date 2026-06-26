@@ -6,6 +6,7 @@ const {
   buildKhanaEmail,
   ctaButton,
 } = require('../helpers/transactionalEmailLayout');
+const { resolveEmailBrand } = require('../helpers/emailDesignTokens');
 
 /**
  * One email per customer listing all service wishlist rows due this month.
@@ -62,15 +63,18 @@ async function sendServiceWishlistMonthlyReminder(customer, client, rows, period
       ${ctaButton({ href: bookingUrl, label: 'View / book services' })}
   `;
 
+  const brand = resolveEmailBrand(client);
+
   const innerHtml = buildKhanaEmail({
     headline: 'Your service wish list',
     title: `Service wish list — ${label}`,
     preheader: `Reminder for services on your wish list in ${label}.`,
     bodyHtml,
     brandName: String(client.companyName || 'us'),
-    logoUrl: (client.emailLogoUrl || '').trim() || undefined,
+    logoUrl: brand.logoUrl || undefined,
     showKhanaLogo: false,
     footerHtml: `Automated reminder from ${escapeHtml(String(client.companyName || 'us'))}.`,
+    primaryColor: brand.primaryColor,
   });
 
   const merged = mergeEmailSignature(innerHtml, '', client.emailSignature || '');

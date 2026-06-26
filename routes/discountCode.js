@@ -120,15 +120,18 @@ async function sendWishlistCheckoutCodeAlerts({
           })}
           ${websiteUrl ? ctaButton({ href: websiteUrl, label: 'Visit website' }) : ''}
     `;
+    const { resolveEmailBrand } = require('../helpers/emailDesignTokens');
+    const brand = resolveEmailBrand(clientDoc);
     const html = buildKhanaEmail({
       headline: 'Wish list match found',
       title: `Wish list match — ${company}`,
       preheader: `Code ${code} (${discount}% off) applies to your wish list.`,
       bodyHtml,
       brandName: String(clientDoc.companyName || 'Our store'),
-      logoUrl: (clientDoc.emailLogoUrl || '').trim() || undefined,
+      logoUrl: brand.logoUrl || undefined,
       showKhanaLogo: false,
       footerHtml: 'You receive this because sale alerts are enabled for your wish list items.',
+      primaryColor: brand.primaryColor,
     });
     const text = `Hi ${customer.customerFirstName || 'there'},
 

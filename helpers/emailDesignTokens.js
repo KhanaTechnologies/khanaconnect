@@ -76,6 +76,26 @@ function sanitizeHexColor(value, fallback) {
   return fallback;
 }
 
+function darkenHex(hex, factor = 0.52) {
+  const normalized = String(hex || '').replace('#', '').trim();
+  if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return EMAIL_TOKENS.brand.primaryDark;
+  const r = Math.max(0, Math.min(255, Math.round(parseInt(normalized.slice(0, 2), 16) * factor)));
+  const g = Math.max(0, Math.min(255, Math.round(parseInt(normalized.slice(2, 4), 16) * factor)));
+  const b = Math.max(0, Math.min(255, Math.round(parseInt(normalized.slice(4, 6), 16) * factor)));
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+}
+
+function buildBrandGradient(primaryColor) {
+  const primary = sanitizeHexColor(primaryColor, EMAIL_TOKENS.brand.primary);
+  const dark = darkenHex(primary);
+  return `linear-gradient(to right, ${EMAIL_TOKENS.brand.primaryDeep} 0%, ${dark} 45%, ${primary} 100%)`;
+}
+
+function buildBrandGradientFallback(primaryColor) {
+  const primary = sanitizeHexColor(primaryColor, EMAIL_TOKENS.brand.primary);
+  return darkenHex(primary);
+}
+
 /**
  * Resolve client email brand — Khana layout with client logo + accent color.
  * @param {object} client - Client doc or subset
@@ -169,6 +189,9 @@ module.exports = {
   EMAIL_TOKENS,
   escapeHtml,
   sanitizeHexColor,
+  darkenHex,
+  buildBrandGradient,
+  buildBrandGradientFallback,
   resolveKhanaEmailLogoUrl,
   resolveEmailBrand,
   buildNewsletterBrandHeaderHtml,
