@@ -294,6 +294,7 @@ async function attachEmailClient(req, res, next) {
       businessEmailPassword: client.businessEmailPassword,
       emailSignature: client.emailSignature || '',
       emailLogoUrl: client.emailLogoUrl || '',
+      dashboardThemeColor: client.dashboardThemeColor || '',
       imapHost: client.imapHost,
       imapPort: client.imapPort,
       smtpHost: client.smtpHost,
@@ -1607,7 +1608,12 @@ router.post('/newsletter/send', validateClientNewsletter, upload.array('attachme
                     'Each block needs a safe imageUrl (https://, http://, or /public/uploads/...)',
             });
         }
-        const templateOpts = { ...payload, companyName: req.client.companyName };
+        const templateOpts = {
+          ...payload,
+          companyName: req.client.companyName,
+          logoUrl: req.client.emailLogoUrl,
+          dashboardThemeColor: req.client.dashboardThemeColor,
+        };
         htmlBody = buildPromotionalTemplateOneHtml(templateOpts);
         textBody = text || buildPromotionalTemplateOneText(templateOpts);
     } else if (htmlBody) {
@@ -2267,11 +2273,14 @@ router.get('/subscribers/export', validateClient, wrapRoute(async (req, res) => 
  * GET /branding — current transactional email logo for this client
  */
 router.get('/branding', validateClient, wrapRoute(async (req, res) => {
-    const doc = await Client.findOne({ clientID: req.client.clientID }).select('emailLogoUrl companyName');
+    const doc = await Client.findOne({ clientID: req.client.clientID }).select(
+        'emailLogoUrl companyName dashboardThemeColor'
+    );
     res.json({
         ok: true,
         emailLogoUrl: (doc?.emailLogoUrl || '').trim(),
         companyName: doc?.companyName || req.client.companyName || '',
+        dashboardThemeColor: (doc?.dashboardThemeColor || '').trim(),
     });
 }));
 

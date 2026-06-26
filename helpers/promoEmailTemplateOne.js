@@ -4,6 +4,13 @@
  */
 
 const { escapeHtml } = require('./signatureHtml');
+const {
+  EMAIL_TOKENS,
+  buildNewsletterBrandHeaderHtml,
+  buildNewsletterKhanaAttributionHtml,
+  buildUnsubscribeFooterRowHtml,
+  resolveEmailBrand,
+} = require('./emailDesignTokens');
 
 const MAX_BLOCKS = 40;
 
@@ -42,7 +49,6 @@ function buildPromotionalTemplateOneHtml(opts = {}) {
   const headline = escapeHtml(String(opts.headline || '').slice(0, 200));
   const ctaUrl = opts.ctaUrl && isAllowedLinkUrl(opts.ctaUrl) ? String(opts.ctaUrl).trim() : '';
   const ctaLabel = escapeHtml(String(opts.ctaLabel || 'Shop deals').slice(0, 120));
-  const company = escapeHtml(String(opts.companyName || '').slice(0, 120));
   const introHtmlRaw =
     typeof opts.introHtml === 'string' && opts.introHtml.trim() ? opts.introHtml.trim().slice(0, 8000) : '';
   const introHtml = introHtmlRaw
@@ -71,23 +77,31 @@ function buildPromotionalTemplateOneHtml(opts = {}) {
 
   const ctaRow =
     ctaUrl && ctaLabel
-      ? `<tr><td style="padding:16px 12px;text-align:center;font-family:Helvetica Neue,Helvetica,Arial,sans-serif">
-  <a href="${escapeHtml(ctaUrl)}" target="_blank" rel="noopener noreferrer" style="color:#0f79bf;font-size:16px;font-weight:bold;text-decoration:underline">${ctaLabel}</a>
+      ? `<tr><td style="padding:16px 12px;text-align:center;font-family:${EMAIL_TOKENS.font.emailSans}">
+  <a href="${escapeHtml(ctaUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 28px;background:${EMAIL_TOKENS.brand.primary};color:#fff;font-size:16px;font-weight:bold;text-decoration:none;border-radius:${EMAIL_TOKENS.layout.buttonRadius}">${ctaLabel}</a>
 </td></tr>`
       : '';
 
   const footerHtml = footerLines.length
-    ? `<tr><td style="padding:16px 12px 24px;text-align:center;font-family:Helvetica Neue,Helvetica,Arial,sans-serif;font-size:11px;line-height:1.6;color:#555">
+    ? `<tr><td style="padding:16px 12px 8px;text-align:center;font-family:${EMAIL_TOKENS.font.emailSans};font-size:11px;line-height:1.6;color:${EMAIL_TOKENS.color.textMuted}">
   ${footerLines.map((l) => `<p style="margin:6px 0">${l}</p>`).join('')}
 </td></tr>`
     : '';
 
   const headBlock = headline
-    ? `<tr><td style="padding:12px 16px 0;text-align:center;font-family:Helvetica Neue,Helvetica,Arial,sans-serif;font-size:18px;font-weight:700;color:#111">${headline}</td></tr>`
+    ? `<tr><td style="padding:12px 16px 0;text-align:center;font-family:${EMAIL_TOKENS.font.emailSans};font-size:18px;font-weight:700;color:${EMAIL_TOKENS.color.textStrong}">${headline}</td></tr>`
     : '';
   const introRow = introHtml
-    ? `<tr><td style="padding:12px 18px 0;text-align:center;font-family:Helvetica Neue,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;color:#333">${introHtml}</td></tr>`
+    ? `<tr><td style="padding:12px 18px 0;text-align:center;font-family:${EMAIL_TOKENS.font.emailSans};font-size:15px;line-height:1.5;color:${EMAIL_TOKENS.color.textBody}">${introHtml}</td></tr>`
     : '';
+
+  const brand = resolveEmailBrand({
+    companyName: opts.companyName,
+    logoUrl: opts.logoUrl,
+    dashboardThemeColor: opts.dashboardThemeColor,
+  });
+  const brandHeader = buildNewsletterBrandHeaderHtml(brand);
+  const khanaFooter = buildNewsletterKhanaAttributionHtml();
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -95,18 +109,19 @@ function buildPromotionalTemplateOneHtml(opts = {}) {
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title></title>
-<style type="text/css">body{margin:0;padding:0;background:#ffffff}a img{border:0}</style>
+<style type="text/css">body{margin:0;padding:0;background:${EMAIL_TOKENS.color.outerBg}}a img{border:0}</style>
 </head>
-<body style="margin:0;padding:0;background:#ffffff;-webkit-text-size-adjust:none">
+<body style="margin:0;padding:0;background:${EMAIL_TOKENS.color.outerBg};-webkit-text-size-adjust:none">
 <div style="display:none;font-size:1px;color:#ffffff;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden">${preheader}</div>
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#ffffff"><tr><td align="center" style="padding:0">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;margin:0 auto;background:#ffffff">
-${company ? `<tr><td style="padding:14px 12px 6px;text-align:center;font-family:Helvetica Neue,Helvetica,Arial,sans-serif;font-size:13px;color:#666">${company}</td></tr>` : ''}
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${EMAIL_TOKENS.color.outerBg}"><tr><td align="center" style="padding:24px 12px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:${EMAIL_TOKENS.layout.newsletterMaxWidth}px;margin:0 auto;background:${EMAIL_TOKENS.color.cardBg};border-radius:${EMAIL_TOKENS.layout.radius};overflow:hidden">
+${brandHeader}
 ${headBlock}
 ${introRow}
 ${blockRows}
 ${ctaRow}
 ${footerHtml}
+${khanaFooter}
 </table>
 </td></tr></table>
 </body>

@@ -5,6 +5,10 @@ const Email = require('../models/Email');
 const EmailSubscriber = require('../models/emailSubscriber');
 const NewsletterOpen = require('../models/NewsletterOpen');
 const { mergeEmailSignature, escapeHtml } = require('./signatureHtml');
+const {
+  buildNewsletterKhanaAttributionHtml,
+  buildUnsubscribeFooterRowHtml,
+} = require('./emailDesignTokens');
 const { resolvePublicBaseUrl, resolveApiBasePath } = require('./publicBaseUrl');
 const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('./mailHost');
 
@@ -89,28 +93,22 @@ class NewsletterService {
     return (
       /\{\{\s*unsubscribe_(url|link)\s*\}\}/i.test(value) ||
       /\/email\/newsletter\/unsubscribe/i.test(value) ||
-      /data-khana-unsubscribe/i.test(value)
+      /data-khana-unsubscribe/i.test(value) ||
+      /data-khana-attribution/i.test(value) ||
+      /data-khana-brand-header/i.test(value)
     );
   }
 
   static buildUnsubscribeFooterHtml(link) {
-    return `
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" data-khana-unsubscribe="true">
-  <tr>
-    <td style="padding:24px;text-align:center;border-top:1px solid #e5e7eb;">
-      <p style="margin:0 0 12px;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.5;color:#9ca3af;">
-        You received this email because you are subscribed to our newsletter.
-      </p>
-      <a href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:10px 20px;background:#f3f4f6;color:#374151;text-decoration:none;font-family:Arial,Helvetica,sans-serif;font-size:13px;font-weight:600;border-radius:6px;border:1px solid #d1d5db;">
-        Unsubscribe
-      </a>
-    </td>
-  </tr>
-</table>`;
+    return `${buildNewsletterKhanaAttributionHtml()}${buildUnsubscribeFooterRowHtml(link)}`;
   }
 
   static appendUnsubscribeFooterHtml(html, link) {
     const footer = this.buildUnsubscribeFooterHtml(link);
+    const innerTableClose = /<\/table>\s*<\/td>\s*<\/tr>\s*<\/table>\s*<\/body>/i;
+    if (innerTableClose.test(html)) {
+      return html.replace(innerTableClose, `${footer}</table></td></tr></table></body>`);
+    }
     if (/<\/body>/i.test(html)) {
       return html.replace(/<\/body>/i, `${footer}</body>`);
     }

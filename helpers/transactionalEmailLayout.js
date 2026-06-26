@@ -4,17 +4,16 @@
  */
 
 const { resolvePublicBaseUrl } = require('./publicBaseUrl');
+const { EMAIL_TOKENS, resolveKhanaEmailLogoUrl: resolveLogoFromTokens } = require('./emailDesignTokens');
 
-const KHANA_EMAIL_LOGO_PATH = '/public/email/khana-logo-white.png';
+const KHANA_EMAIL_LOGO_PATH = EMAIL_TOKENS.brand.logoPath;
 
 function resolveKhanaEmailLogoUrl() {
-  const override = process.env.KHANA_EMAIL_LOGO_URL;
-  if (override && String(override).trim()) return String(override).trim();
-  return `${resolvePublicBaseUrl()}${KHANA_EMAIL_LOGO_PATH}`;
+  return resolveLogoFromTokens();
 }
 
-const GRADIENT_CSS = 'linear-gradient(to right, #0f172a 0%, #1e3a5f 45%, #2563eb 100%)';
-const GRADIENT_FALLBACK = '#1e3a5f';
+const GRADIENT_CSS = EMAIL_TOKENS.brand.gradientCss;
+const GRADIENT_FALLBACK = EMAIL_TOKENS.brand.gradientFallback;
 
 function escapeHtml(s) {
   if (s == null) return '';
@@ -26,7 +25,7 @@ function escapeHtml(s) {
 }
 
 function renderBannerBrand({ brandName, logoUrl, showKhanaLogo }) {
-  const brand = escapeHtml(brandName || 'Khana Technologies');
+  const brand = escapeHtml(brandName || EMAIL_TOKENS.brand.name);
   const logo = logoUrl || (showKhanaLogo === true ? resolveKhanaEmailLogoUrl() : '');
 
   if (logo) {
@@ -62,7 +61,7 @@ function buildKhanaEmail({
   const pageTitle = escapeHtml(title || headline || 'Notification');
   const headlineText = escapeHtml(headline || title || 'Notification');
   const bannerBrand = renderBannerBrand({ brandName, logoUrl, showKhanaLogo });
-  const defaultFooter = `Copyright © ${new Date().getFullYear()} ${escapeHtml(brandName || 'Khana Technologies')}`;
+  const defaultFooter = `Copyright © ${new Date().getFullYear()} ${escapeHtml(brandName || EMAIL_TOKENS.brand.name)}`;
   const footer = footerHtml || defaultFooter;
 
   return `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
@@ -73,7 +72,7 @@ function buildKhanaEmail({
   <title>${pageTitle}</title>
   <!--[if (mso)|(mso 16)]><style type="text/css">a { text-decoration: none; }</style><![endif]-->
 </head>
-<body style="margin:0;padding:0;-webkit-font-smoothing:antialiased;background:#fafafa;" bgcolor="#fafafa">
+<body style="margin:0;padding:0;-webkit-font-smoothing:antialiased;background:${EMAIL_TOKENS.color.pageBg};" bgcolor="${EMAIL_TOKENS.color.pageBg}">
   <span style="display:none;max-height:0;overflow:hidden;mso-hide:all;">${escapeHtml(preheader)}</span>
   <center>
     <table role="presentation" border="0" align="center" cellpadding="0" cellspacing="0" width="100%" style="width:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#404d57;font-size:16px;border-spacing:0;mso-table-lspace:0pt;mso-table-rspace:0pt;">
