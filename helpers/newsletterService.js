@@ -171,10 +171,14 @@ class NewsletterService {
       .lean();
 
     return subscribers.map((sub) => ({
+      id: sub._id?.toString() || sub.email,
+      email: sub.email,
       address: sub.email,
       name: sub.name,
       dateSubscribed: sub.dateSubscribed,
-      isActive: sub.isActive,
+      subscribedAt: sub.dateSubscribed,
+      isActive: sub.isActive !== false,
+      subscribed: sub.isActive !== false,
     }));
   }
 
@@ -182,6 +186,14 @@ class NewsletterService {
     const query = { clientID: clientId };
     if (activeOnly) query.isActive = true;
     return EmailSubscriber.countDocuments(query);
+  }
+
+  static async reactivateInactiveSubscribers(clientId) {
+    const result = await EmailSubscriber.updateMany(
+      { clientID: clientId, isActive: false },
+      { $set: { isActive: true } }
+    );
+    return result.modifiedCount;
   }
 
   static async addSubscribers(clientId, subscribers) {

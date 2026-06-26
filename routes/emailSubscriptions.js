@@ -26,8 +26,17 @@ const validateToken = (req, res, next) => {
 router.post('/subscribe', validateToken, wrapRoute(async (req, res) => {
     const { email, name } = req.body;
     const clientID = req.clientID;
-    const subscription = new EmailSubscriber({ email, name, clientID });
-    await subscription.save();
+    const normalizedEmail = String(email || '').toLowerCase().trim();
+
+    await EmailSubscriber.findOneAndUpdate(
+        { email: normalizedEmail, clientID },
+        {
+            $set: { name: name || '', clientID, isActive: true },
+            $setOnInsert: { dateSubscribed: new Date() },
+        },
+        { upsert: true, new: true }
+    );
+
     res.status(201).send('Subscription successful.');
 }));
 

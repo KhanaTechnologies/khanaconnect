@@ -1706,16 +1706,17 @@ router.post('/newsletter/send', validateClientNewsletter, upload.array('attachme
 // GET SUBSCRIBERS LIST
 router.get('/newsletter/subscribers', validateClientNewsletter, wrapRoute(async (req, res) => {
     try {
-        const { page = 1, limit = 50, activeOnly = true } = req.query;
+        const { page = 1, limit = 50, activeOnly = 'false' } = req.query;
         const skip = (page - 1) * limit;
+        const onlyActive = activeOnly === 'true' || activeOnly === true;
 
         const subscribers = await NewsletterService.getSubscribers(req.client.clientID, {
             skip: parseInt(skip),
             limit: parseInt(limit),
-            activeOnly: activeOnly !== 'false'
+            activeOnly: onlyActive
         });
 
-        const total = await NewsletterService.getSubscriberCount(req.client.clientID, activeOnly !== 'false');
+        const total = await NewsletterService.getSubscriberCount(req.client.clientID, onlyActive);
 
         res.json({
             ok: true,
@@ -1875,6 +1876,27 @@ router.get('/newsletter/subscribers/stats', validateClientNewsletter, wrapRoute(
             ok: false,
             message: 'Failed to get subscriber statistics',
             error: error.message
+        });
+    }
+}));
+
+// REACTIVATE INACTIVE SUBSCRIBERS (legacy imports / old default isActive:false)
+router.post('/newsletter/subscribers/reactivate', validateClientNewsletter, wrapRoute(async (req, res) => {
+    try {
+        const reactivated = await NewsletterService.reactivateInactiveSubscribers(req.client.clientID);
+
+        res.json({
+            ok: true,
+            data: { reactivated },
+            message: reactivated > 0
+                ? `${reactivated} subscriber(s) marked as active`
+                : 'No inactive subscribers to reactivate',
+        });
+    } catch (error) {
+        res.status(500).json({
+            ok: false,
+            message: 'Failed to reactivate subscribers',
+            error: error.message,
         });
     }
 }));
