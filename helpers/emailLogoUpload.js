@@ -21,9 +21,10 @@ async function uploadEmailLogoImage(buffer, originalname, clientID, req, mimetyp
     originalname,
     primaryColor: options.primaryColor,
     matteColor: options.matteColor,
+    mode: 'storage',
   });
-  const flattened = prepared !== buffer;
-  const ext = safeLogoExt(originalname, mimetype, flattened);
+  const processed = prepared !== buffer;
+  const ext = safeLogoExt(originalname, mimetype, processed);
   const safeId = String(clientID || 'client').replace(/[^a-zA-Z0-9_-]/g, '_');
   const fileName = `${safeId}-${Date.now()}${ext}`;
   const repoPath = `public/uploads/email-logos/${fileName}`;

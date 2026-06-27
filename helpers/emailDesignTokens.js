@@ -6,7 +6,7 @@
 const { resolvePublicBaseUrl } = require('./publicBaseUrl');
 
 const KHANA_EMAIL_LOGO_PATH = '/public/email/khana-logo-white.png';
-const KHANA_EMAIL_LOGO_VERSION = '2';
+const KHANA_EMAIL_LOGO_VERSION = '3';
 
 const EMAIL_TOKENS = {
   brand: {
@@ -95,6 +95,48 @@ function buildBrandGradient(primaryColor) {
 function buildBrandGradientFallback(primaryColor) {
   const primary = sanitizeHexColor(primaryColor, EMAIL_TOKENS.brand.primary);
   return darkenHex(primary);
+}
+
+function lerpHexColor(fromHex, toHex, amount) {
+  const t = Math.max(0, Math.min(1, Number(amount) || 0));
+  const from = parseHexRgb(fromHex);
+  const to = parseHexRgb(toHex);
+  if (!from || !to) return sanitizeHexColor(toHex, fromHex);
+  const mix = (a, b) => Math.round(a + (b - a) * t);
+  const r = mix(from.r, to.r);
+  const g = mix(from.g, to.g);
+  const b = mix(from.b, to.b);
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+}
+
+function parseHexRgb(hex) {
+  const normalized = String(hex || '').replace('#', '').trim();
+  if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return null;
+  return {
+    r: parseInt(normalized.slice(0, 2), 16),
+    g: parseInt(normalized.slice(2, 4), 16),
+    b: parseInt(normalized.slice(4, 6), 16),
+  };
+}
+
+function brandGradientColorAt(position, primaryColor) {
+  const primary = sanitizeHexColor(primaryColor, EMAIL_TOKENS.brand.primary);
+  const dark = darkenHex(primary);
+  const deep = EMAIL_TOKENS.brand.primaryDeep;
+  const t = Math.max(0, Math.min(1, Number(position) || 0));
+  if (t <= 0.45) {
+    return lerpHexColor(deep, dark, t / 0.45);
+  }
+  return lerpHexColor(dark, primary, (t - 0.45) / 0.55);
+}
+
+/** Horizontal slice of the banner gradient behind a centered logo image. */
+function bannerLogoGradientSlice(primaryColor, bannerWidth, logoDisplayWidth) {
+  const width = Number(bannerWidth) || EMAIL_TOKENS.layout.transactionalMaxWidth;
+  const logoWidth = Number(logoDisplayWidth) || 200;
+  const start = (width - logoWidth) / (2 * width);
+  const end = (width + logoWidth) / (2 * width);
+  return { start, end };
 }
 
 /**
@@ -193,6 +235,9 @@ module.exports = {
   darkenHex,
   buildBrandGradient,
   buildBrandGradientFallback,
+  brandGradientColorAt,
+  bannerLogoGradientSlice,
+  lerpHexColor,
   resolveKhanaEmailLogoUrl,
   resolveEmailBrand,
   buildNewsletterBrandHeaderHtml,
