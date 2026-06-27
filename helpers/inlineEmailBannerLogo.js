@@ -72,8 +72,9 @@ async function fetchRemoteLogoBuffer(src) {
 }
 
 /**
- * Inline banner logos as transparent PNG cid attachments.
- * The gradient banner td shows through — same as the Email Center browser preview.
+ * Inline banner logos as cid attachments.
+ * Logos are flattened onto the banner gradient slice so Gmail/Outlook do not
+ * render gray/black boxes behind transparent PNGs.
  */
 async function inlineEmailBannerLogosAsync(html, baseAttachments, options = {}) {
   const attachments = Array.isArray(baseAttachments) ? [...baseAttachments] : [];
@@ -127,6 +128,11 @@ async function inlineEmailBannerLogosAsync(html, baseAttachments, options = {}) 
     try {
       content = await prepareEmailBannerLogo(content, {
         originalname,
+        mimetype: contentType,
+        mode: 'email',
+        primaryColor: options.primaryColor,
+        bannerWidth: options.bannerWidth,
+        logoDisplayWidth: options.logoDisplayWidth,
       });
       contentType = 'image/png';
       filename = `${path.parse(filename).name}.png`;
