@@ -74,12 +74,12 @@ function applyRevenueToolsAddOn(selections, tierId, addOnLines, monthlyAddOns) {
   return monthlyAddOns + monthly;
 }
 
-function applyCustomSystemAddOn(selections, addOnLines) {
-  let monthlyAddOns = 0;
+/** Once-off custom setup fees only — monthly partnership is the base fee when custom is selected. */
+function applyCustomSystemSetup(selections, addOnLines) {
   let setupAddOns = 0;
 
   if (!selections.needsCustom) {
-    return { monthlyAddOns, setupAddOns };
+    return setupAddOns;
   }
 
   setupAddOns += PLAN_BUILDER_PRICES.customSystemSetup;
@@ -96,13 +96,14 @@ function applyCustomSystemAddOn(selections, addOnLines) {
     });
   }
 
-  monthlyAddOns += PLAN_BUILDER_PRICES.customSystemMonthly;
-  addOnLines.push({
-    name: 'Custom system — monthly',
-    monthly: PLAN_BUILDER_PRICES.customSystemMonthly,
-  });
+  return setupAddOns;
+}
 
-  return { monthlyAddOns, setupAddOns };
+function resolveMonthlyPartnershipFee(tier, selections) {
+  if (selections.needsCustom) {
+    return PLAN_BUILDER_PRICES.customSystemMonthly;
+  }
+  return tier.monthlyFee ?? 0;
 }
 
 function buildCustomEstimateNote(selections) {
@@ -135,16 +136,17 @@ function calculatePlanEstimate(selections, pricingConfig) {
 
   if (customOnly) {
     const addOnLines = [];
-    const customPricing = applyCustomSystemAddOn(selections, addOnLines);
+    const setupAddOns = applyCustomSystemSetup(selections, addOnLines);
     const seats = calcTeamSeatCosts(selections, 'starter', planBuilder);
+    const monthlyFee = PLAN_BUILDER_PRICES.customSystemMonthly;
 
     return {
       tierId: 'custom',
-      tierName: 'Custom scope',
+      tierName: 'Custom system',
       setupFee: 0,
-      monthlyFee: 0,
-      totalSetup: customPricing.setupAddOns,
-      totalMonthly: customPricing.monthlyAddOns + seats.seatMonthly,
+      monthlyFee,
+      totalSetup: setupAddOns,
+      totalMonthly: monthlyFee + seats.seatMonthly,
       note: buildCustomEstimateNote(selections),
       customDisclaimer: CUSTOM_SYSTEM_DISCLAIMER,
       addOnLines,
@@ -207,9 +209,7 @@ function calculatePlanEstimate(selections, pricingConfig) {
     }
   }
 
-  const customPricing = applyCustomSystemAddOn(selections, addOnLines);
-  monthlyAddOns += customPricing.monthlyAddOns;
-  setupAddOns += customPricing.setupAddOns;
+  setupAddOns += applyCustomSystemSetup(selections, addOnLines);
 
   monthlyAddOns = applyRevenueToolsAddOn(selections, tierId, addOnLines, monthlyAddOns);
 
@@ -223,11 +223,12 @@ function calculatePlanEstimate(selections, pricingConfig) {
   const seats = calcTeamSeatCosts(selections, tier.id, planBuilder);
 
   const setupFee = tier.setupFee ?? 0;
-  const monthlyFee = tier.monthlyFee ?? 0;
+  const monthlyFee = resolveMonthlyPartnershipFee(tier, selections);
+  const tierName = selections.needsCustom ? `${tier.name} + custom system` : tier.name;
 
   return {
     tierId: tier.id,
-    tierName: tier.name,
+    tierName,
     setupFee,
     monthlyFee,
     includedSeats: seats.included,
@@ -251,5 +252,6 @@ module.exports = {
   calculatePlanEstimate,
   resolveTierId,
   applyRevenueToolsAddOn,
-  applyCustomSystemAddOn,
+  applyCustomSystemSetup,
+  resolveMonthlyPartnershipFee,
 };

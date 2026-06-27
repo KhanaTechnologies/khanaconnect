@@ -1,6 +1,6 @@
 const { DEFAULT_PLAN_BUILDER, mergePlanBuilderConfig } = require('./planBuilderPricing');
 
-const PRICING_CONFIG_VERSION = 8;
+const PRICING_CONFIG_VERSION = 9;
 
 /** Default partnership pricing for the SA market. */
 const DEFAULT_PARTNERSHIP_PRICING = {
@@ -166,6 +166,17 @@ const DEFAULT_PARTNERSHIP_PRICING = {
       sortOrder: 3,
     },
     {
+      id: 'custom-system',
+      name: 'Custom system development',
+      description:
+        'Reasonable bespoke module on Khana — R3,000 once-off setup and R450/mo partnership (this is your monthly base when custom is included, not on top of Starter/Launch)',
+      monthlyFee: 450,
+      onceOffFee: 3000,
+      pricingType: 'monthly',
+      active: true,
+      sortOrder: 4,
+    },
+    {
       id: 'custom-integration',
       name: 'Custom requested integration',
       description: 'Third-party API, ERP, accounting, or payment gateway work (within reason)',
@@ -202,10 +213,10 @@ const DEFAULT_PARTNERSHIP_PRICING = {
       sortOrder: 3,
     },
     {
-      question: 'Is there a minimum contract term?',
+      question: 'How does custom system pricing work?',
       answer:
-        'We typically partner on a 12-month basis with monthly billing. Shorter terms can be discussed for specific projects.',
-      sortOrder: 4,
+        'Custom development is R3,000 once-off setup plus R450/mo partnership fee. That R450/mo is your platform base while the custom module is included — not added on top of Starter or Launch monthly. Optional private standalone API is R5,000 once-off extra. Scope must be reasonable for us to build and support.',
+      sortOrder: 5,
     },
   ],
   planBuilder: {
