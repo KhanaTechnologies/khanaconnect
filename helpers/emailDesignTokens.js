@@ -6,6 +6,7 @@
 const { resolvePublicBaseUrl } = require('./publicBaseUrl');
 
 const KHANA_EMAIL_LOGO_PATH = '/public/email/khana-logo-white.png';
+const KHANA_EMAIL_LOGO_VERSION = '2';
 
 const EMAIL_TOKENS = {
   brand: {
@@ -67,7 +68,7 @@ function escapeHtml(s) {
 function resolveKhanaEmailLogoUrl() {
   const override = process.env.KHANA_EMAIL_LOGO_URL;
   if (override && String(override).trim()) return String(override).trim();
-  return `${resolvePublicBaseUrl()}${KHANA_EMAIL_LOGO_PATH}`;
+  return `${resolvePublicBaseUrl()}${KHANA_EMAIL_LOGO_PATH}?v=${KHANA_EMAIL_LOGO_VERSION}`;
 }
 
 function sanitizeHexColor(value, fallback) {

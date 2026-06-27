@@ -5,6 +5,7 @@ const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../help
 const { diffBookingForCustomer } = require('./bookingEmailHelpers');
 const { mergeEmailSignature } = require('../helpers/signatureHtml');
 const { inlineSignatureImages } = require('../helpers/mailer');
+const { inlineEmailBannerLogosAsync } = require('../helpers/inlineEmailBannerLogo');
 const { enqueueOutboundEmail } = require('../queues/outboundEmailQueue');
 const { serializeMailOptions, deserializeMailOptions } = require('../helpers/mailQueueSerialize');
 const { isNonRetryableSmtpError, isRetryableSmtpError } = require('../helpers/smtpErrors');
@@ -64,13 +65,21 @@ function wrapBranding(formattedClientName, branding = '') {
  * Same pipeline as the mailbox composer: merge HTML signature, then inline uploaded
  * `/public/uploads/signatures/*` images as cid: parts so Gmail / Outlook / Apple Mail render them.
  */
-function buildTransactionalMailParts(html, text, emailSignature) {
+async function buildTransactionalMailParts(html, text, emailSignature, options = {}) {
     const merged = mergeEmailSignature(
         html || '',
         text || '',
         String(emailSignature == null ? '' : emailSignature).trim()
     );
-    const { html: htmlOut, attachments } = inlineSignatureImages(merged.html, []);
+    const { html: withSignatures, attachments: sigAttachments } = inlineSignatureImages(
+        merged.html,
+        []
+    );
+    const { html: htmlOut, attachments } = await inlineEmailBannerLogosAsync(
+        withSignatures,
+        sigAttachments,
+        options
+    );
     const textOut =
         merged.text ||
         (htmlOut || '')
@@ -82,8 +91,8 @@ function buildTransactionalMailParts(html, text, emailSignature) {
 }
 
 /** Spread into nodemailer `sendMail` options: html, text, attachments (signature images as cid). */
-function mimeFrom(html, text, emailSignature) {
-    const p = buildTransactionalMailParts(html, text, emailSignature);
+async function mimeFrom(html, text, emailSignature, options = {}) {
+    const p = await buildTransactionalMailParts(html, text, emailSignature, options);
     return { html: p.html, text: p.text, attachments: p.attachments || [] };
 }
 
@@ -336,7 +345,7 @@ async function sendBookingUpdateNotificationEmail(booking, changeRows, bEmail, B
             from: decrypt(bEmail),
             to: recipient,
             subject: `Booking updated — ${formattedDate}`,
-            ...mimeFrom(emailContent, '', emailSignature),
+            ...(await mimeFrom(emailContent, '', emailSignature)),
         },
         5,
         1600,
@@ -365,7 +374,7 @@ async function sendBookingEmailReassignedNotice(prevEmail, booking, bEmail, BEPa
             from: decrypt(bEmail),
             to: prevEmail,
             subject: 'Booking contact email updated',
-            ...mimeFrom(html, '', emailSignature),
+            ...(await mimeFrom(html, '', emailSignature)),
         },
         5,
         1600,
@@ -427,7 +436,7 @@ async function sendBookingStatementEmail(booking, bEmail, BEPass, clientName, em
             from: decrypt(bEmail),
             to: booking.customerEmail,
             subject: `Your booking summary — ${formattedDate}`,
-            ...mimeFrom(emailContent, '', emailSignature),
+            ...(await mimeFrom(emailContent, '', emailSignature)),
         },
         5,
         1600,
@@ -471,7 +480,7 @@ async function sendBookingConfirmationEmail(booking, bEmail, BEPass, clientName,
         { ...wrapBranding(formattedClientName, branding) }
     );
 
-    const parts = buildTransactionalMailParts(emailContent, '', emailSignature);
+    const parts = await buildTransactionalMailParts(emailContent, '', emailSignature);
     const qm = qBooking(booking);
     await sendWithRetry(
         () => createTransporter(bEmail, BEPass),
@@ -547,7 +556,7 @@ async function sendBookingReminderEmail(booking, bEmail, BEPass, clientName, ema
             from: decrypt(bEmail), // Decrypt for the from field
             to: booking.customerEmail,
             subject: `Reminder: Your Booking Tomorrow - ${formattedDate}`,
-            ...mimeFrom(emailContent, '', emailSignature),
+            ...(await mimeFrom(emailContent, '', emailSignature)),
         },
         5,
         1600,
@@ -597,7 +606,7 @@ async function sendPaymentConfirmationEmail(booking, bEmail, BEPass, clientName,
             from: decrypt(bEmail), // Decrypt for the from field
             to: booking.customerEmail,
             subject: `Payment Confirmed - Booking ${formattedDate}`,
-            ...mimeFrom(emailContent, '', emailSignature),
+            ...(await mimeFrom(emailContent, '', emailSignature)),
         },
         5,
         1600,
@@ -644,7 +653,7 @@ async function sendBookingCancellationEmail(booking, bEmail, BEPass, clientName,
             from: decrypt(bEmail), // Decrypt for the from field
             to: booking.customerEmail,
             subject: `Booking Cancelled - ${formattedDate}`,
-            ...mimeFrom(emailContent, '', emailSignature),
+            ...(await mimeFrom(emailContent, '', emailSignature)),
         },
         5,
         1600,
@@ -695,7 +704,7 @@ async function sendReschedulingEmail(booking, oldDetails, bEmail, BEPass, client
             from: decrypt(bEmail), // Decrypt for the from field
             to: booking.customerEmail,
             subject: `Booking Rescheduled - ${newFormattedDate}`,
-            ...mimeFrom(emailContent, '', emailSignature),
+            ...(await mimeFrom(emailContent, '', emailSignature)),
         },
         5,
         1600,
@@ -794,7 +803,7 @@ async function sendOrderConfirmationEmail(
         }
     );
 
-    const parts = buildTransactionalMailParts(emailContent, '', emailSignature);
+    const parts = await buildTransactionalMailParts(emailContent, '', emailSignature);
     const qOrder = qTenant(tenantClientId);
     // Send to client and business
     await sendWithRetry(
@@ -876,7 +885,7 @@ async function sendOrderStatusUpdateEmail(
         { ...wrapBranding(formattedClientName, branding) }
     );
 
-    const parts = buildTransactionalMailParts(emailContent, '', emailSignature);
+    const parts = await buildTransactionalMailParts(emailContent, '', emailSignature);
     const qOrder = qTenant(tenantClientId);
     await sendWithRetry(
         () => createTransporter(bEmail, BEPass),
@@ -955,7 +964,7 @@ async function sendAccommodationConfirmationEmail(booking, bEmail, BEPass, clien
         { ...wrapBranding(formattedClientName, branding) }
     );
 
-    const parts = buildTransactionalMailParts(emailContent, '', emailSignature);
+    const parts = await buildTransactionalMailParts(emailContent, '', emailSignature);
     const qm = qBooking(booking);
     await sendWithRetry(
         () => createTransporter(bEmail, BEPass),
@@ -1036,7 +1045,7 @@ async function sendMixedBookingConfirmationEmail(booking, bEmail, BEPass, client
             from: decryptedEmail,
             to: booking.customerEmail,
             subject: `Booking Confirmation - Services & Accommodation`,
-            ...mimeFrom(emailContent, '', emailSignature),
+            ...(await mimeFrom(emailContent, '', emailSignature)),
         },
         5,
         1600,
@@ -1083,7 +1092,7 @@ async function sendResetPasswordEmail(
             from: decryptedEmail,
             to: clientEmail,
             subject: 'Reset Password',
-            ...mimeFrom(emailContent, '', emailSignature),
+            ...(await mimeFrom(emailContent, '', emailSignature)),
         },
         5,
         1600,
@@ -1135,11 +1144,11 @@ async function sendTeamDashboardResetEmail({
       from: decryptedFrom,
       to: memberEmail,
       subject: `Reset your ${companyName} dashboard password`,
-      ...mimeFrom(
+      ...(await mimeFrom(
         emailContent,
         `Reset your dashboard password for ${companyName} (Client ID: ${clientID}). Link expires in 1 hour: ${resetLink}`,
         emailSignature
-      ),
+      )),
     },
     5,
     1600,
@@ -1197,11 +1206,11 @@ async function sendTeamDashboardInviteEmail({
       from: decryptedFrom,
       to: memberEmail,
       subject: `You're invited to ${companyName}'s Khana dashboard`,
-      ...mimeFrom(
+      ...(await mimeFrom(
         emailContent,
         `You're invited to ${companyName}'s dashboard (Client ID: ${clientID}). Accept your invite: ${inviteLink}`,
         emailSignature
-      ),
+      )),
     },
     5,
     1600,
@@ -1255,11 +1264,11 @@ async function sendTeamActivityNotifyEmail({
       from: decryptedFrom,
       to: ownerEmail,
       subject: `[${companyName}] ${categoryLabel}: ${summary}`.slice(0, 120),
-      ...mimeFrom(
+      ...(await mimeFrom(
         emailContent,
         `${categoryLabel}: ${summary}\n\nView log: ${activityUrl}`,
         emailSignature
-      ),
+      )),
     },
     5,
     1600,
@@ -1337,8 +1346,8 @@ async function sendContactUsEmail(contactData, bEmail, BEPass, clientName, email
         { ...wrapBranding(formattedClientName, branding) }
     );
 
-    const businessBody = mimeFrom(businessEmailContent, '', emailSignature);
-    const autoReplyBody = mimeFrom(autoReplyContent, '', emailSignature);
+    const businessBody = await mimeFrom(businessEmailContent, '', emailSignature);
+    const autoReplyBody = await mimeFrom(autoReplyContent, '', emailSignature);
 
     // Send notification to business
     await sendWithRetry(
@@ -1401,8 +1410,8 @@ async function sendPlanQuoteEmails({
   const teamHtml = buildPlanQuoteTeamHtml(quote, shareUrl, validUntil);
   const prospectHtml = buildPlanQuoteProspectHtml(quote, shareUrl, validUntil, formattedClientName);
 
-  const teamBody = mimeFrom(teamHtml, '', emailSignature);
-  const prospectBody = mimeFrom(prospectHtml, '', emailSignature);
+  const teamBody = await mimeFrom(teamHtml, '', emailSignature);
+  const prospectBody = await mimeFrom(prospectHtml, '', emailSignature);
 
   await sendWithRetry(
     () => createTransporter(khanaEmail, khanaPass),
@@ -1469,7 +1478,7 @@ async function sendPlanQuoteFollowUpEmail({
   }
 
   const qm = qTenant(tenantClientId);
-  const body = mimeFrom(html, '', emailSignature);
+  const body = await mimeFrom(html, '', emailSignature);
 
   await sendWithRetry(
     () => createTransporter(khanaEmail, khanaPass),
@@ -1511,7 +1520,7 @@ async function sendCheckInReminderEmail(booking, bEmail, BEPass, clientName, ema
             from: decrypt(bEmail),
             to: booking.customerEmail,
             subject: `Check-in reminder — ${checkInDate}`,
-            ...mimeFrom(html, '', emailSignature),
+            ...(await mimeFrom(html, '', emailSignature)),
         },
         5,
         1600,
@@ -1538,7 +1547,7 @@ async function sendCheckOutReminderEmail(booking, bEmail, BEPass, clientName, em
             from: decrypt(bEmail),
             to: booking.customerEmail,
             subject: `Check-out reminder — ${checkOutDate}`,
-            ...mimeFrom(html, '', emailSignature),
+            ...(await mimeFrom(html, '', emailSignature)),
         },
         5,
         1600,
