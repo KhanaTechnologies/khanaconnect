@@ -239,6 +239,18 @@ function buildPlanQuoteProspectHtml(quote, shareUrl, validUntil, companyName) {
   });
 }
 
+function buildPlanQuoteFollowUpHtml({ subject, bodyHtml, firstName }) {
+  return buildKhanaEmail({
+    headline: 'Following up',
+    title: subject,
+    preheader: `A quick follow-up from Khana Technologies, ${firstName}.`,
+    bodyHtml,
+    brandName: 'Khana Technologies',
+    showKhanaLogo: true,
+    footerHtml: PLAN_QUOTE_FOOTER,
+  });
+}
+
 module.exports = {
   QUOTE_VALIDITY_DAYS,
   computeValidUntil,
@@ -246,4 +258,5 @@ module.exports = {
   formatDisplayDate,
   buildPlanQuoteTeamHtml,
   buildPlanQuoteProspectHtml,
+  buildPlanQuoteFollowUpHtml,
 };

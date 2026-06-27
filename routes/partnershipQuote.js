@@ -13,7 +13,10 @@ const {
   isQuoteExpired,
   formatDisplayDate,
 } = require('../helpers/planQuoteEmail');
-const { sendPlanQuoteEmails } = require('../utils/email');
+const { sendPlanQuoteEmails, sendPlanQuoteFollowUpEmail } = require('../utils/email');
+const {
+  listTemplatesForQuote,
+} = require('../helpers/planQuoteResponseTemplates');
 
 const router = express.Router();
 
@@ -72,6 +75,7 @@ function serializeQuote(doc) {
     validUntilLabel: formatDisplayDate(validUntil),
     isExpired: isQuoteExpired(q),
     shareUrl: buildShareUrl(q.quoteId),
+    followUpEmails: q.followUpEmails || [],
     createdAt: q.createdAt,
     updatedAt: q.updatedAt,
   };
@@ -129,6 +133,104 @@ router.delete('/partnership-quotes/:quoteId', authenticateAdmin, wrapRoute(async
     return res.status(404).json({ success: false, error: 'Quote not found' });
   }
   res.json({ success: true, message: 'Plan builder link deleted' });
+}));
+
+/** Admin — list follow-up email templates for a quote */
+router.get('/partnership-quotes/:quoteId/response-templates', authenticateAdmin, wrapRoute(async (req, res) => {
+  const quote = await PartnershipQuote.findOne({ quoteId: req.params.quoteId });
+  if (!quote) {
+    return res.status(404).json({ success: false, error: 'Quote not found' });
+  }
+  const shareUrl = buildShareUrl(quote.quoteId);
+  const validUntil = computeValidUntil(quote);
+  const senderName = process.env.PLAN_QUOTE_SENDER_NAME || 'The Khana team';
+  const templates = listTemplatesForQuote(
+    quote.toObject ? quote.toObject() : quote,
+    shareUrl,
+    validUntil,
+    senderName
+  );
+  res.json({
+    success: true,
+    templates,
+    followUpEmails: quote.followUpEmails || [],
+    prospectEmail: quote.prospectEmail || '',
+    canSend: !!quote.prospectEmail && quote.status === 'submitted',
+  });
+}));
+
+/** Admin — send a follow-up response email to the prospect */
+router.post('/partnership-quotes/:quoteId/send-response', authenticateAdmin, wrapRoute(async (req, res) => {
+  const quote = await PartnershipQuote.findOne({ quoteId: req.params.quoteId });
+  if (!quote) {
+    return res.status(404).json({ success: false, error: 'Quote not found' });
+  }
+  if (!quote.prospectEmail) {
+    return res.status(400).json({
+      success: false,
+      error: 'This prospect has not submitted an email yet.',
+    });
+  }
+
+  const templateId = String(req.body?.templateId || '').trim();
+  if (!templateId) {
+    return res.status(400).json({ success: false, error: 'templateId is required' });
+  }
+
+  const khanaClient = await Client.findOne({ clientID: 'Khana' }).select(
+    'clientID businessEmail businessEmailPassword companyName emailSignature'
+  );
+  if (!khanaClient?.businessEmail) {
+    return res.status(503).json({
+      success: false,
+      error: 'Khana outbound email is not configured.',
+    });
+  }
+
+  const shareUrl = buildShareUrl(quote.quoteId);
+  const validUntil = computeValidUntil(quote);
+  const senderName =
+    String(req.body?.senderName || process.env.PLAN_QUOTE_SENDER_NAME || 'The Khana team').trim() ||
+    'The Khana team';
+
+  let rendered;
+  try {
+    rendered = await sendPlanQuoteFollowUpEmail({
+      quote: quote.toObject ? quote.toObject() : quote,
+      templateId,
+      shareUrl,
+      validUntil,
+      khanaEmail: khanaClient.businessEmail,
+      khanaPass: khanaClient.businessEmailPassword,
+      companyName: khanaClient.companyName,
+      emailSignature: khanaClient.emailSignature || '',
+      tenantClientId: khanaClient.clientID,
+      senderName,
+    });
+  } catch (err) {
+    return res.status(400).json({ success: false, error: err.message || 'Failed to send email' });
+  }
+
+  quote.followUpEmails = quote.followUpEmails || [];
+  quote.followUpEmails.push({
+    templateId: rendered.templateId,
+    templateLabel: rendered.templateLabel,
+    subject: rendered.subject,
+    sentAt: new Date(),
+    sentBy: req.adminClient.clientID,
+  });
+  await quote.save();
+
+  res.json({
+    success: true,
+    message: `Follow-up sent to ${quote.prospectEmail}`,
+    quote: serializeQuote(quote),
+    sent: {
+      templateId: rendered.templateId,
+      templateLabel: rendered.templateLabel,
+      subject: rendered.subject,
+    },
+  });
 }));
 
 /** Public — load personalized quote session */

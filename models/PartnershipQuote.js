@@ -72,6 +72,15 @@ const partnershipQuoteSchema = new mongoose.Schema(
     submittedAt: { type: Date, default: null },
     validUntil: { type: Date, default: null },
     pricingConfigVersion: { type: Number, default: null },
+    followUpEmails: [
+      {
+        templateId: String,
+        templateLabel: String,
+        subject: String,
+        sentAt: { type: Date, default: Date.now },
+        sentBy: String,
+      },
+    ],
   },
   { timestamps: true }
 );

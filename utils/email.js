@@ -1436,6 +1436,59 @@ async function sendPlanQuoteEmails({
   console.log(`[sendPlanQuoteEmails] Sent team + prospect emails for ${quote.quoteId}`);
 }
 
+async function sendPlanQuoteFollowUpEmail({
+  quote,
+  templateId,
+  shareUrl,
+  validUntil,
+  khanaEmail,
+  khanaPass,
+  companyName,
+  emailSignature = '',
+  tenantClientId = null,
+  senderName = '',
+}) {
+  const { buildPlanQuoteFollowUpHtml } = require('../helpers/planQuoteEmail');
+  const { renderTemplateEmail } = require('../helpers/planQuoteResponseTemplates');
+
+  const fromName =
+    String(senderName || process.env.PLAN_QUOTE_SENDER_NAME || 'The Khana team').trim() ||
+    'The Khana team';
+  const rendered = renderTemplateEmail(quote, templateId, shareUrl, validUntil, fromName);
+  const firstName = String(quote.prospectName || '').trim().split(/\s+/)[0] || 'there';
+  const html = buildPlanQuoteFollowUpHtml({
+    subject: rendered.subject,
+    bodyHtml: rendered.bodyHtml,
+    firstName,
+  });
+
+  const decryptedFrom = decrypt(khanaEmail);
+  const prospectEmail = String(quote.prospectEmail || '').trim().toLowerCase();
+  if (!prospectEmail) {
+    throw new Error('Prospect email is required to send a follow-up');
+  }
+
+  const qm = qTenant(tenantClientId);
+  const body = mimeFrom(html, '', emailSignature);
+
+  await sendWithRetry(
+    () => createTransporter(khanaEmail, khanaPass),
+    {
+      from: `"${companyName || 'Khana Technologies'}" <${decryptedFrom}>`,
+      to: prospectEmail,
+      replyTo: decryptedFrom,
+      subject: rendered.subject,
+      ...body,
+    },
+    5,
+    1600,
+    qm
+  );
+
+  console.log(`[sendPlanQuoteFollowUpEmail] Sent ${templateId} to ${prospectEmail} for ${quote.quoteId}`);
+  return rendered;
+}
+
 // -----------------------------
 // Accommodation check-in / check-out reminders (cron / reminder service)
 // -----------------------------
@@ -1512,6 +1565,7 @@ module.exports = {
     sendTeamActivityNotifyEmail,
     sendContactUsEmail,
     sendPlanQuoteEmails,
+    sendPlanQuoteFollowUpEmail,
     sendCheckInReminderEmail,
     sendCheckOutReminderEmail,
     diffBookingForCustomer,
