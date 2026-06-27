@@ -117,11 +117,31 @@ function buildPlanQuoteTeamHtml(quote, shareUrl, validUntil) {
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:24px;font-size:14px;color:#374151;line-height:1.8;">
       <tr><td>Online store</td><td align="right"><strong>${yesNo(sel.needsStore)}</strong></td></tr>
       <tr><td>Bookings</td><td align="right"><strong>${yesNo(sel.needsBookings)}</strong></td></tr>
-      <tr><td>Revenue tools</td><td align="right"><strong>${yesNo(sel.needsRevenueTools)}</strong></td></tr>
+      <tr><td>Custom system</td><td align="right"><strong>${yesNo(sel.needsCustom)}</strong></td></tr>
+      ${
+        sel.needsCustom
+          ? `<tr><td>Custom scope</td><td align="right"><strong>${escapeHtml(
+              sel.customScope === 'addon' ? 'Add-on to store/bookings' : 'Standalone'
+            )}</strong></td></tr>`
+          : ''
+      }
+      <tr><td>Revenue tools add-on</td><td align="right"><strong>${yesNo(sel.needsRevenueTools)}</strong></td></tr>
       <tr><td>Site size</td><td align="right"><strong>${escapeHtml(sel.siteSize || '—')}</strong></td></tr>
       <tr><td>Catalogue</td><td align="right"><strong>${escapeHtml(sel.catalogueSize || '—')}</strong></td></tr>
       <tr><td>Advanced email</td><td align="right"><strong>${yesNo(sel.advancedEmail)}</strong></td></tr>
     </table>
+    ${
+      sel.needsCustom && String(sel.customBrief || '').trim()
+        ? `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:24px;">
+      <tr>
+        <td style="padding:14px 16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;font-size:13px;color:#374151;line-height:1.7;">
+          <strong style="color:#111827;">Custom brief</strong><br />
+          ${escapeHtml(String(sel.customBrief).trim())}
+        </td>
+      </tr>
+    </table>`
+        : ''
+    }
 
     <h2 style="margin:0 0 12px;font-size:16px;color:#111827;">Estimate summary</h2>
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:24px;">

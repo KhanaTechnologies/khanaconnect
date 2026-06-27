@@ -6,6 +6,13 @@ const selectionSchema = new mongoose.Schema(
     needsStore: { type: Boolean, default: false },
     needsBookings: { type: Boolean, default: false },
     needsRevenueTools: { type: Boolean, default: false },
+    needsCustom: { type: Boolean, default: false },
+    customScope: {
+      type: String,
+      enum: ['standalone', 'addon'],
+      default: 'standalone',
+    },
+    customBrief: { type: String, default: '', trim: true, maxlength: 2000 },
     siteSize: { type: String, enum: ['starter', 'established'], default: 'starter' },
     catalogueSize: { type: String, enum: ['standard', 'large'], default: 'standard' },
     teamMembers: { type: Number, default: 1, min: 1, max: 50 },

@@ -1,6 +1,6 @@
 const { DEFAULT_PLAN_BUILDER, mergePlanBuilderConfig } = require('./planBuilderPricing');
 
-const PRICING_CONFIG_VERSION = 6;
+const PRICING_CONFIG_VERSION = 7;
 
 /** Default partnership pricing for the SA market. */
 const DEFAULT_PARTNERSHIP_PRICING = {
@@ -138,8 +138,8 @@ const DEFAULT_PARTNERSHIP_PRICING = {
     {
       id: 'revenue-tools',
       name: 'Revenue Command Center',
-      description: 'Cart recovery, customer segments, campaigns, and revenue insights',
-      monthlyFee: 299,
+      description: 'Cart recovery, customer segments, campaigns, and revenue insights (add-on for store or bookings)',
+      monthlyFee: 99,
       onceOffFee: null,
       pricingType: 'monthly',
       active: true,

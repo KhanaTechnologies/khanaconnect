@@ -179,6 +179,17 @@ router.patch('/public/partnership-quote/:quoteId', wrapRoute(async (req, res) =>
     selections.teamMembers = Math.min(50, Math.max(1, parseInt(selections.teamMembers, 10) || 1));
   }
 
+  if (selections.customBrief != null) {
+    selections.customBrief = String(selections.customBrief).trim().slice(0, 2000);
+  }
+  if (selections.customScope != null) {
+    const scope = String(selections.customScope).trim();
+    selections.customScope = scope === 'addon' ? 'addon' : 'standalone';
+  }
+  if (selections.needsCustom === false) {
+    selections.customBrief = '';
+  }
+
   const estimate = calculatePlanEstimate(selections, pricing);
 
   quote.selections = selections;

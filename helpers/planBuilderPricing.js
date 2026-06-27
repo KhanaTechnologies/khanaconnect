@@ -23,6 +23,12 @@ function mergePlanBuilderConfig(config) {
 function resolveTierId(selections) {
   const store = !!selections.needsStore;
   const bookings = !!selections.needsBookings;
+  const customOnly = !!selections.needsCustom && !store && !bookings;
+
+  if (customOnly) {
+    return 'custom';
+  }
+
   const established = selections.siteSize === 'established';
 
   // Mixed retail + services — Scale only when already established; otherwise Launch + mixed add-on
@@ -40,20 +46,59 @@ function resolveTierId(selections) {
 const TIERS_WITH_REVENUE_INCLUDED = new Set(['growth', 'scale']);
 
 function applyRevenueToolsAddOn(selections, tierId, addOns, addOnLines, monthlyAddOns) {
-  if (!selections.needsRevenueTools || TIERS_WITH_REVENUE_INCLUDED.has(tierId)) {
+  const store = !!selections.needsStore;
+  const bookings = !!selections.needsBookings;
+
+  if (!selections.needsRevenueTools || (!store && !bookings)) {
+    return monthlyAddOns;
+  }
+
+  if (TIERS_WITH_REVENUE_INCLUDED.has(tierId)) {
     return monthlyAddOns;
   }
 
   const rcc = addOns.find((a) => a.id === 'revenue-tools' && a.active !== false);
-  const monthly = rcc?.monthlyFee ?? 299;
+  const monthly = rcc?.monthlyFee ?? 99;
   addOnLines.push({ name: rcc?.name || 'Revenue Command Center', monthly });
   return monthlyAddOns + monthly;
+}
+
+function buildCustomEstimateNote(selections) {
+  if (!selections.needsCustom) return '';
+  const brief = String(selections.customBrief || '').trim();
+  const scope =
+    selections.customScope === 'addon'
+      ? 'Custom system as an add-on to store/bookings'
+      : 'Standalone custom system';
+  if (!brief) return `${scope} — our team will confirm scope and pricing with you.`;
+  return `${scope} — we will review your brief and follow up with a tailored quote.`;
 }
 
 function calculatePlanEstimate(selections, pricingConfig) {
   const tiers = (pricingConfig.tiers || []).filter((t) => t.active !== false);
   const addOns = pricingConfig.addOns || [];
   const planBuilder = mergePlanBuilderConfig(pricingConfig);
+
+  const store = !!selections.needsStore;
+  const bookings = !!selections.needsBookings;
+  const customOnly = !!selections.needsCustom && !store && !bookings;
+
+  if (customOnly) {
+    return {
+      tierId: 'custom',
+      tierName: 'Custom scope',
+      setupFee: null,
+      monthlyFee: null,
+      totalSetup: null,
+      totalMonthly: null,
+      note: buildCustomEstimateNote(selections),
+      addOnLines: [],
+      includedSeats: 1,
+      extraSeats: 0,
+      seatMonthlyFee: planBuilder.extraSeatMonthlyFee,
+      seatMonthly: 0,
+    };
+  }
 
   const tierId = resolveTierId(selections);
   const tier =
@@ -69,7 +114,7 @@ function calculatePlanEstimate(selections, pricingConfig) {
       monthlyFee: null,
       totalSetup: null,
       totalMonthly: null,
-      note: 'Contact us for a tailored quote.',
+      note: buildCustomEstimateNote(selections) || 'Contact us for a tailored quote.',
       addOnLines: [],
       includedSeats: 1,
       extraSeats: 0,
@@ -81,9 +126,6 @@ function calculatePlanEstimate(selections, pricingConfig) {
   const addOnLines = [];
   let monthlyAddOns = 0;
   let setupAddOns = 0;
-
-  const store = !!selections.needsStore;
-  const bookings = !!selections.needsBookings;
 
   if (store && bookings && tierId !== 'scale') {
     const mixed = addOns.find((a) => a.id === 'mixed-module' && a.active !== false);
@@ -126,6 +168,11 @@ function calculatePlanEstimate(selections, pricingConfig) {
   const setupFee = tier.setupFee ?? 0;
   const monthlyFee = tier.monthlyFee ?? 0;
 
+  let note = '';
+  if (selections.needsCustom) {
+    note = buildCustomEstimateNote(selections);
+  }
+
   return {
     tierId: tier.id,
     tierName: tier.name,
@@ -139,7 +186,7 @@ function calculatePlanEstimate(selections, pricingConfig) {
     totalSetup: setupFee + setupAddOns,
     totalMonthly: monthlyFee + monthlyAddOns + seatMonthly,
     highlights: tier.highlights || [],
-    note: '',
+    note,
   };
 }
 
