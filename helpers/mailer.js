@@ -11,6 +11,7 @@ const { enqueueOutboundEmail } = require('../queues/outboundEmailQueue');
 const { serializeMailOptions } = require('./mailQueueSerialize');
 const { isNonRetryableSmtpError, isRetryableSmtpError } = require('./smtpErrors');
 const { decrypt } = require('./encryption');
+const { formatEmailAttachments } = require('./formatEmailAttachments');
 
 /** Uploaded dashboard signatures are stored here and referenced by absolute URL in Client.emailSignature */
 const SIGNATURES_UPLOAD_DIR = path.join(__dirname, '../public/uploads/signatures');
@@ -407,11 +408,12 @@ async function sendMail(options) {
     subject: subject || '(no subject)',
     text: text || htmlOut?.replace(/<[^>]*>/g, '') || 'No content',
     html: htmlOut || text || 'No content',
-    attachments: attachmentsOut.map(att => ({
+    attachments: formatEmailAttachments(attachmentsOut).map(att => ({
       filename: att.filename,
       content: att.content,
       contentType: att.contentType,
-      cid: att.cid
+      cid: att.cid,
+      contentDisposition: att.contentDisposition,
     })),
     messageId: finalMessageId,
     headers: {
@@ -529,11 +531,12 @@ async function sendMail(options) {
           references: references && references.length
             ? (Array.isArray(references) ? references.join(' ') : references)
             : undefined,
-          attachments: attachmentsOut.map(att => ({
+          attachments: formatEmailAttachments(attachmentsOut).map(att => ({
             filename: att.filename,
             content: att.content,
             contentType: att.contentType,
-            cid: att.cid
+            cid: att.cid,
+            contentDisposition: att.contentDisposition,
           })),
           headers: { ...mailOptions.headers }
         };
@@ -587,11 +590,12 @@ function buildNodemailerPayloadForQueue(options, htmlOut, attachmentsOut) {
     subject: subject || '(no subject)',
     text: text || htmlOut?.replace(/<[^>]*>/g, '') || 'No content',
     html: htmlOut || text || 'No content',
-    attachments: (attachmentsOut || []).map((att) => ({
+    attachments: formatEmailAttachments(attachmentsOut || []).map((att) => ({
       filename: att.filename,
       content: att.content,
       contentType: att.contentType,
       cid: att.cid,
+      contentDisposition: att.contentDisposition,
     })),
   };
   if (cc) mailOptions.cc = cc;

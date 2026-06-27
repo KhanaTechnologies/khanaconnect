@@ -15,9 +15,8 @@ const {
 
 const KHANA_LOGO_PATH = path.join(__dirname, '../public/email/khana-logo-white.png');
 
-/** Render width (2× for retina). Displayed at 600px in email HTML. */
+/** Render width (2× for retina). Stretches to 100% in email HTML. */
 const BANNER_RENDER_WIDTH = 1200;
-const BANNER_DISPLAY_WIDTH = 600;
 const PADDING_TOP = 80;
 const PADDING_BOTTOM = 56;
 const LOGO_RENDER_WIDTH = 400;
@@ -180,11 +179,20 @@ function parseBannerOptionsFromHtml(html) {
 
 function buildGeneratedBannerRowHtml({ bannerSrc, brandName }) {
   const brand = escapeHtml(brandName || EMAIL_TOKENS.brand.name);
+  const pageBg = EMAIL_TOKENS.color.pageBg;
   return `<tr data-kc-transactional-banner="1">
-          <td align="center" style="padding:0;margin:0;line-height:0;font-size:0;mso-line-height-rule:exactly;">
-            <img alt="${brand}" src="${bannerSrc}" width="${BANNER_DISPLAY_WIDTH}" style="display:block;width:100%;max-width:${BANNER_DISPLAY_WIDTH}px;height:auto;margin:0 auto;padding:0;border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;" />
+          <td align="center" width="100%" style="padding:0;margin:0;line-height:0;font-size:0;mso-line-height-rule:exactly;background-color:${pageBg};" bgcolor="${pageBg}">
+            <img alt="${brand}" src="${bannerSrc}" width="${BANNER_RENDER_WIDTH}" style="display:block;width:100%;max-width:100%;height:auto;margin:0;padding:0;border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;" />
           </td>
         </tr>`;
+}
+
+function stripHeadlineRowGradient(html) {
+  const pageBg = EMAIL_TOKENS.color.pageBg;
+  return html.replace(
+    /(<tr data-kc-headline-shell="1">\s*<td align="center" style=")background:[^;]+;padding:0 0 0;(" bgcolor=")[^"]+(">)/i,
+    `$1padding:0 0 0;background:${pageBg};$2${pageBg}$3`
+  );
 }
 
 /**
@@ -207,20 +215,8 @@ async function applyEmailBannerImageAsync(html, baseAttachments = [], options = 
 
   try {
     const buffer = await generateEmailBannerImage(bannerOptions);
-    let bannerSrc;
-
-    if (options.bannerPreview === true) {
-      bannerSrc = `data:image/jpeg;base64,${buffer.toString('base64')}`;
-    } else {
-      const cid = 'kcebanner0';
-      bannerSrc = `cid:${cid}`;
-      attachments.push({
-        filename: 'email-banner.jpg',
-        content: buffer,
-        contentType: 'image/jpeg',
-        cid,
-      });
-    }
+    // Embed in HTML — avoids Gmail listing the banner as a file attachment.
+    const bannerSrc = `data:image/jpeg;base64,${buffer.toString('base64')}`;
 
     const bannerRow = buildGeneratedBannerRowHtml({
       bannerSrc,
@@ -228,7 +224,8 @@ async function applyEmailBannerImageAsync(html, baseAttachments = [], options = 
     });
 
     const bannerTrRegex = /<tr\b[^>]*data-kc-transactional-banner="1"[^>]*>[\s\S]*?<\/tr>/i;
-    const newHtml = html.replace(bannerTrRegex, bannerRow);
+    let newHtml = html.replace(bannerTrRegex, bannerRow);
+    newHtml = stripHeadlineRowGradient(newHtml);
     return { html: newHtml, attachments };
   } catch (err) {
     console.warn('Email banner image generation skipped:', err.message);
@@ -241,5 +238,5 @@ module.exports = {
   applyEmailBannerImageAsync,
   parseBannerOptionsFromHtml,
   buildGeneratedBannerRowHtml,
-  BANNER_DISPLAY_WIDTH,
+  BANNER_RENDER_WIDTH,
 };

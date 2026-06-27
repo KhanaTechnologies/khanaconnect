@@ -19,6 +19,7 @@ const {
 } = require('../helpers/transactionalEmailLayout');
 const { normalizeEmailBranding } = require('../helpers/clientEmailBranding');
 const { resolveEmailBrand } = require('../helpers/emailDesignTokens');
+const { formatEmailAttachments } = require('../helpers/formatEmailAttachments');
 
 function brandPlainName(formattedClientName) {
     return String(formattedClientName || '')
@@ -93,7 +94,11 @@ async function buildTransactionalMailParts(html, text, emailSignature, options =
 /** Spread into nodemailer `sendMail` options: html, text, attachments (signature images as cid). */
 async function mimeFrom(html, text, emailSignature, options = {}) {
     const p = await buildTransactionalMailParts(html, text, emailSignature, options);
-    return { html: p.html, text: p.text, attachments: p.attachments || [] };
+    return {
+        html: p.html,
+        text: p.text,
+        attachments: formatEmailAttachments(p.attachments),
+    };
 }
 
 /** Small pause between two SMTP messages in one request (customer + merchant copy, etc.). Not a “cooldown” lock — avoids some hosts dropping rapid reuse. */

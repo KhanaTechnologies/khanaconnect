@@ -9,6 +9,7 @@ const {
   ctaButton,
 } = require('../helpers/transactionalEmailLayout');
 const { prepareTransactionalEmailHtml } = require('../helpers/transactionalEmailPipeline');
+const { formatEmailAttachments } = require('../helpers/formatEmailAttachments');
 
 async function sendCartReminderEmail(customer, client) {
   try {
@@ -101,7 +102,7 @@ Complete your order: ${cartUrl}`;
       subject: `Complete your purchase at ${client.companyName}`,
       text,
       html: htmlOut,
-      attachments: attachments || [],
+      attachments: formatEmailAttachments(attachments || []),
       clientID: client.clientID,
       saveToSent: false,
     });

@@ -10,6 +10,7 @@ const {
     warnPanel,
 } = require('../helpers/transactionalEmailLayout');
 const { normalizeEmailBranding } = require('../helpers/clientEmailBranding');
+const { formatEmailAttachments } = require('../helpers/formatEmailAttachments');
 const { resolveEmailBrand } = require('../helpers/emailDesignTokens');
 
 const failedAttempts = new Map();
@@ -131,7 +132,7 @@ async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass,
             subject: 'Confirm your email address',
             text: textBody,
             html: htmlOut,
-            attachments: attachments || [],
+            attachments: formatEmailAttachments(attachments || []),
         });
 
         console.log('Verification email sent successfully');

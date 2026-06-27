@@ -17,6 +17,7 @@ function serializeMailOptions(mailOptions) {
         contentType: a.contentType,
         encoding: a.encoding,
         cid: a.cid,
+        contentDisposition: a.contentDisposition,
       };
       if (Buffer.isBuffer(a.content)) att.contentBase64 = a.content.toString('base64');
       else if (typeof a.content === 'string') att.content = a.content;

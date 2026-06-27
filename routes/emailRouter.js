@@ -2391,7 +2391,6 @@ router.post('/branding/preview', validateClient, wrapRoute(async (req, res) => {
 
     const { applyEmailBannerImageAsync } = require('../helpers/emailBannerImage');
     const { html: previewHtml } = await applyEmailBannerImageAsync(html, [], {
-        bannerPreview: true,
         primaryColor: brand.primaryColor,
         logoUrl: logoUrl || undefined,
         brandName: companyName,

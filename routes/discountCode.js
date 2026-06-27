@@ -14,6 +14,7 @@ const { buildPromoNewsletterBuilderPayload } = require('../helpers/promoNewslett
 const { escapeHtml } = require('../helpers/signatureHtml');
 const { buildKhanaEmail, ctaButton, neutralPanel } = require('../helpers/transactionalEmailLayout');
 const { prepareTransactionalEmailHtml } = require('../helpers/transactionalEmailPipeline');
+const { formatEmailAttachments } = require('../helpers/formatEmailAttachments');
 const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../helpers/mailHost');
 const { sendMail } = require('../helpers/mailer');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
@@ -158,7 +159,7 @@ ${websiteUrl ? `Website: ${websiteUrl}` : ''}`;
         subject: `Wish list match: ${code} (${discount}% off)`,
         text,
         html: htmlOut,
-        attachments: attachments || [],
+        attachments: formatEmailAttachments(attachments || []),
       });
       sent += 1;
     } catch (e) {

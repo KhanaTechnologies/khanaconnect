@@ -8,6 +8,7 @@ const {
 } = require('../helpers/transactionalEmailLayout');
 const { resolveEmailBrand } = require('../helpers/emailDesignTokens');
 const { prepareTransactionalEmailHtml } = require('../helpers/transactionalEmailPipeline');
+const { formatEmailAttachments } = require('../helpers/formatEmailAttachments');
 
 /**
  * One email per customer listing all service wishlist rows due this month.
@@ -104,7 +105,7 @@ Book or browse: ${bookingUrl}
     subject: `Your service wish list — ${label}`,
     text,
     html: htmlOut,
-    attachments: attachments || [],
+    attachments: formatEmailAttachments(attachments || []),
     clientID: client.clientID,
     saveToSent: false,
   });

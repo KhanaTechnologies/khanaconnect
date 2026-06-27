@@ -108,7 +108,7 @@ function buildKhanaEmail({
             ${bannerBrand}
           </td>
         </tr>
-        <tr>
+        <tr data-kc-headline-shell="1">
           <td align="center" style="background:${gradientCss};padding:0 0 0;" bgcolor="${gradientFallback}">
             <!--[if (gte mso 9)|(IE)]><table align="center" border="0" cellspacing="0" cellpadding="0" width="${maxWidth}"><tr><td align="center" valign="top" width="${maxWidth}"><![endif]-->
             <table role="presentation" border="0" align="center" cellpadding="0" cellspacing="0" width="100%" style="width:95% !important;max-width:${maxWidth}px;border-radius:8px 8px 0 0;mso-table-lspace:0pt;mso-table-rspace:0pt;border:1px solid #e6e6e6;border-bottom:none;" bgcolor="#ffffff">
