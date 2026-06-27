@@ -127,7 +127,6 @@ async function inlineEmailBannerLogosAsync(html, baseAttachments, options = {}) 
     try {
       content = await prepareEmailBannerLogo(content, {
         originalname,
-        mode: 'storage',
       });
       contentType = 'image/png';
       filename = `${path.parse(filename).name}.png`;

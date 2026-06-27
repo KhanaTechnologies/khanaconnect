@@ -1,58 +1,74 @@
 const sharp = require('sharp');
 const {
   EMAIL_TOKENS,
-  brandGradientColorAt,
-  bannerLogoGradientSlice,
+  buildBrandGradientFallback,
   sanitizeHexColor,
 } = require('./emailDesignTokens');
 
-const DARK_BG_THRESHOLD = 28;
-const LOGO_DISPLAY_WIDTH = 200;
-
-function parseHexRgb(hex) {
-  const normalized = String(hex || '').replace('#', '').trim();
-  if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return null;
-  return {
-    r: parseInt(normalized.slice(0, 2), 16),
-    g: parseInt(normalized.slice(2, 4), 16),
-    b: parseInt(normalized.slice(4, 6), 16),
-  };
-}
+const DARK_BG_THRESHOLD = 32;
+const WHITE_LOGO_THRESHOLD = 175;
+const MATTE_LUMINANCE_MAX = 165;
 
 function pixelLuminance(r, g, b) {
   return 0.299 * r + 0.587 * g + 0.114 * b;
 }
 
-/**
- * White/light email logos: drop dark or colored matte pixels so only the mark remains.
- */
-async function isolateLightLogoForeground(buffer, threshold = DARK_BG_THRESHOLD) {
+function pixelSaturation(r, g, b) {
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  if (max === 0) return 0;
+  return (max - min) / max;
+}
+
+function isLogoForeground(r, g, b, a) {
+  if (a < 16) return false;
+  const lum = pixelLuminance(r, g, b);
+  const sat = pixelSaturation(r, g, b);
+  if (lum >= WHITE_LOGO_THRESHOLD && sat < 0.2) return true;
+  if (sat >= 0.18 && lum >= 40) return true;
+  return false;
+}
+
+function isMattePixel(r, g, b, a) {
+  if (a < 16) return false;
+  const lum = pixelLuminance(r, g, b);
+  const sat = pixelSaturation(r, g, b);
+  if (r <= DARK_BG_THRESHOLD && g <= DARK_BG_THRESHOLD && b <= DARK_BG_THRESHOLD) return true;
+  if (sat < 0.12 && lum <= MATTE_LUMINANCE_MAX) return true;
+  return false;
+}
+
+async function cleanBannerLogoPixels(buffer) {
   const { data, info } = await sharp(buffer).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-  const ch = info.channels;
   let changed = false;
 
-  for (let i = 0; i < data.length; i += ch) {
+  for (let i = 0; i < data.length; i += 4) {
     const r = data[i];
     const g = data[i + 1];
     const b = data[i + 2];
-    const lum = pixelLuminance(r, g, b);
-    const isDark = r <= threshold && g <= threshold && b <= threshold;
+    const a = data[i + 3];
 
-    if (isDark || lum < 120) {
-      if (data[i + 3] > 0) changed = true;
-      if (lum < 40 || isDark) {
-        data[i + 3] = 0;
-      } else {
-        data[i + 3] = Math.round(data[i + 3] * Math.min(1, (lum - 40) / 80));
+    if (isLogoForeground(r, g, b, a)) {
+      if (pixelLuminance(r, g, b) >= WHITE_LOGO_THRESHOLD) {
+        data[i] = 255;
+        data[i + 1] = 255;
+        data[i + 2] = 255;
+        data[i + 3] = 255;
         changed = true;
       }
+      continue;
+    }
+
+    if (isMattePixel(r, g, b, a) || a > 0) {
+      if (data[i + 3] > 0) changed = true;
+      data[i + 3] = 0;
     }
   }
 
   if (!changed) return buffer;
 
   return sharp(data, {
-    raw: { width: info.width, height: info.height, channels: ch },
+    raw: { width: info.width, height: info.height, channels: 4 },
   })
     .png()
     .toBuffer();
@@ -60,44 +76,10 @@ async function isolateLightLogoForeground(buffer, threshold = DARK_BG_THRESHOLD)
 
 async function trimLogoBounds(buffer, sharpOpts) {
   try {
-    return await sharp(buffer, sharpOpts).trim({ threshold: 12 }).png().toBuffer();
+    return await sharp(buffer, sharpOpts).trim({ threshold: 10 }).png().toBuffer();
   } catch (_) {
     return buffer;
   }
-}
-
-function buildGradientPlateSvg(width, height, startColor, endColor) {
-  return Buffer.from(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-      <defs>
-        <linearGradient id="banner" x1="0%" y1="0%" x2="100%" y2="0%">
-          <stop offset="0%" stop-color="${startColor}"/>
-          <stop offset="100%" stop-color="${endColor}"/>
-        </linearGradient>
-      </defs>
-      <rect width="${width}" height="${height}" fill="url(#banner)"/>
-    </svg>`
-  );
-}
-
-async function compositeLogoOnBannerGradient(buffer, options = {}) {
-  const primaryColor = sanitizeHexColor(options.primaryColor, EMAIL_TOKENS.brand.primary);
-  const bannerWidth = Number(options.bannerWidth) || EMAIL_TOKENS.layout.transactionalMaxWidth;
-  const logoDisplayWidth = Number(options.logoDisplayWidth) || LOGO_DISPLAY_WIDTH;
-  const { start, end } = bannerLogoGradientSlice(primaryColor, bannerWidth, logoDisplayWidth);
-  const startColor = brandGradientColorAt(start, primaryColor);
-  const endColor = brandGradientColorAt(end, primaryColor);
-  const meta = await sharp(buffer).metadata();
-  const width = meta.width || 1;
-  const height = meta.height || 1;
-  const plate = buildGradientPlateSvg(width, height, startColor, endColor);
-  const logoPng = await sharp(buffer).png().toBuffer();
-
-  return sharp(plate)
-    .composite([{ input: logoPng, blend: 'over' }])
-    .flatten()
-    .png()
-    .toBuffer();
 }
 
 async function extractTrimmedLogo(buffer, options = {}) {
@@ -106,21 +88,12 @@ async function extractTrimmedLogo(buffer, options = {}) {
   const isSvg = mimetype === 'image/svg+xml' || /\.svg$/i.test(originalname);
   const sharpOpts = isSvg ? { density: 300 } : undefined;
 
-  let working = buffer;
-  const meta = await sharp(buffer, sharpOpts).metadata();
-
-  if (isSvg || meta.hasAlpha) {
-    working = await sharp(buffer, sharpOpts).ensureAlpha().png().toBuffer();
-  } else {
-    working = await isolateLightLogoForeground(buffer);
-  }
-
+  let working = await sharp(buffer, sharpOpts).ensureAlpha().png().toBuffer();
+  working = await cleanBannerLogoPixels(working);
   return trimLogoBounds(working, sharpOpts);
 }
 
-/**
- * Normalize uploaded logos to trimmed transparent PNGs for email banners.
- */
+/** Normalize logos to trimmed transparent PNGs — white mark only, no gray/black matte. */
 async function prepareEmailBannerLogo(buffer, options = {}) {
   if (!buffer || !buffer.length) return buffer;
 
@@ -133,7 +106,6 @@ async function prepareEmailBannerLogo(buffer, options = {}) {
 }
 
 function emailBannerMatteColor(primaryColor) {
-  const { buildBrandGradientFallback } = require('./emailDesignTokens');
   return buildBrandGradientFallback(
     sanitizeHexColor(primaryColor, EMAIL_TOKENS.brand.primary)
   );
@@ -143,6 +115,5 @@ module.exports = {
   prepareEmailBannerLogo,
   emailBannerMatteColor,
   extractTrimmedLogo,
-  compositeLogoOnBannerGradient,
-  isolateLightLogoForeground,
+  cleanBannerLogoPixels,
 };
