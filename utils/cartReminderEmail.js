@@ -8,6 +8,7 @@ const {
   escapeHtml,
   ctaButton,
 } = require('../helpers/transactionalEmailLayout');
+const { prepareTransactionalEmailHtml } = require('../helpers/transactionalEmailPipeline');
 
 async function sendCartReminderEmail(customer, client) {
   try {
@@ -83,6 +84,12 @@ Cart total: R${total.toFixed(2)}
 
 Complete your order: ${cartUrl}`;
 
+    const { html: htmlOut, attachments } = await prepareTransactionalEmailHtml(html, [], {
+      primaryColor: brand.primaryColor,
+      logoUrl,
+      brandName,
+    });
+
     await sendMail({
       host: smtpHost,
       port: smtpPort,
@@ -93,7 +100,8 @@ Complete your order: ${cartUrl}`;
       to: customer.emailAddress,
       subject: `Complete your purchase at ${client.companyName}`,
       text,
-      html,
+      html: htmlOut,
+      attachments: attachments || [],
       clientID: client.clientID,
       saveToSent: false,
     });

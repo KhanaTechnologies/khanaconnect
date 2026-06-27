@@ -80,6 +80,15 @@ function buildKhanaEmail({
   const bannerBrand = renderBannerBrand({ brandName, logoUrl, showKhanaLogo });
   const defaultFooter = `Copyright © ${new Date().getFullYear()} ${escapeHtml(brandName || EMAIL_TOKENS.brand.name)}`;
   const footer = footerHtml || defaultFooter;
+  const resolvedLogo = logoUrl || (showKhanaLogo === true ? resolveKhanaEmailLogoUrl() : '');
+  const bannerBrandName = escapeHtml(brandName || EMAIL_TOKENS.brand.name);
+  const bannerDataAttrs = [
+    'data-kc-transactional-banner="1"',
+    `data-kc-primary-color="${escapeHtml(accent)}"`,
+    `data-kc-logo-url="${escapeHtml(resolvedLogo)}"`,
+    `data-kc-show-khana-logo="${showKhanaLogo === true ? '1' : '0'}"`,
+    `data-kc-brand-name="${bannerBrandName}"`,
+  ].join(' ');
 
   return `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml" lang="en">
@@ -94,7 +103,7 @@ function buildKhanaEmail({
   <center>
     <table role="presentation" border="0" align="center" cellpadding="0" cellspacing="0" width="100%" style="width:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#404d57;font-size:16px;border-spacing:0;mso-table-lspace:0pt;mso-table-rspace:0pt;">
       <tbody>
-        <tr>
+        <tr ${bannerDataAttrs}>
           <td align="center" style="color:#ffffff;background:${gradientCss};padding:40px 24px 28px;" bgcolor="${gradientFallback}">
             ${bannerBrand}
           </td>

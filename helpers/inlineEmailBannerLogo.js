@@ -160,4 +160,5 @@ async function inlineEmailBannerLogosAsync(html, baseAttachments, options = {}) 
 module.exports = {
   inlineEmailBannerLogosAsync,
   resolveLocalEmailBannerFileFromImgSrc,
+  isHostedEmailBannerLogoUrl,
 };

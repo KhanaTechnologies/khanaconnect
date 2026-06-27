@@ -13,6 +13,7 @@ const NewsletterService = require('../helpers/newsletterService');
 const { buildPromoNewsletterBuilderPayload } = require('../helpers/promoNewsletterBuilder');
 const { escapeHtml } = require('../helpers/signatureHtml');
 const { buildKhanaEmail, ctaButton, neutralPanel } = require('../helpers/transactionalEmailLayout');
+const { prepareTransactionalEmailHtml } = require('../helpers/transactionalEmailPipeline');
 const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../helpers/mailHost');
 const { sendMail } = require('../helpers/mailer');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
@@ -133,6 +134,11 @@ async function sendWishlistCheckoutCodeAlerts({
       footerHtml: 'You receive this because sale alerts are enabled for your wish list items.',
       primaryColor: brand.primaryColor,
     });
+    const { html: htmlOut, attachments } = await prepareTransactionalEmailHtml(html, [], {
+      primaryColor: brand.primaryColor,
+      logoUrl: brand.logoUrl,
+      brandName: String(clientDoc.companyName || 'Our store'),
+    });
     const text = `Hi ${customer.customerFirstName || 'there'},
 
 A new discount code matches item(s) in your wish list.
@@ -151,7 +157,8 @@ ${websiteUrl ? `Website: ${websiteUrl}` : ''}`;
         to: customer.emailAddress,
         subject: `Wish list match: ${code} (${discount}% off)`,
         text,
-        html,
+        html: htmlOut,
+        attachments: attachments || [],
       });
       sent += 1;
     } catch (e) {
