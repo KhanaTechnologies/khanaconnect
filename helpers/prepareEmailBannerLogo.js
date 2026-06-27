@@ -119,19 +119,13 @@ async function extractTrimmedLogo(buffer, options = {}) {
 }
 
 /**
- * @param {'storage'|'email'} [options.mode] storage = transparent PNG for dashboard; email = gradient composite for clients
+ * Normalize uploaded logos to trimmed transparent PNGs for email banners.
  */
 async function prepareEmailBannerLogo(buffer, options = {}) {
   if (!buffer || !buffer.length) return buffer;
 
-  const mode = options.mode === 'storage' ? 'storage' : 'email';
-
   try {
-    const trimmed = await extractTrimmedLogo(buffer, options);
-    if (mode === 'storage') {
-      return trimmed;
-    }
-    return await compositeLogoOnBannerGradient(trimmed, options);
+    return await extractTrimmedLogo(buffer, options);
   } catch (err) {
     console.warn('prepareEmailBannerLogo: using original image:', err.message);
     return buffer;

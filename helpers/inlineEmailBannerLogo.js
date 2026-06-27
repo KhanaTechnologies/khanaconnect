@@ -1,11 +1,6 @@
 const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
-const {
-  EMAIL_TOKENS,
-  buildBrandGradientFallback,
-  sanitizeHexColor,
-} = require('./emailDesignTokens');
 const { prepareEmailBannerLogo } = require('./prepareEmailBannerLogo');
 
 const KHANA_EMAIL_DIR = path.join(__dirname, '../public/email');
@@ -61,13 +56,6 @@ function isHostedEmailBannerLogoUrl(src) {
   );
 }
 
-function parseBannerPrimaryColorFromHtml(html) {
-  if (!html || typeof html !== 'string') {
-    return EMAIL_TOKENS.brand.primary;
-  }
-  const match = html.match(/bgcolor="(#[0-9a-fA-F]{6})"/i);
-  return sanitizeHexColor(match && match[1], EMAIL_TOKENS.brand.primary);
-}
 
 async function fetchRemoteLogoBuffer(src) {
   const controller = new AbortController();
@@ -84,18 +72,13 @@ async function fetchRemoteLogoBuffer(src) {
 }
 
 /**
- * Inline banner logos as cid attachments with alpha flattened onto the banner matte.
- * Browsers (Email Center preview) render transparency correctly; most email clients do not.
+ * Inline banner logos as transparent PNG cid attachments.
+ * The gradient banner td shows through — same as the Email Center browser preview.
  */
 async function inlineEmailBannerLogosAsync(html, baseAttachments, options = {}) {
   const attachments = Array.isArray(baseAttachments) ? [...baseAttachments] : [];
   if (!html || typeof html !== 'string') return { html, attachments };
 
-  const primaryColor = sanitizeHexColor(
-    options.primaryColor,
-    parseBannerPrimaryColorFromHtml(html)
-  );
-  const matteColor = buildBrandGradientFallback(primaryColor);
   const srcToCid = new Map();
   let cidSeq = 0;
   const imgTagRegex = /<img\b([^>]*?)\bsrc\s*=\s*(["'])([^"']+)\2([^>]*)>/gi;
@@ -143,14 +126,13 @@ async function inlineEmailBannerLogosAsync(html, baseAttachments, options = {}) 
 
     try {
       content = await prepareEmailBannerLogo(content, {
-        matteColor,
-        primaryColor,
         originalname,
+        mode: 'storage',
       });
       contentType = 'image/png';
       filename = `${path.parse(filename).name}.png`;
     } catch (e) {
-      console.warn('Email banner logo flatten skipped:', e.message);
+      console.warn('Email banner logo prepare skipped:', e.message);
     }
 
     if (!srcToCid.has(src)) {

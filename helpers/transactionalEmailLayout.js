@@ -35,7 +35,13 @@ function renderBannerBrand({ brandName, logoUrl, showKhanaLogo }) {
   const logo = logoUrl || (showKhanaLogo === true ? resolveKhanaEmailLogoUrl() : '');
 
   if (logo) {
-    return `<img alt="${brand}" src="${escapeHtml(logo)}" width="200" style="width:200px;max-width:78%;height:auto;display:block;margin:0 auto;border:0;" />`;
+    return `<table role="presentation" border="0" cellpadding="0" cellspacing="0" align="center" style="margin:0 auto;border:0;border-collapse:collapse;border-spacing:0;mso-table-lspace:0pt;mso-table-rspace:0pt;">
+      <tr>
+        <td align="center" style="padding:0;margin:0;background:none;background-color:transparent;border:0;line-height:0;font-size:0;mso-line-height-rule:exactly;">
+          <img alt="${brand}" src="${escapeHtml(logo)}" width="200" style="width:200px;max-width:78%;height:auto;display:block;margin:0 auto;padding:0;border:0;outline:none;text-decoration:none;background:none;background-color:transparent;-ms-interpolation-mode:bicubic;" />
+        </td>
+      </tr>
+    </table>`;
   }
 
   return `<p style="margin:0;font-size:13px;letter-spacing:0.16em;text-transform:uppercase;color:rgba(255,255,255,0.88);font-weight:700;">${brand}</p>`;

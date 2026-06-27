@@ -6,7 +6,7 @@
 const { resolvePublicBaseUrl } = require('./publicBaseUrl');
 
 const KHANA_EMAIL_LOGO_PATH = '/public/email/khana-logo-white.png';
-const KHANA_EMAIL_LOGO_VERSION = '3';
+const KHANA_EMAIL_LOGO_VERSION = '4';
 
 const EMAIL_TOKENS = {
   brand: {
