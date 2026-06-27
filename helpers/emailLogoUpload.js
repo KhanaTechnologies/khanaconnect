@@ -1,7 +1,9 @@
 const path = require('path');
 const { uploadPublicAsset } = require('./publicAssetUpload');
+const { prepareEmailBannerLogo } = require('./prepareEmailBannerLogo');
 
-function safeLogoExt(originalname, mimetype) {
+function safeLogoExt(originalname, mimetype, forcePng = false) {
+  if (forcePng) return '.png';
   const fromName = (path.extname(originalname || '') || '').toLowerCase();
   if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'].includes(fromName)) {
     return fromName === '.jpeg' ? '.jpg' : fromName;
@@ -13,12 +15,19 @@ function safeLogoExt(originalname, mimetype) {
   return '.jpg';
 }
 
-async function uploadEmailLogoImage(buffer, originalname, clientID, req, mimetype = '') {
-  const ext = safeLogoExt(originalname, mimetype);
+async function uploadEmailLogoImage(buffer, originalname, clientID, req, mimetype = '', options = {}) {
+  const prepared = await prepareEmailBannerLogo(buffer, {
+    mimetype,
+    originalname,
+    primaryColor: options.primaryColor,
+    matteColor: options.matteColor,
+  });
+  const flattened = prepared !== buffer;
+  const ext = safeLogoExt(originalname, mimetype, flattened);
   const safeId = String(clientID || 'client').replace(/[^a-zA-Z0-9_-]/g, '_');
   const fileName = `${safeId}-${Date.now()}${ext}`;
   const repoPath = `public/uploads/email-logos/${fileName}`;
-  return uploadPublicAsset(buffer, repoPath, req);
+  return uploadPublicAsset(prepared, repoPath, req);
 }
 
 module.exports = {

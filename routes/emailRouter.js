@@ -2381,12 +2381,16 @@ router.post(
             });
         }
 
+        const { resolveEmailBrand } = require('../helpers/emailDesignTokens');
+        const brand = resolveEmailBrand(req.client);
+
         const uploaded = await uploadEmailLogoImage(
             req.file.buffer,
             req.file.originalname,
             req.client.clientID,
             req,
-            req.file.mimetype
+            req.file.mimetype,
+            { primaryColor: brand.primaryColor }
         );
 
         await Client.updateOne(
