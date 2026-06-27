@@ -122,7 +122,8 @@ function buildPlanQuoteTeamHtml(quote, shareUrl, validUntil) {
         sel.needsCustom
           ? `<tr><td>Custom scope</td><td align="right"><strong>${escapeHtml(
               sel.customScope === 'addon' ? 'Add-on to store/bookings' : 'Standalone'
-            )}</strong></td></tr>`
+            )}</strong></td></tr>
+      <tr><td>Private standalone API</td><td align="right"><strong>${yesNo(sel.wantsStandaloneApi)}</strong></td></tr>`
           : ''
       }
       <tr><td>Revenue tools add-on</td><td align="right"><strong>${yesNo(sel.needsRevenueTools)}</strong></td></tr>

@@ -6,6 +6,7 @@ const { wrapRoute } = require('../helpers/failureEmail');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const { mergePartnershipPricing } = require('../helpers/partnershipPricingDefaults');
 const { calculatePlanEstimate } = require('../helpers/planBuilderPricing');
+const partnershipPricingRouter = require('./partnershipPricing');
 const {
   QUOTE_VALIDITY_DAYS,
   computeValidUntil,
@@ -20,15 +21,7 @@ const MARKETING_SITE_URL =
   process.env.MARKETING_SITE_URL || process.env.PUBLIC_SITE_URL || 'https://khanatechnologies.co.za';
 
 async function getPricingConfig() {
-  const PartnershipPricingConfig = require('../models/PartnershipPricingConfig');
-  const { DEFAULT_PARTNERSHIP_PRICING } = require('../helpers/partnershipPricingDefaults');
-  let doc = await PartnershipPricingConfig.findOne({ configKey: 'default' });
-  if (!doc) {
-    doc = await PartnershipPricingConfig.create({
-      configKey: 'default',
-      ...DEFAULT_PARTNERSHIP_PRICING,
-    });
-  }
+  const doc = await partnershipPricingRouter.getOrCreateConfig();
   return mergePartnershipPricing(doc);
 }
 
@@ -188,6 +181,10 @@ router.patch('/public/partnership-quote/:quoteId', wrapRoute(async (req, res) =>
   }
   if (selections.needsCustom === false) {
     selections.customBrief = '';
+    selections.wantsStandaloneApi = false;
+  }
+  if (selections.wantsStandaloneApi != null) {
+    selections.wantsStandaloneApi = !!selections.wantsStandaloneApi;
   }
 
   const estimate = calculatePlanEstimate(selections, pricing);

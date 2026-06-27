@@ -13,6 +13,7 @@ const selectionSchema = new mongoose.Schema(
       default: 'standalone',
     },
     customBrief: { type: String, default: '', trim: true, maxlength: 2000 },
+    wantsStandaloneApi: { type: Boolean, default: false },
     siteSize: { type: String, enum: ['starter', 'established'], default: 'starter' },
     catalogueSize: { type: String, enum: ['standard', 'large'], default: 'standard' },
     teamMembers: { type: Number, default: 1, min: 1, max: 50 },
@@ -42,6 +43,7 @@ const estimateSchema = new mongoose.Schema(
     totalSetup: Number,
     totalMonthly: Number,
     note: String,
+    customDisclaimer: String,
   },
   { _id: false }
 );

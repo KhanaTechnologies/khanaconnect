@@ -9,6 +9,19 @@ const DEFAULT_PLAN_BUILDER = {
   extraSeatMonthlyFee: 99,
 };
 
+/** Plan-builder line prices — authoritative for estimates (not admin DB overrides). */
+const PLAN_BUILDER_PRICES = {
+  revenueToolsMonthly: 99,
+  customSystemSetup: 3000,
+  customSystemMonthly: 450,
+  standaloneApiSetup: 5000,
+};
+
+const CUSTOM_SYSTEM_DISCLAIMER =
+  'Custom systems must be reasonable in scope — something Khana can develop and maintain on our platform. ' +
+  'The system runs on shared Khana infrastructure and is not exclusive to your business unless you add a private standalone API ' +
+  '(R5,000 once-off on top of the R3,000 custom setup fee). We confirm final scope before development starts.';
+
 function mergePlanBuilderConfig(config) {
   const src = config?.planBuilder || {};
   return {
@@ -31,7 +44,6 @@ function resolveTierId(selections) {
 
   const established = selections.siteSize === 'established';
 
-  // Mixed retail + services — Scale only when already established; otherwise Launch + mixed add-on
   if (store && bookings) {
     return established ? 'scale' : 'launch';
   }
@@ -45,7 +57,7 @@ function resolveTierId(selections) {
 
 const TIERS_WITH_REVENUE_INCLUDED = new Set(['growth', 'scale']);
 
-function applyRevenueToolsAddOn(selections, tierId, addOns, addOnLines, monthlyAddOns) {
+function applyRevenueToolsAddOn(selections, tierId, addOnLines, monthlyAddOns) {
   const store = !!selections.needsStore;
   const bookings = !!selections.needsBookings;
 
@@ -57,10 +69,40 @@ function applyRevenueToolsAddOn(selections, tierId, addOns, addOnLines, monthlyA
     return monthlyAddOns;
   }
 
-  const rcc = addOns.find((a) => a.id === 'revenue-tools' && a.active !== false);
-  const monthly = rcc?.monthlyFee ?? 99;
-  addOnLines.push({ name: rcc?.name || 'Revenue Command Center', monthly });
+  const monthly = PLAN_BUILDER_PRICES.revenueToolsMonthly;
+  addOnLines.push({ name: 'Revenue Command Center', monthly });
   return monthlyAddOns + monthly;
+}
+
+function applyCustomSystemAddOn(selections, addOnLines) {
+  let monthlyAddOns = 0;
+  let setupAddOns = 0;
+
+  if (!selections.needsCustom) {
+    return { monthlyAddOns, setupAddOns };
+  }
+
+  setupAddOns += PLAN_BUILDER_PRICES.customSystemSetup;
+  addOnLines.push({
+    name: 'Custom system — setup',
+    onceOff: PLAN_BUILDER_PRICES.customSystemSetup,
+  });
+
+  if (selections.wantsStandaloneApi) {
+    setupAddOns += PLAN_BUILDER_PRICES.standaloneApiSetup;
+    addOnLines.push({
+      name: 'Private standalone API',
+      onceOff: PLAN_BUILDER_PRICES.standaloneApiSetup,
+    });
+  }
+
+  monthlyAddOns += PLAN_BUILDER_PRICES.customSystemMonthly;
+  addOnLines.push({
+    name: 'Custom system — monthly',
+    monthly: PLAN_BUILDER_PRICES.customSystemMonthly,
+  });
+
+  return { monthlyAddOns, setupAddOns };
 }
 
 function buildCustomEstimateNote(selections) {
@@ -70,8 +112,16 @@ function buildCustomEstimateNote(selections) {
     selections.customScope === 'addon'
       ? 'Custom system as an add-on to store/bookings'
       : 'Standalone custom system';
-  if (!brief) return `${scope} — our team will confirm scope and pricing with you.`;
-  return `${scope} — we will review your brief and follow up with a tailored quote.`;
+  const briefNote = brief ? ' We will review your brief before work begins.' : '';
+  return `${scope}.${briefNote}`;
+}
+
+function calcTeamSeatCosts(selections, tierId, planBuilder) {
+  const teamMembers = Math.max(1, Number(selections.teamMembers) || 1);
+  const included = planBuilder.includedSeats[tierId] ?? planBuilder.includedSeats.starter ?? 1;
+  const extraSeats = Math.max(0, teamMembers - included);
+  const seatMonthly = extraSeats * planBuilder.extraSeatMonthlyFee;
+  return { teamMembers, included, extraSeats, seatMonthly };
 }
 
 function calculatePlanEstimate(selections, pricingConfig) {
@@ -84,19 +134,24 @@ function calculatePlanEstimate(selections, pricingConfig) {
   const customOnly = !!selections.needsCustom && !store && !bookings;
 
   if (customOnly) {
+    const addOnLines = [];
+    const customPricing = applyCustomSystemAddOn(selections, addOnLines);
+    const seats = calcTeamSeatCosts(selections, 'starter', planBuilder);
+
     return {
       tierId: 'custom',
       tierName: 'Custom scope',
-      setupFee: null,
-      monthlyFee: null,
-      totalSetup: null,
-      totalMonthly: null,
+      setupFee: 0,
+      monthlyFee: 0,
+      totalSetup: customPricing.setupAddOns,
+      totalMonthly: customPricing.monthlyAddOns + seats.seatMonthly,
       note: buildCustomEstimateNote(selections),
-      addOnLines: [],
-      includedSeats: 1,
-      extraSeats: 0,
+      customDisclaimer: CUSTOM_SYSTEM_DISCLAIMER,
+      addOnLines,
+      includedSeats: seats.included,
+      extraSeats: seats.extraSeats,
       seatMonthlyFee: planBuilder.extraSeatMonthlyFee,
-      seatMonthly: 0,
+      seatMonthly: seats.seatMonthly,
     };
   }
 
@@ -115,6 +170,7 @@ function calculatePlanEstimate(selections, pricingConfig) {
       totalSetup: null,
       totalMonthly: null,
       note: buildCustomEstimateNote(selections) || 'Contact us for a tailored quote.',
+      customDisclaimer: selections.needsCustom ? CUSTOM_SYSTEM_DISCLAIMER : '',
       addOnLines: [],
       includedSeats: 1,
       extraSeats: 0,
@@ -151,7 +207,11 @@ function calculatePlanEstimate(selections, pricingConfig) {
     }
   }
 
-  monthlyAddOns = applyRevenueToolsAddOn(selections, tierId, addOns, addOnLines, monthlyAddOns);
+  const customPricing = applyCustomSystemAddOn(selections, addOnLines);
+  monthlyAddOns += customPricing.monthlyAddOns;
+  setupAddOns += customPricing.setupAddOns;
+
+  monthlyAddOns = applyRevenueToolsAddOn(selections, tierId, addOnLines, monthlyAddOns);
 
   if (selections.customIntegration) {
     const custom = addOns.find((a) => a.id === 'custom-integration' && a.active !== false);
@@ -160,40 +220,36 @@ function calculatePlanEstimate(selections, pricingConfig) {
     addOnLines.push({ name: custom?.name || 'Custom integration', onceOff: once });
   }
 
-  const teamMembers = Math.max(1, Number(selections.teamMembers) || 1);
-  const included = planBuilder.includedSeats[tier.id] ?? 1;
-  const extraSeats = Math.max(0, teamMembers - included);
-  const seatMonthly = extraSeats * planBuilder.extraSeatMonthlyFee;
+  const seats = calcTeamSeatCosts(selections, tier.id, planBuilder);
 
   const setupFee = tier.setupFee ?? 0;
   const monthlyFee = tier.monthlyFee ?? 0;
-
-  let note = '';
-  if (selections.needsCustom) {
-    note = buildCustomEstimateNote(selections);
-  }
 
   return {
     tierId: tier.id,
     tierName: tier.name,
     setupFee,
     monthlyFee,
-    includedSeats: included,
-    extraSeats,
+    includedSeats: seats.included,
+    extraSeats: seats.extraSeats,
     seatMonthlyFee: planBuilder.extraSeatMonthlyFee,
-    seatMonthly,
+    seatMonthly: seats.seatMonthly,
     addOnLines,
     totalSetup: setupFee + setupAddOns,
-    totalMonthly: monthlyFee + monthlyAddOns + seatMonthly,
+    totalMonthly: monthlyFee + monthlyAddOns + seats.seatMonthly,
     highlights: tier.highlights || [],
-    note,
+    note: selections.needsCustom ? buildCustomEstimateNote(selections) : '',
+    customDisclaimer: selections.needsCustom ? CUSTOM_SYSTEM_DISCLAIMER : '',
   };
 }
 
 module.exports = {
   DEFAULT_PLAN_BUILDER,
+  PLAN_BUILDER_PRICES,
+  CUSTOM_SYSTEM_DISCLAIMER,
   mergePlanBuilderConfig,
   calculatePlanEstimate,
   resolveTierId,
   applyRevenueToolsAddOn,
+  applyCustomSystemAddOn,
 };

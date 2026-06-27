@@ -134,4 +134,6 @@ router.post('/partnership-pricing/reset', authenticateAdmin, wrapRoute(async (re
   res.json({ success: true, config: mergePartnershipPricing(doc) });
 }));
 
+router.getOrCreateConfig = getOrCreateConfig;
+
 module.exports = router;
