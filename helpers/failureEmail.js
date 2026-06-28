@@ -28,7 +28,7 @@ function getTransporter() {
 
 function resetTransporter() {
   if (transporter && typeof transporter.close === 'function') {
-    transporter.close().catch(() => {});
+    Promise.resolve(transporter.close()).catch(() => {});
   }
   transporter = null;
 }
@@ -195,7 +195,11 @@ function wrapRoute(handler) {
       const status = err && err.status && Number(err.status) >= 400 ? err.status : 500;
       res.status(status).json({
         success: false,
-        message: status === 500 ? 'Internal Server Error' : err.message || 'Error',
+        message:
+          status === 500
+            ? 'Internal Server Error'
+            : err.message || 'Error',
+        ...(status === 503 ? { retryable: true } : {}),
       });
     }
   };

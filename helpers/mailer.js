@@ -193,10 +193,8 @@ async function inlineSignatureImagesAsync(html, baseAttachments) {
   return { html: newHtml, attachments };
 }
 
-// Create a transporter pool to reuse connections
-const transporterPool = new Map();
-
-function getTransporter(config) {
+/** One-shot SMTP transport — avoids holding pooled connections on shared mail hosts. */
+function createSendTransporter(config) {
   const secure =
     typeof config.secure === 'boolean'
       ? config.secure
@@ -205,33 +203,33 @@ function getTransporter(config) {
     typeof config.requireTLS === 'boolean'
       ? config.requireTLS
       : Number(config.port) === 587;
-  const key = `${config.host}:${config.port}:${config.user}:${secure ? '1' : '0'}:${requireTLS ? 't' : 'f'}`;
 
-  if (!transporterPool.has(key)) {
-    const transporter = nodemailer.createTransport({
-      host: config.host,
-      port: config.port,
-      secure,
-      requireTLS,
-      auth: { 
-        user: config.user, 
-        pass: config.pass 
-      },
-      tls: {
-        rejectUnauthorized: false,
-        minVersion: 'TLSv1.2'
-      },
-      pool: true,
-      maxConnections: 1,
-      maxMessages: 10,
-      connectionTimeout: 30000,
-      greetingTimeout: 30000
-    });
-    
-    transporterPool.set(key, transporter);
+  return nodemailer.createTransport({
+    host: config.host,
+    port: config.port,
+    secure,
+    requireTLS,
+    auth: {
+      user: config.user,
+      pass: config.pass,
+    },
+    tls: {
+      rejectUnauthorized: false,
+      minVersion: 'TLSv1.2',
+    },
+    pool: false,
+    connectionTimeout: 30000,
+    greetingTimeout: 30000,
+  });
+}
+
+async function closeTransporter(transporter) {
+  if (!transporter || typeof transporter.close !== 'function') return;
+  try {
+    await Promise.resolve(transporter.close());
+  } catch (_) {
+    /* ignore close errors */
   }
-  
-  return transporterPool.get(key);
 }
 
 /**
@@ -389,15 +387,13 @@ async function sendMail(options) {
   const implicitTls =
     typeof secureOpt === 'boolean' ? secureOpt : Number(port) === 465;
 
-  // Use connection pooling
-  const transporter = getTransporter({
+  const transporter = createSendTransporter({
     host,
     port,
     secure: implicitTls,
     requireTLS: Number(port) === 587,
     user,
     pass,
-    tls: { rejectUnauthorized: false },
   });
 
   const { html: htmlOut, attachments: attachmentsOut } = await inlineSignatureImagesAsync(html, attachments);
@@ -447,7 +443,6 @@ async function sendMail(options) {
   });
 
   try {
-    // Send the email via SMTP
     const info = await transporter.sendMail(mailOptions);
     
     const persistedMessageId = info.messageId || finalMessageId;
@@ -557,19 +552,9 @@ async function sendMail(options) {
     
   } catch (error) {
     console.error('❌ SMTP failed:', error.message);
-    
-    // Clean up transporter on error (key must match getTransporter)
-    const key = `${host}:${port}:${user}:${implicitTls ? '1' : '0'}:${Number(port) === 587 ? 't' : 'f'}`;
-    if (transporterPool.has(key)) {
-      try {
-        await transporterPool.get(key).close();
-        transporterPool.delete(key);
-      } catch (closeError) {
-        console.error('Error closing transporter:', closeError);
-      }
-    }
-    
     throw error;
+  } finally {
+    await closeTransporter(transporter);
   }
 }
 

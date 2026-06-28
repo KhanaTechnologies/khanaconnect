@@ -1,5 +1,5 @@
 // utils/cartReminderEmail.js
-const { sendMail } = require('../helpers/mailer');
+const { sendMailWithRetry } = require('../helpers/mailer');
 const { resolveEmailBrand } = require('../helpers/emailDesignTokens');
 const { decrypt } = require('../helpers/encryption');
 const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../helpers/mailHost');
@@ -87,21 +87,24 @@ Complete your order: ${cartUrl}`;
 
     const { html: htmlOut, attachments } = await inlineEmailBannerLogosAsync(html, [], {});
 
-    await sendMail({
-      host: smtpHost,
-      port: smtpPort,
-      secure: resolveSmtpSecure(smtpPort),
-      user: decryptedEmail,
-      pass: decryptedPass,
-      from: `"${client.companyName}" <${decryptedEmail}>`,
-      to: customer.emailAddress,
-      subject: `Complete your purchase at ${client.companyName}`,
-      text,
-      html: htmlOut,
-      attachments: formatEmailAttachments(attachments || []),
-      clientID: client.clientID,
-      saveToSent: false,
-    });
+    await sendMailWithRetry(
+      {
+        host: smtpHost,
+        port: smtpPort,
+        secure: resolveSmtpSecure(smtpPort),
+        user: decryptedEmail,
+        pass: decryptedPass,
+        from: `"${client.companyName}" <${decryptedEmail}>`,
+        to: customer.emailAddress,
+        subject: `Complete your purchase at ${client.companyName}`,
+        text,
+        html: htmlOut,
+        attachments: formatEmailAttachments(attachments || []),
+        clientID: client.clientID,
+        saveToSent: false,
+      },
+      3
+    );
 
     console.log(`Cart reminder email sent to ${customer.emailAddress}`);
   } catch (error) {

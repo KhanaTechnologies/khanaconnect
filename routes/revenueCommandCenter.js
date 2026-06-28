@@ -23,6 +23,7 @@ const {
 const { sendCartReminderEmail } = require('../utils/cartReminderEmail');
 const { sendPreorderGoLiveEmail } = require('../helpers/preorderGoLiveEmail');
 const { resolveSmtpHost } = require('../helpers/mailHost');
+const { smtpErrorToHttp } = require('../helpers/smtpErrors');
 
 const router = express.Router();
 
@@ -115,7 +116,12 @@ router.post('/cart-recovery/:customerId/send', authenticateClient, wrapRoute(asy
   if (!customer) return res.status(404).json({ error: 'Customer not found' });
   if (!customer.cart?.length) return res.status(400).json({ error: 'Cart is empty' });
 
-  await sendCartReminderEmail(customer, client);
+  try {
+    await sendCartReminderEmail(customer, client);
+  } catch (err) {
+    throw smtpErrorToHttp(err);
+  }
+
   customer.cartReminder = customer.cartReminder || {};
   customer.cartReminder.lastSent = new Date();
   await customer.save();
