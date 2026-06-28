@@ -7,7 +7,7 @@ const {
   ctaButton,
 } = require('../helpers/transactionalEmailLayout');
 const { resolveEmailBrand } = require('../helpers/emailDesignTokens');
-const { prepareTransactionalEmailHtml } = require('../helpers/transactionalEmailPipeline');
+const { inlineEmailBannerLogosAsync } = require('../helpers/inlineEmailBannerLogo');
 const { formatEmailAttachments } = require('../helpers/formatEmailAttachments');
 
 /**
@@ -80,11 +80,7 @@ async function sendServiceWishlistMonthlyReminder(customer, client, rows, period
   });
 
   const merged = mergeEmailSignature(innerHtml, '', client.emailSignature || '');
-  const { html: htmlOut, attachments } = await prepareTransactionalEmailHtml(merged.html, [], {
-    primaryColor: brand.primaryColor,
-    logoUrl: brand.logoUrl,
-    brandName: String(client.companyName || 'us'),
-  });
+  const { html: htmlOut, attachments } = await inlineEmailBannerLogosAsync(merged.html, [], {});
   const text = `Hi ${customer.customerFirstName || 'there'},
 
 You asked to be reminded in ${label} about these services:

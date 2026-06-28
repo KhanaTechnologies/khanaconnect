@@ -5,7 +5,7 @@ const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../help
 const { diffBookingForCustomer } = require('./bookingEmailHelpers');
 const { mergeEmailSignature } = require('../helpers/signatureHtml');
 const { inlineSignatureImages } = require('../helpers/mailer');
-const { prepareTransactionalEmailHtml } = require('../helpers/transactionalEmailPipeline');
+const { inlineEmailBannerLogosAsync } = require('../helpers/inlineEmailBannerLogo');
 const { enqueueOutboundEmail } = require('../queues/outboundEmailQueue');
 const { serializeMailOptions, deserializeMailOptions } = require('../helpers/mailQueueSerialize');
 const { isNonRetryableSmtpError, isRetryableSmtpError } = require('../helpers/smtpErrors');
@@ -76,7 +76,7 @@ async function buildTransactionalMailParts(html, text, emailSignature, options =
         merged.html,
         []
     );
-    const { html: htmlOut, attachments } = await prepareTransactionalEmailHtml(
+    const { html: htmlOut, attachments } = await inlineEmailBannerLogosAsync(
         withSignatures,
         sigAttachments,
         options

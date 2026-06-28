@@ -3,7 +3,7 @@ const { decrypt } = require('../helpers/encryption');
 const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../helpers/mailHost');
 const { escapeHtml, mergeEmailSignature } = require('../helpers/signatureHtml');
 const { inlineSignatureImages } = require('../helpers/mailer');
-const { prepareTransactionalEmailHtml } = require('../helpers/transactionalEmailPipeline');
+const { inlineEmailBannerLogosAsync } = require('../helpers/inlineEmailBannerLogo');
 const {
     buildKhanaEmail,
     ctaButton,
@@ -118,11 +118,7 @@ async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass,
             .replace(/\n{3,}/g, '\n\n')
             .trim();
     const { html: withSigs, attachments: sigAtt } = inlineSignatureImages(merged.html, []);
-    const { html: htmlOut, attachments } = await prepareTransactionalEmailHtml(withSigs, sigAtt, {
-        primaryColor: brand.primaryColor,
-        logoUrl: brand.logoUrl,
-        brandName: brandPlain,
-    });
+    const { html: htmlOut, attachments } = await inlineEmailBannerLogosAsync(withSigs, sigAtt, {});
     const recipientEmail = decrypt(userEmail);
 
     try {

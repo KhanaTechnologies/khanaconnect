@@ -1009,9 +1009,10 @@ router.get('/analytics/cart-abandonment', validatePaidStorefrontToken, wrapRoute
 
     const abandonmentStats = analyzeCartAbandonment(customers);
 
-    res.json({ 
-      success: true, 
-      abandonmentStats 
+    res.json({
+      success: true,
+      abandonmentStats,
+      ...abandonmentStats,
     });
   } catch (error) {
     console.error('Error getting cart abandonment stats:', error);
@@ -1791,24 +1792,38 @@ function analyzePurchasePatterns(customers) {
 }
 
 function analyzeCartAbandonment(customers) {
-  const customersWithCart = customers.filter(c => c.cart.length > 0);
-  const abandonedCarts = customersWithCart.filter(c => 
-    c.cart.length > 0 && 
-    (c.totalOrders === 0 || 
-     new Date() - new Date(c.lastActivity) > 24 * 60 * 60 * 1000)
-  );
-  
+  const customersWithCart = customers.filter((c) => c.cart && c.cart.length > 0);
+  const idleMs = 24 * 60 * 60 * 1000;
+  const abandonedCarts = customersWithCart.filter((c) => {
+    const idle =
+      c.lastActivity && Date.now() - new Date(c.lastActivity).getTime() > idleMs;
+    return idle || Number(c.totalOrders || 0) === 0;
+  });
+
+  const cartTotal = (customer) =>
+    (customer.cart || []).reduce(
+      (sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 1),
+      0
+    );
+
   return {
     totalAbandonedCarts: abandonedCarts.length,
-    abandonmentRate: customersWithCart.length > 0 ? (abandonedCarts.length / customersWithCart.length) * 100 : 0,
-    averageAbandonedCartValue: abandonedCarts.length > 0 ? abandonedCarts.reduce((sum, c) => 
-      sum + c.cart.reduce((cartSum, item) => cartSum + (item.price * item.quantity), 0), 0) / abandonedCarts.length : 0,
-    potentialRevenue: abandonedCarts.reduce((sum, c) => 
-      sum + c.cart.reduce((cartSum, item) => cartSum + (item.price * item.quantity), 0), 0),
-    customersNeedingReminders: customersWithCart.filter(c => 
-      c.cartReminder?.isActive && (!c.cartReminder.lastSent || 
-      new Date() > c.cartReminder.nextReminder)
-    ).length
+    abandonedCarts: abandonedCarts.length,
+    totalCarts: customersWithCart.length,
+    abandonmentRate:
+      customersWithCart.length > 0
+        ? (abandonedCarts.length / customersWithCart.length) * 100
+        : 0,
+    averageAbandonedCartValue:
+      abandonedCarts.length > 0
+        ? abandonedCarts.reduce((sum, c) => sum + cartTotal(c), 0) / abandonedCarts.length
+        : 0,
+    potentialRevenue: abandonedCarts.reduce((sum, c) => sum + cartTotal(c), 0),
+    customersNeedingReminders: customersWithCart.filter(
+      (c) =>
+        c.cartReminder?.isActive &&
+        (!c.cartReminder.lastSent || new Date() > c.cartReminder.nextReminder)
+    ).length,
   };
 }
 

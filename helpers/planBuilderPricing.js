@@ -9,18 +9,21 @@ const DEFAULT_PLAN_BUILDER = {
   extraSeatMonthlyFee: 99,
 };
 
+/** Minimum monthly partnership fee (ZAR). */
+const MIN_MONTHLY_PARTNERSHIP = 450;
+
 /** Plan-builder line prices — authoritative for estimates (not admin DB overrides). */
 const PLAN_BUILDER_PRICES = {
   revenueToolsMonthly: 99,
   customSystemSetup: 3000,
-  customSystemMonthly: 450,
+  customSystemMonthly: MIN_MONTHLY_PARTNERSHIP,
   standaloneApiSetup: 5000,
 };
 
 const CUSTOM_SYSTEM_DISCLAIMER =
   'Custom systems must be reasonable in scope — something Khana can develop and maintain on our platform. ' +
   'The system runs on shared Khana infrastructure and is not exclusive to your business unless you add a private standalone API ' +
-  '(R5,000 once-off on top of the R3,000 custom setup fee). We confirm final scope before development starts.';
+  '(quoted once-off on top of custom setup). We confirm final scope and pricing before development starts.';
 
 function mergePlanBuilderConfig(config) {
   const src = config?.planBuilder || {};
@@ -56,6 +59,9 @@ function resolveTierId(selections) {
 }
 
 const TIERS_WITH_REVENUE_INCLUDED = new Set(['growth', 'scale']);
+
+/** Monthly add-ons billed separately — custom monthly is the partnership base via resolveMonthlyPartnershipFee. */
+const MONTHLY_ADDON_SKIP_IDS = new Set(['custom-system']);
 
 function applyRevenueToolsAddOn(selections, tierId, addOnLines, monthlyAddOns) {
   const store = !!selections.needsStore;
@@ -103,7 +109,8 @@ function resolveMonthlyPartnershipFee(tier, selections) {
   if (selections.needsCustom) {
     return PLAN_BUILDER_PRICES.customSystemMonthly;
   }
-  return tier.monthlyFee ?? 0;
+  const fee = tier.monthlyFee ?? 0;
+  return Math.max(MIN_MONTHLY_PARTNERSHIP, fee);
 }
 
 function buildCustomEstimateNote(selections) {
@@ -186,7 +193,9 @@ function calculatePlanEstimate(selections, pricingConfig) {
   let setupAddOns = 0;
 
   if (store && bookings && tierId !== 'scale') {
-    const mixed = addOns.find((a) => a.id === 'mixed-module' && a.active !== false);
+    const mixed = addOns.find(
+      (a) => a.id === 'mixed-module' && a.active !== false && !MONTHLY_ADDON_SKIP_IDS.has(a.id)
+    );
     if (mixed?.monthlyFee) {
       monthlyAddOns += mixed.monthlyFee;
       addOnLines.push({ name: mixed.name, monthly: mixed.monthlyFee });
@@ -194,7 +203,9 @@ function calculatePlanEstimate(selections, pricingConfig) {
   }
 
   if (selections.catalogueSize === 'large' && store) {
-    const cat = addOns.find((a) => a.id === 'large-catalogue' && a.active !== false);
+    const cat = addOns.find(
+      (a) => a.id === 'large-catalogue' && a.active !== false && !MONTHLY_ADDON_SKIP_IDS.has(a.id)
+    );
     if (cat?.monthlyFee) {
       monthlyAddOns += cat.monthlyFee;
       addOnLines.push({ name: cat.name, monthly: cat.monthlyFee });
@@ -202,7 +213,9 @@ function calculatePlanEstimate(selections, pricingConfig) {
   }
 
   if (selections.advancedEmail) {
-    const email = addOns.find((a) => a.id === 'email-campaigns' && a.active !== false);
+    const email = addOns.find(
+      (a) => a.id === 'email-campaigns' && a.active !== false && !MONTHLY_ADDON_SKIP_IDS.has(a.id)
+    );
     if (email?.monthlyFee) {
       monthlyAddOns += email.monthlyFee;
       addOnLines.push({ name: email.name, monthly: email.monthlyFee });
@@ -246,6 +259,7 @@ function calculatePlanEstimate(selections, pricingConfig) {
 
 module.exports = {
   DEFAULT_PLAN_BUILDER,
+  MIN_MONTHLY_PARTNERSHIP,
   PLAN_BUILDER_PRICES,
   CUSTOM_SYSTEM_DISCLAIMER,
   mergePlanBuilderConfig,

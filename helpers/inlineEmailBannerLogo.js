@@ -72,9 +72,7 @@ async function fetchRemoteLogoBuffer(src) {
 }
 
 /**
- * Inline banner logos as cid attachments.
- * Logos are flattened onto the banner gradient slice so Gmail/Outlook do not
- * render gray/black boxes behind transparent PNGs.
+ * Inline client email logos (white card header) as cid attachments.
  */
 async function inlineEmailBannerLogosAsync(html, baseAttachments, options = {}) {
   const attachments = Array.isArray(baseAttachments) ? [...baseAttachments] : [];
@@ -88,6 +86,7 @@ async function inlineEmailBannerLogosAsync(html, baseAttachments, options = {}) 
   for (const match of tags) {
     const src = String(match[3] || '').trim();
     if (!src || src.startsWith('cid:')) continue;
+    if (!/\bdata-kc-email-logo\s*=\s*["']1["']/i.test(match[0])) continue;
 
     let content = null;
     let filename = 'email-logo.png';
@@ -129,10 +128,7 @@ async function inlineEmailBannerLogosAsync(html, baseAttachments, options = {}) 
       content = await prepareEmailBannerLogo(content, {
         originalname,
         mimetype: contentType,
-        mode: 'email',
-        primaryColor: options.primaryColor,
-        bannerWidth: options.bannerWidth,
-        logoDisplayWidth: options.logoDisplayWidth,
+        mode: 'storage',
       });
       contentType = 'image/png';
       filename = `${path.parse(filename).name}.png`;

@@ -1,6 +1,7 @@
 /**
- * Howler-inspired transactional email shell: full-width gradient banner with logo,
+ * Howler-inspired transactional email shell: full-width gradient banner,
  * white headline card overlapping the banner, and a separate body card below.
+ * Client logos sit on the white card (not the gradient) to avoid transparency issues.
  */
 
 const { resolvePublicBaseUrl } = require('./publicBaseUrl');
@@ -30,32 +31,35 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
-function renderBannerBrand({ brandName, logoUrl, showKhanaLogo }) {
+/** Brand name on the gradient strip — no images (avoids transparency issues). */
+function renderBannerLabel({ brandName }) {
   const brand = escapeHtml(brandName || EMAIL_TOKENS.brand.name);
-  const logo = logoUrl || (showKhanaLogo === true ? resolveKhanaEmailLogoUrl() : '');
+  return `<p style="margin:0;font-size:12px;letter-spacing:0.18em;text-transform:uppercase;color:rgba(255,255,255,0.92);font-weight:700;">${brand}</p>`;
+}
 
-  if (logo) {
-    return `<table role="presentation" border="0" cellpadding="0" cellspacing="0" align="center" style="margin:0 auto;border:0;border-collapse:collapse;border-spacing:0;mso-table-lspace:0pt;mso-table-rspace:0pt;">
+/** Client logo in the white card header — renders reliably on a solid background. */
+function renderCardLogo({ brandName, logoUrl }) {
+  const logo = String(logoUrl || '').trim();
+  if (!logo) return '';
+  const brand = escapeHtml(brandName || 'Logo');
+  return `<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 4px;border:0;border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;">
       <tr>
-        <td align="center" style="padding:0;margin:0;background:none;background-color:transparent;border:0;line-height:0;font-size:0;mso-line-height-rule:exactly;">
-          <img alt="${brand}" src="${escapeHtml(logo)}" width="200" style="width:200px;max-width:78%;height:auto;display:block;margin:0 auto;padding:0;border:0;outline:none;text-decoration:none;background:none;background-color:transparent;-ms-interpolation-mode:bicubic;" />
+        <td align="left" style="padding:0 0 16px;line-height:0;font-size:0;mso-line-height-rule:exactly;">
+          <img alt="${brand}" src="${escapeHtml(logo)}" width="160" style="display:block;max-width:160px;width:100%;height:auto;margin:0;border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;" data-kc-email-logo="1" />
         </td>
       </tr>
     </table>`;
-  }
-
-  return `<p style="margin:0;font-size:13px;letter-spacing:0.16em;text-transform:uppercase;color:rgba(255,255,255,0.88);font-weight:700;">${brand}</p>`;
 }
 
 /**
  * @param {object} opts
- * @param {string} opts.headline - Large title in the white headline card (Howler "You've got tickets!")
+ * @param {string} opts.headline - Large title in the white headline card
  * @param {string} opts.bodyHtml - Main content HTML (inside body card)
  * @param {string} [opts.title] - HTML <title> tag
  * @param {string} [opts.preheader] - Hidden preview text
- * @param {string} [opts.brandName] - Shown as logo alt / text fallback in banner
- * @param {string} [opts.logoUrl] - Optional client logo URL
- * @param {boolean} [opts.showKhanaLogo] - Show Khana white logo in banner (Khana-branded emails only)
+ * @param {string} [opts.brandName] - Shown in banner + logo alt text
+ * @param {string} [opts.logoUrl] - Client logo (white card header)
+ * @param {boolean} [opts.showKhanaLogo] - Khana-branded emails (banner text only)
  * @param {string} [opts.footerHtml] - Footer below cards
  * @param {number} [opts.maxWidth] - Card max width in px
  */
@@ -77,18 +81,11 @@ function buildKhanaEmail({
 
   const pageTitle = escapeHtml(title || headline || 'Notification');
   const headlineText = escapeHtml(headline || title || 'Notification');
-  const bannerBrand = renderBannerBrand({ brandName, logoUrl, showKhanaLogo });
+  const displayBrand = brandName || (showKhanaLogo === true ? EMAIL_TOKENS.brand.name : '');
+  const bannerLabel = renderBannerLabel({ brandName: displayBrand });
+  const cardLogo = renderCardLogo({ brandName: displayBrand, logoUrl });
   const defaultFooter = `Copyright © ${new Date().getFullYear()} ${escapeHtml(brandName || EMAIL_TOKENS.brand.name)}`;
   const footer = footerHtml || defaultFooter;
-  const resolvedLogo = logoUrl || (showKhanaLogo === true ? resolveKhanaEmailLogoUrl() : '');
-  const bannerBrandName = escapeHtml(brandName || EMAIL_TOKENS.brand.name);
-  const bannerDataAttrs = [
-    'data-kc-transactional-banner="1"',
-    `data-kc-primary-color="${escapeHtml(accent)}"`,
-    `data-kc-logo-url="${escapeHtml(resolvedLogo)}"`,
-    `data-kc-show-khana-logo="${showKhanaLogo === true ? '1' : '0'}"`,
-    `data-kc-brand-name="${bannerBrandName}"`,
-  ].join(' ');
 
   return `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml" lang="en">
@@ -103,12 +100,12 @@ function buildKhanaEmail({
   <center>
     <table role="presentation" border="0" align="center" cellpadding="0" cellspacing="0" width="100%" style="width:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#404d57;font-size:16px;border-spacing:0;mso-table-lspace:0pt;mso-table-rspace:0pt;">
       <tbody>
-        <tr ${bannerDataAttrs}>
-          <td align="center" style="color:#ffffff;background:${gradientCss};padding:40px 24px 28px;" bgcolor="${gradientFallback}">
-            ${bannerBrand}
+        <tr>
+          <td align="center" style="color:#ffffff;background:${gradientCss};padding:28px 24px 24px;" bgcolor="${gradientFallback}">
+            ${bannerLabel}
           </td>
         </tr>
-        <tr data-kc-headline-shell="1">
+        <tr>
           <td align="center" style="background:${gradientCss};padding:0 0 0;" bgcolor="${gradientFallback}">
             <!--[if (gte mso 9)|(IE)]><table align="center" border="0" cellspacing="0" cellpadding="0" width="${maxWidth}"><tr><td align="center" valign="top" width="${maxWidth}"><![endif]-->
             <table role="presentation" border="0" align="center" cellpadding="0" cellspacing="0" width="100%" style="width:95% !important;max-width:${maxWidth}px;border-radius:8px 8px 0 0;mso-table-lspace:0pt;mso-table-rspace:0pt;border:1px solid #e6e6e6;border-bottom:none;" bgcolor="#ffffff">
@@ -116,6 +113,7 @@ function buildKhanaEmail({
                 <tr>
                   <td style="width:24px;"></td>
                   <td style="padding:28px 0 0;">
+                    ${cardLogo}
                     <h1 style="margin:0;font-family:inherit;font-size:24px;font-weight:300;line-height:32px;color:#404d57;text-align:left;">${headlineText}</h1>
                   </td>
                   <td style="width:24px;"></td>

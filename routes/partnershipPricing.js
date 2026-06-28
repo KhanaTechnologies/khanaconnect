@@ -8,6 +8,7 @@ const {
   PRICING_CONFIG_VERSION,
   DEFAULT_PARTNERSHIP_PRICING,
   mergePartnershipPricing,
+  sanitizePublicPricing,
 } = require('../helpers/partnershipPricingDefaults');
 
 const router = express.Router();
@@ -79,7 +80,7 @@ function sortConfig(config) {
 /** Public — marketing website */
 router.get('/public/partnership-pricing', wrapRoute(async (_req, res) => {
   const doc = await getOrCreateConfig();
-  const config = sortConfig(mergePartnershipPricing(doc));
+  const config = sortConfig(sanitizePublicPricing(mergePartnershipPricing(doc)));
   res.json({ success: true, config });
 }));
 

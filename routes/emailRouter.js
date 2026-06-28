@@ -2323,32 +2323,6 @@ router.put('/branding/color', validateClient, wrapRoute(async (req, res) => {
 }));
 
 /**
- * GET /branding/banner — dynamically generated JPEG banner (matches sent emails)
- */
-router.get('/branding/banner', validateClient, wrapRoute(async (req, res) => {
-    const logoUrl = String(req.query.logoUrl ?? req.client.emailLogoUrl ?? '').trim();
-    const showKhanaLogo = String(req.query.showKhanaLogo || '') === '1';
-    const previewColor = String(req.query.emailPrimaryColor ?? req.query.primaryColor ?? '').trim();
-    const { resolveEmailBrand } = require('../helpers/emailDesignTokens');
-    const { generateEmailBannerImage } = require('../helpers/emailBannerImage');
-    const brand = resolveEmailBrand({
-        emailPrimaryColor: previewColor || req.client.emailPrimaryColor,
-        dashboardThemeColor: req.client.dashboardThemeColor,
-    });
-    const brandName = String(req.query.brandName || req.client.companyName || brand.khanaName || '').trim();
-
-    const buffer = await generateEmailBannerImage({
-        primaryColor: brand.primaryColor,
-        logoUrl: logoUrl || undefined,
-        showKhanaLogo,
-        brandName,
-    });
-
-    res.set('Cache-Control', 'private, max-age=120');
-    res.type('image/jpeg').send(buffer);
-}));
-
-/**
  * POST /branding/preview — HTML preview of transactional email banner + sample body
  */
 router.post('/branding/preview', validateClient, wrapRoute(async (req, res) => {
@@ -2389,20 +2363,7 @@ router.post('/branding/preview', validateClient, wrapRoute(async (req, res) => {
         primaryColor: brand.primaryColor,
     });
 
-    const { applyEmailBannerImageAsync } = require('../helpers/emailBannerImage');
-    const { html: previewHtml } = await applyEmailBannerImageAsync(html, [], {
-        primaryColor: brand.primaryColor,
-        logoUrl: logoUrl || undefined,
-        brandName: companyName,
-    });
-
-    res.json({
-        ok: true,
-        html: previewHtml,
-        emailLogoUrl: logoUrl,
-        effectivePrimaryColor: brand.primaryColor,
-        bannerImageUrl: `${req.protocol}://${req.get('host')}${req.baseUrl}/branding/banner`,
-    });
+    res.json({ ok: true, html, emailLogoUrl: logoUrl, effectivePrimaryColor: brand.primaryColor });
 }));
 
 /**

@@ -1,14 +1,15 @@
 const { DEFAULT_PLAN_BUILDER, mergePlanBuilderConfig } = require('./planBuilderPricing');
 
-const PRICING_CONFIG_VERSION = 9;
+const PRICING_CONFIG_VERSION = 10;
 
 /** Default partnership pricing for the SA market. */
 const DEFAULT_PARTNERSHIP_PRICING = {
   pricingConfigVersion: PRICING_CONFIG_VERSION,
-  showPublishedPrices: true,
+  showPublishedPrices: false,
   currency: 'ZAR',
   currencySymbol: 'R',
-  billingNote: 'All plans billed monthly after go-live. Setup fees are once-off and due before launch.',
+  billingNote:
+    'Pricing depends on scope and features. Request a personalised estimate for exact setup and monthly fees — most partnerships start from R450/month after go-live.',
   vatNote: '',
   tiers: [
     {
@@ -18,9 +19,9 @@ const DEFAULT_PARTNERSHIP_PRICING = {
       description:
         'Get online fast with a professional presence. A good fit when you are launching and need reliability without enterprise pricing.',
       setupFee: 1999,
-      monthlyFee: 150,
-      setupLabel: '',
-      monthlyLabel: '',
+      monthlyFee: 450,
+      setupLabel: 'Setup quoted on enquiry',
+      monthlyLabel: 'From R450/mo',
       featured: false,
       active: true,
       sortOrder: 0,
@@ -41,9 +42,9 @@ const DEFAULT_PARTNERSHIP_PRICING = {
       description:
         'For established small businesses that need a polished site with ongoing management and local support.',
       setupFee: 3499,
-      monthlyFee: 449,
-      setupLabel: '',
-      monthlyLabel: '',
+      monthlyFee: 650,
+      setupLabel: 'Setup quoted on enquiry',
+      monthlyLabel: 'Quoted on enquiry',
       featured: false,
       active: true,
       sortOrder: 1,
@@ -65,8 +66,8 @@ const DEFAULT_PARTNERSHIP_PRICING = {
         'Our most popular plan. Full Revenue Command Center to recover sales, segment customers, and run campaigns on top of your store or bookings.',
       setupFee: 6999,
       monthlyFee: 899,
-      setupLabel: '',
-      monthlyLabel: '',
+      setupLabel: 'Setup quoted on enquiry',
+      monthlyLabel: 'Quoted on enquiry',
       featured: true,
       active: true,
       sortOrder: 2,
@@ -87,8 +88,8 @@ const DEFAULT_PARTNERSHIP_PRICING = {
         'For growing businesses running products and appointments together, with full revenue and marketing tools.',
       setupFee: 14999,
       monthlyFee: 1799,
-      setupLabel: '',
-      monthlyLabel: '',
+      setupLabel: 'Setup quoted on enquiry',
+      monthlyLabel: 'Quoted on enquiry',
       featured: false,
       active: true,
       sortOrder: 3,
@@ -110,7 +111,7 @@ const DEFAULT_PARTNERSHIP_PRICING = {
       setupFee: null,
       monthlyFee: null,
       setupLabel: 'Scoped on enquiry',
-      monthlyLabel: 'From R3,500/mo typical',
+      monthlyLabel: 'Quoted on enquiry',
       featured: false,
       active: false,
       sortOrder: 4,
@@ -169,7 +170,7 @@ const DEFAULT_PARTNERSHIP_PRICING = {
       id: 'custom-system',
       name: 'Custom system development',
       description:
-        'Reasonable bespoke module on Khana — R3,000 once-off setup and R450/mo partnership (this is your monthly base when custom is included, not on top of Starter/Launch)',
+        'Reasonable bespoke module on Khana — quoted once-off setup plus monthly partnership (R450/mo is the typical base when custom is included, not stacked on top of Starter/Launch)',
       monthlyFee: 450,
       onceOffFee: 3000,
       pricingType: 'monthly',
@@ -189,33 +190,39 @@ const DEFAULT_PARTNERSHIP_PRICING = {
   ],
   faqs: [
     {
+      question: 'How much does Khana cost?',
+      answer:
+        'We quote based on your scope — website size, store, bookings, team seats, and add-ons. Use the plan estimator on our site for a ballpark figure, then book a short call to confirm. Most partnerships start from R450/month after launch.',
+      sortOrder: 0,
+    },
+    {
       question: "What's included in the setup fee?",
       answer:
-        'Setup covers discovery, design, platform configuration, content structure, go-live, and onboarding. Growth and above include store or booking configuration and Revenue Command Center setup.',
-      sortOrder: 0,
+        'Setup covers discovery, design, platform configuration, content structure, go-live, and onboarding. Growth and above include store or booking configuration and Revenue Command Center setup. Exact setup is quoted per project.',
+      sortOrder: 1,
     },
     {
       question: 'Can I start small and upgrade later?',
       answer:
         'Yes. Many partners begin on Starter or Launch and upgrade to Growth or Scale when ready to sell or take bookings. We migrate your existing content into the expanded platform.',
-      sortOrder: 1,
+      sortOrder: 2,
     },
     {
       question: 'Do you take commission on my sales?',
       answer:
         'No. Khana charges a managed partnership fee (setup + monthly). Payment gateway fees from PayFast, Ozow, or your provider are separate.',
-      sortOrder: 2,
+      sortOrder: 3,
     },
     {
       question: 'Which plan is right for a startup?',
       answer:
-        'Starter is designed for new businesses with a tight budget. When you need more pages or are ready to transact online, Launch or Growth is the next step.',
-      sortOrder: 3,
+        'Starter suits new businesses getting online. When you need more pages or are ready to transact online, Launch or Growth is the next step. Request an estimate — we will recommend a tier after a quick scope chat.',
+      sortOrder: 4,
     },
     {
       question: 'How does custom system pricing work?',
       answer:
-        'Custom development is R3,000 once-off setup plus R450/mo partnership fee. That R450/mo is your platform base while the custom module is included — not added on top of Starter or Launch monthly. Optional private standalone API is R5,000 once-off extra. Scope must be reasonable for us to build and support.',
+        'Custom development is quoted once-off for setup plus a monthly partnership fee (typically from R450/mo as your platform base while the custom module is included). Optional private standalone API is quoted separately. Scope must be reasonable for us to build and support.',
       sortOrder: 5,
     },
   ],
@@ -263,8 +270,27 @@ function mergePartnershipPricing(doc) {
   };
 }
 
+/** Strip numeric fees from public API when marketing uses quote-first pricing. */
+function sanitizePublicPricing(config) {
+  if (!config || config.showPublishedPrices !== false) return config;
+  return {
+    ...config,
+    tiers: (config.tiers || []).map((t) => ({
+      ...t,
+      setupFee: null,
+      monthlyFee: null,
+    })),
+    addOns: (config.addOns || []).map((a) => ({
+      ...a,
+      monthlyFee: null,
+      onceOffFee: null,
+    })),
+  };
+}
+
 module.exports = {
   PRICING_CONFIG_VERSION,
   DEFAULT_PARTNERSHIP_PRICING,
   mergePartnershipPricing,
+  sanitizePublicPricing,
 };
