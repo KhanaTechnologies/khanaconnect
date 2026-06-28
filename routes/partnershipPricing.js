@@ -24,11 +24,21 @@ function needsPricingMigration(doc) {
 async function getOrCreateConfig() {
   let doc = await PartnershipPricingConfig.findOne({ configKey: 'default' });
   if (!doc) {
-    doc = await PartnershipPricingConfig.create({
-      configKey: 'default',
-      ...DEFAULT_PARTNERSHIP_PRICING,
-    });
-    return doc;
+    try {
+      doc = await PartnershipPricingConfig.create({
+        configKey: 'default',
+        ...DEFAULT_PARTNERSHIP_PRICING,
+      });
+    } catch (err) {
+      if (err?.code === 11000) {
+        doc = await PartnershipPricingConfig.findOne({ configKey: 'default' });
+      } else {
+        throw err;
+      }
+    }
+  }
+  if (!doc) {
+    throw new Error('Partnership pricing config unavailable');
   }
 
   if (needsPricingMigration(doc)) {
@@ -62,6 +72,17 @@ async function authenticateAdmin(req, res, next) {
     next();
   } catch (_e) {
     return res.status(403).json({ success: false, error: 'Invalid token' });
+  }
+}
+
+function invalidateQuotePricingCache() {
+  try {
+    const quoteRouter = require('./partnershipQuote');
+    if (typeof quoteRouter.invalidatePricingCache === 'function') {
+      quoteRouter.invalidatePricingCache();
+    }
+  } catch (_) {
+    /* quote router may not be loaded yet */
   }
 }
 
@@ -119,6 +140,7 @@ router.put('/partnership-pricing', authenticateAdmin, wrapRoute(async (req, res)
   doc.markModified('faqs');
   doc.markModified('comparisonFeatures');
   await doc.save();
+  invalidateQuotePricingCache();
 
   res.json({ success: true, config: mergePartnershipPricing(doc) });
 }));
@@ -132,6 +154,7 @@ router.post('/partnership-pricing/reset', authenticateAdmin, wrapRoute(async (re
   doc.markModified('faqs');
   doc.markModified('comparisonFeatures');
   await doc.save();
+  invalidateQuotePricingCache();
   res.json({ success: true, config: mergePartnershipPricing(doc) });
 }));
 

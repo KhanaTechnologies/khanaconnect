@@ -1,4 +1,5 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const jwt = require('jsonwebtoken');
 const PartnershipQuote = require('../models/PartnershipQuote');
 const Client = require('../models/client');
@@ -23,9 +24,42 @@ const router = express.Router();
 const MARKETING_SITE_URL =
   process.env.MARKETING_SITE_URL || process.env.PUBLIC_SITE_URL || 'https://khanatechnologies.co.za';
 
+const PRICING_CACHE_MS = 2 * 60 * 1000;
+let pricingCache = { at: 0, data: null };
+
+const quoteSubmitLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 8,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `${req.ip}:${req.params.quoteId || ''}`,
+  message: {
+    success: false,
+    error: 'Too many submission attempts for this estimate. Please try again later.',
+  },
+});
+
+const quotePatchLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `${req.ip}:${req.params.quoteId || ''}`,
+  message: {
+    success: false,
+    error: 'Too many updates for this estimate. Please slow down.',
+  },
+});
+
 async function getPricingConfig() {
+  const now = Date.now();
+  if (pricingCache.data && now - pricingCache.at < PRICING_CACHE_MS) {
+    return pricingCache.data;
+  }
   const doc = await partnershipPricingRouter.getOrCreateConfig();
-  return mergePartnershipPricing(doc);
+  const merged = mergePartnershipPricing(doc);
+  pricingCache = { at: now, data: merged };
+  return merged;
 }
 
 async function authenticateAdmin(req, res, next) {
@@ -57,10 +91,10 @@ function buildShareUrl(quoteId) {
   return `${MARKETING_SITE_URL.replace(/\/$/, '')}${buildSharePath(quoteId)}`;
 }
 
-function serializeQuote(doc) {
+function serializeQuote(doc, { publicView = false } = {}) {
   const q = doc.toObject ? doc.toObject() : doc;
   const validUntil = computeValidUntil(q);
-  return {
+  const payload = {
     quoteId: q.quoteId,
     prospectName: q.prospectName,
     businessName: q.businessName,
@@ -79,6 +113,15 @@ function serializeQuote(doc) {
     createdAt: q.createdAt,
     updatedAt: q.updatedAt,
   };
+  if (publicView) {
+    delete payload.followUpEmails;
+    if (q.status !== 'submitted') {
+      payload.prospectEmail = '';
+      payload.prospectPhone = '';
+      payload.submittedAt = null;
+    }
+  }
+  return payload;
 }
 
 function defaultValidUntil() {
@@ -96,15 +139,26 @@ router.post('/partnership-quotes', authenticateAdmin, wrapRoute(async (req, res)
 
   const quoteId = PartnershipQuote.generateQuoteId();
   const validUntil = defaultValidUntil();
-  const doc = await PartnershipQuote.create({
-    quoteId,
-    prospectName,
-    businessName: String(req.body.businessName || '').trim(),
-    sourceRef: String(req.body.sourceRef || 'instagram').trim(),
-    createdBy: req.adminClient.clientID,
-    status: 'draft',
-    validUntil,
-  });
+  let doc;
+  try {
+    doc = await PartnershipQuote.create({
+      quoteId,
+      prospectName,
+      businessName: String(req.body.businessName || '').trim(),
+      sourceRef: String(req.body.sourceRef || 'instagram').trim(),
+      createdBy: req.adminClient.clientID,
+      status: 'draft',
+      validUntil,
+    });
+  } catch (err) {
+    if (err?.code === 11000) {
+      return res.status(503).json({
+        success: false,
+        error: 'Could not generate a unique quote link. Please try again.',
+      });
+    }
+    throw err;
+  }
 
   res.status(201).json({
     success: true,
@@ -242,7 +296,7 @@ router.get('/public/partnership-quote/:quoteId', wrapRoute(async (req, res) => {
   const pricing = await getPricingConfig();
   res.json({
     success: true,
-    quote: serializeQuote(quote),
+    quote: serializeQuote(quote, { publicView: true }),
     pricing: {
       currency: pricing.currency,
       currencySymbol: pricing.currencySymbol,
@@ -254,10 +308,26 @@ router.get('/public/partnership-quote/:quoteId', wrapRoute(async (req, res) => {
 }));
 
 /** Public — save selections and return estimate */
-router.patch('/public/partnership-quote/:quoteId', wrapRoute(async (req, res) => {
+router.patch('/public/partnership-quote/:quoteId', quotePatchLimiter, wrapRoute(async (req, res) => {
   const quote = await PartnershipQuote.findOne({ quoteId: req.params.quoteId });
   if (!quote) {
     return res.status(404).json({ success: false, error: 'Quote not found' });
+  }
+
+  if (isQuoteExpired(quote)) {
+    return res.status(410).json({
+      success: false,
+      error: 'This estimate has expired. Please ask your Khana contact for a new link.',
+      quote: serializeQuote(quote, { publicView: true }),
+    });
+  }
+
+  if (quote.status === 'submitted') {
+    return res.status(409).json({
+      success: false,
+      error: 'This estimate was already submitted. Contact us if you need to make changes.',
+      quote: serializeQuote(quote, { publicView: true }),
+    });
   }
 
   const pricing = await getPricingConfig();
@@ -299,12 +369,12 @@ router.patch('/public/partnership-quote/:quoteId', wrapRoute(async (req, res) =>
 
   res.json({
     success: true,
-    quote: serializeQuote(quote),
+    quote: serializeQuote(quote, { publicView: true }),
   });
 }));
 
 /** Public — prospect submits email; notify Khana team */
-router.post('/public/partnership-quote/:quoteId/submit', wrapRoute(async (req, res) => {
+router.post('/public/partnership-quote/:quoteId/submit', quoteSubmitLimiter, wrapRoute(async (req, res) => {
   const quote = await PartnershipQuote.findOne({ quoteId: req.params.quoteId });
   if (!quote) {
     return res.status(404).json({ success: false, error: 'Quote not found' });
@@ -314,7 +384,7 @@ router.post('/public/partnership-quote/:quoteId/submit', wrapRoute(async (req, r
     return res.status(410).json({
       success: false,
       error: 'This estimate has expired. Please ask your Khana contact for a new link.',
-      quote: serializeQuote(quote),
+      quote: serializeQuote(quote, { publicView: true }),
     });
   }
 
@@ -322,6 +392,23 @@ router.post('/public/partnership-quote/:quoteId/submit', wrapRoute(async (req, r
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(email)) {
     return res.status(400).json({ success: false, error: 'Valid email is required' });
+  }
+
+  if (quote.status === 'submitted' && quote.prospectEmail) {
+    if (quote.prospectEmail === email) {
+      return res.json({
+        success: true,
+        alreadySubmitted: true,
+        emailSent: true,
+        message: 'Thanks — we already have your estimate and will be in touch soon.',
+        quote: serializeQuote(quote, { publicView: true }),
+      });
+    }
+    return res.status(409).json({
+      success: false,
+      error: 'This estimate was already submitted with a different email. Contact us if you need help.',
+      quote: serializeQuote(quote, { publicView: true }),
+    });
   }
 
   if (req.body.selections) {
@@ -336,12 +423,17 @@ router.post('/public/partnership-quote/:quoteId/submit', wrapRoute(async (req, r
   quote.submittedAt = new Date();
   await quote.save();
 
-  const pricing = await getPricingConfig();
   const khanaClient = await Client.findOne({ clientID: 'Khana' }).select(
     'clientID businessEmail businessEmailPassword companyName emailSignature'
   );
 
-  if (khanaClient?.businessEmail) {
+  let emailSent = false;
+  let emailError = null;
+
+  if (!khanaClient?.businessEmail) {
+    emailError = 'Khana outbound email is not configured';
+    console.error(`[planQuote] ${emailError} for ${quote.quoteId}`);
+  } else {
     try {
       const shareUrl = buildShareUrl(quote.quoteId);
       const validUntil = computeValidUntil(quote);
@@ -356,16 +448,27 @@ router.post('/public/partnership-quote/:quoteId/submit', wrapRoute(async (req, r
         emailSignature: khanaClient.emailSignature || '',
         tenantClientId: khanaClient.clientID,
       });
+      emailSent = true;
     } catch (err) {
-      console.error('Plan quote notification email failed:', err.message);
+      emailError = err.message || 'Failed to send notification emails';
+      console.error('Plan quote notification email failed:', emailError);
     }
   }
 
   res.json({
     success: true,
-    message: 'Thanks — we have your estimate and will be in touch soon.',
-    quote: serializeQuote(quote),
+    emailSent,
+    emailError: emailSent ? null : emailError,
+    message: emailSent
+      ? 'Thanks — we have your estimate and will be in touch soon.'
+      : 'Thanks — your estimate is saved. If you do not hear from us within one business day, email hello@khanatechnologies.co.za.',
+    quote: serializeQuote(quote, { publicView: true }),
   });
 }));
 
+function invalidatePricingCache() {
+  pricingCache = { at: 0, data: null };
+}
+
 module.exports = router;
+module.exports.invalidatePricingCache = invalidatePricingCache;

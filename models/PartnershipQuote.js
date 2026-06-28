@@ -89,4 +89,6 @@ partnershipQuoteSchema.statics.generateQuoteId = function generateQuoteId() {
   return `pq_${crypto.randomBytes(8).toString('hex')}`;
 };
 
+partnershipQuoteSchema.index({ createdAt: -1 });
+
 module.exports = mongoose.model('PartnershipQuote', partnershipQuoteSchema);
