@@ -1,10 +1,15 @@
 /**
  * Resolve SMTP/IMAP hosts for cPanel / Roundcube and common providers.
  *
- * cPanel: incoming and outgoing are usually the SAME host (mail.yourdomain.com on 465/993).
+ * cPanel (typical Khana-hosted client):
+ *   SMTP/IMAP host: mail.{clientdomain.com}
+ *   SMTP port: 465 (SSL/TLS)   IMAP port: 993
+ *   Username: full address (e.g. orders@herbeauty.co.za)
+ *
  * Do not rewrite mail.* → smtp.* (smtp subdomain often does not exist in DNS).
- * Roundcube "Server" in cPanel → Email → Connect Devices: copy the FULL hostname (must contain a dot).
  */
+
+const { decrypt } = require('./encryption');
 
 const SMTP_WELL_KNOWN = {
   'gmail.com': 'smtp.gmail.com',
@@ -81,10 +86,37 @@ function hostFromReturnUrl(returnUrl) {
   try {
     const stripped = returnUrl.replace(/^https?:\/\//i, '').split('/')[0].trim();
     if (!stripped || stripped.includes(' ') || !stripped.includes('.')) return '';
-    return stripped.toLowerCase();
+    return stripped.toLowerCase().replace(/^www\./, '');
   } catch {
     return '';
   }
+}
+
+/** Plain business email from client doc (decrypts stored ciphertext when needed). */
+function resolveBusinessEmail(client) {
+  const raw = client?.businessEmail;
+  if (!raw || typeof raw !== 'string') return '';
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+
+  const angle = trimmed.match(/<([^>]+)>/);
+  const candidate = (angle ? angle[1] : trimmed).trim();
+  if (candidate.includes('@') && !/^[^:]+:[0-9a-f]+$/i.test(candidate)) {
+    return candidate;
+  }
+
+  try {
+    const dec = decrypt(trimmed);
+    return typeof dec === 'string' ? dec.trim() : '';
+  } catch {
+    return '';
+  }
+}
+
+function cpanelMailHostForDomain(domain) {
+  const d = String(domain || '').toLowerCase().replace(/^www\./, '').trim();
+  if (!d || SMTP_WELL_KNOWN[d]) return '';
+  return `mail.${d}`;
 }
 
 /**
@@ -125,7 +157,7 @@ function smtpHostToImapForSent(smtpHost) {
 }
 
 function preferredMailDomain(client) {
-  const fromEmail = extractEmailDomain(client?.businessEmail);
+  const fromEmail = extractEmailDomain(resolveBusinessEmail(client));
   if (fromEmail) return fromEmail;
   return hostFromReturnUrl(client?.return_url);
 }
@@ -147,15 +179,15 @@ function resolveSmtpHost(client) {
   const fromImap = imapHostToSmtp(client?.imapHost);
   if (fromImap && isLikelyFqdn(fromImap)) return fromImap;
 
-  const emailDomain = extractEmailDomain(client?.businessEmail);
+  const emailDomain = extractEmailDomain(resolveBusinessEmail(client));
   if (emailDomain) {
     if (SMTP_WELL_KNOWN[emailDomain]) return SMTP_WELL_KNOWN[emailDomain];
-    return `mail.${emailDomain}`;
+    return cpanelMailHostForDomain(emailDomain);
   }
 
   const ru = hostFromReturnUrl(client?.return_url);
   if (ru) {
-    return `mail.${ru}`;
+    return cpanelMailHostForDomain(ru);
   }
 
   const globalHost = globalSmtpHost();
@@ -170,10 +202,19 @@ function resolveSmtpHost(client) {
  */
 function resolveSmtpPort(client, smtpHost) {
   const p = Number(client?.smtpPort);
-  if (Number.isFinite(p) && p > 0) return p;
+  const h = (smtpHost || '').toLowerCase();
+  const isCpanelStyle =
+    /^mail\.[a-z0-9.-]+$/.test(h) &&
+    !h.includes('gmail.com') &&
+    !h.includes('office365.com');
+
+  if (Number.isFinite(p) && p > 0) {
+    // Legacy default 587 on cPanel mail.* — cPanel recommends 465 SSL/TLS
+    if (isCpanelStyle && p === 587) return 465;
+    return p;
+  }
   const g = globalSmtpPort();
   if (g != null) return g;
-  const h = (smtpHost || '').toLowerCase();
   if (h.includes('gmail.com') || h.includes('office365.com') || h.includes('outlook.office365.com')) {
     return 587;
   }
@@ -212,6 +253,8 @@ function resolveSmtpConnection(client) {
 
 module.exports = {
   extractEmailDomain,
+  resolveBusinessEmail,
+  cpanelMailHostForDomain,
   preferredMailDomain,
   sanitizeHostInput,
   isLikelyFqdn,

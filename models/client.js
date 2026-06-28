@@ -1,6 +1,11 @@
 const mongoose = require('mongoose');
 const Schema = mongoose.Schema;
 const { encrypt, decrypt } = require('../helpers/encryption');
+const {
+  resolveBusinessEmail,
+  cpanelMailHostForDomain,
+  extractEmailDomain,
+} = require('../helpers/mailHost');
 
 // Create a custom setter/getter for encrypted fields
 const encryptedString = {
@@ -138,7 +143,7 @@ const clientSchema = new Schema({
   emailSignature: { type: String },
   /** Outgoing SMTP (optional). If empty, derived from imapHost or business email domain — not from return_url alone when email domain exists. */
   smtpHost: { type: String, default: '' },
-  smtpPort: { type: Number, default: 587 },
+  smtpPort: { type: Number, default: 465 },
   /** Incoming IMAP (optional). If empty, derived from business email domain or return_url. */
   imapHost: { type: String, default: '' },
   imapPort: { type: Number, default: 993 },
@@ -260,6 +265,27 @@ const clientSchema = new Schema({
   timestamps: true,
   toJSON: { getters: true }, // Important: This ensures getters run when converting to JSON
   toObject: { getters: true } // Important: This ensures getters run when converting to objects
+});
+
+clientSchema.pre('save', function applyCpanelMailDefaults(next) {
+  const email = resolveBusinessEmail(this);
+  const domain = extractEmailDomain(email);
+  if (!domain) return next();
+
+  const mailHost = cpanelMailHostForDomain(domain);
+  if (!mailHost) return next();
+
+  if (!String(this.smtpHost || '').trim()) {
+    this.smtpHost = mailHost;
+    this.smtpPort = 465;
+  }
+  if (!String(this.imapHost || '').trim()) {
+    this.imapHost = mailHost;
+  }
+  if (!this.imapPort) {
+    this.imapPort = 993;
+  }
+  next();
 });
 
 // Virtual to check if any ad platform is enabled

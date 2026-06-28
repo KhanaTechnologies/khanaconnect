@@ -16,12 +16,7 @@ async function sendCartReminderEmail(customer, client) {
     const decryptedEmail = decrypt(client.businessEmail);
     const decryptedPass = decrypt(client.businessEmailPassword);
 
-    const smtpHost = resolveSmtpHost({
-      smtpHost: client.smtpHost,
-      imapHost: client.imapHost,
-      businessEmail: decryptedEmail,
-      return_url: client.return_url,
-    });
+    const smtpHost = resolveSmtpHost(client);
     const smtpPort = resolveSmtpPort(client, smtpHost);
 
     const cartItems = customer.cart.map(item => `

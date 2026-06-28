@@ -1428,7 +1428,7 @@ router.post('/', wrapRoute(async (req, res) => {
     imapHost: imapHost || '',
     imapPort: imapPort != null && imapPort !== '' ? Number(imapPort) : 993,
     smtpHost: smtpHost || '',
-    smtpPort: smtpPort != null && smtpPort !== '' ? Number(smtpPort) : 587,
+    smtpPort: smtpPort != null && smtpPort !== '' ? Number(smtpPort) : 465,
     ga4PropertyId: ga4PropertyId || '',
     analyticsConfig: {
       googleAnalytics: {
