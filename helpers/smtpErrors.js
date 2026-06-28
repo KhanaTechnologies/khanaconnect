@@ -29,12 +29,28 @@ function isSmtpCapacityError(err) {
   return err?.responseCode === 421 || /421|too many concurrent/i.test(m);
 }
 
+function isSmtpAuthError(err) {
+  const m = String((err && err.message) || '');
+  return (
+    err?.code === 'EAUTH' ||
+    err?.responseCode === 535 ||
+    /535|incorrect authentication|invalid login|authentication failed/i.test(m)
+  );
+}
+
 function smtpErrorToHttp(err) {
   if (isSmtpCapacityError(err)) {
     const e = new Error(
       'Mail server is busy (too many connections from this server). Wait a minute and try again.'
     );
     e.status = 503;
+    return e;
+  }
+  if (isSmtpAuthError(err)) {
+    const e = new Error(
+      'SMTP login failed. Check the business email address and password in your dashboard email settings.'
+    );
+    e.status = 400;
     return e;
   }
   return err;
@@ -44,5 +60,6 @@ module.exports = {
   isNonRetryableSmtpError,
   isRetryableSmtpError,
   isSmtpCapacityError,
+  isSmtpAuthError,
   smtpErrorToHttp,
 };
