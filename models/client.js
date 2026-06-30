@@ -254,6 +254,7 @@ const clientSchema = new Schema({
     postPurchaseEmailsEnabled: { type: Boolean, default: false },
     bookingAbandonmentEnabled: { type: Boolean, default: true },
     referralCodesEnabled: { type: Boolean, default: true },
+    backInStockAlertsEnabled: { type: Boolean, default: true },
     inventoryPromosEnabled: { type: Boolean, default: false },
     lowStockThreshold: { type: Number, default: 5, min: 1 },
     slowMoverDays: { type: Number, default: 60, min: 7 },

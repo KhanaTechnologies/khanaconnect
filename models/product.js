@@ -16,6 +16,8 @@ const productSchema = new mongoose.Schema({
     description: { type: String, required: true },
     richDescription: { type: String, default: "" },
     price: { type: Number, required: true },
+    /** Optional unit cost for profit / margin reporting */
+    costPrice: { type: Number, min: 0, default: null },
     salePercentage: { type: Number, min: 0, max: 100, default: 0 }, // Sale percentage (0-100)
     countInStock: { type: Number, required: true, min: 0 },
     images: [{ type: String }], // Array of image URLs

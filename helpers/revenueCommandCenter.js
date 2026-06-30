@@ -327,6 +327,8 @@ const {
 } = require('./revenueCapabilities');
 const { getCartRecoveryStats, getCampaignAttribution } = require('./revenueMetrics');
 const { getPlaybooksForClient } = require('./revenuePlaybooks');
+const { getProfitView } = require('./revenueProfit');
+const { getBackInStockOpportunities } = require('./revenueBackInStock');
 
 async function buildOverview(clientID, clientDoc) {
   const settings = mergeRevenueSettings(clientDoc?.revenueSettings);
@@ -336,7 +338,7 @@ async function buildOverview(clientID, clientDoc) {
   const retailEnabled = businessType === 'retail' || businessType === 'mixed';
   const servicesEnabled = businessType === 'services' || businessType === 'mixed';
 
-  const [abandonedCarts, discountAttribution, wishlistOps, cartRecoveryStats, campaignAttribution] =
+  const [abandonedCarts, discountAttribution, wishlistOps, cartRecoveryStats, campaignAttribution, profitSummary, backInStock] =
     await Promise.all([
     settings.cartRecoveryEnabled &&
     retailEnabled &&
@@ -351,6 +353,10 @@ async function buildOverview(clientID, clientDoc) {
       ? getCartRecoveryStats(clientID)
       : { remindersSent: 0, recoveredCount: 0, recoveredRevenue: 0 },
     capabilities.sales ? getCampaignAttribution(clientID, 10) : [],
+    retailEnabled && capabilities.orders ? getProfitView(clientID, 30) : null,
+    retailEnabled && capabilities.products && settings.backInStockAlertsEnabled
+      ? getBackInStockOpportunities(clientID)
+      : null,
   ]);
 
   const inventoryOps =
@@ -407,6 +413,26 @@ async function buildOverview(clientID, clientDoc) {
     });
   }
 
+  if (backInStock?.summary?.readyToNotify > 0) {
+    actions.push({
+      id: 'back_in_stock',
+      priority: 'high',
+      title: `${backInStock.summary.readyToNotify} product(s) back in stock — ${backInStock.summary.totalSubscribers} customers waiting`,
+      module: 'inventory',
+      businessTypes: ['retail', 'mixed'],
+    });
+  }
+
+  if (profitSummary?.productsMissingCost > 0 && profitSummary?.costDataCoverage < 80) {
+    actions.push({
+      id: 'profit_cost_data',
+      priority: 'medium',
+      title: `Add cost prices to ${profitSummary.productsMissingCost} products for accurate profit view`,
+      module: 'inventory',
+      businessTypes: ['retail', 'mixed'],
+    });
+  }
+
   return {
     settings: { ...settings, businessType },
     capabilities,
@@ -421,7 +447,13 @@ async function buildOverview(clientID, clientDoc) {
       cartRemindersSent: cartRecoveryStats.remindersSent,
       recoveredCartCount: cartRecoveryStats.recoveredCount,
       recoveredCartRevenue: cartRecoveryStats.recoveredRevenue,
+      grossProfit: profitSummary?.grossProfit ?? null,
+      marginPercent: profitSummary?.marginPercent ?? null,
+      backInStockWaitlist: backInStock?.summary?.totalSubscribers ?? 0,
+      backInStockReady: backInStock?.summary?.readyToNotify ?? 0,
     },
+    profitSummary: profitSummary || null,
+    backInStockSummary: backInStock?.summary || null,
     playbooks: getPlaybooksForClient(clientDoc),
     campaignAttribution: campaignAttribution.slice(0, 8),
     actions: actions.filter(

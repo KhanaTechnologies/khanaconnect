@@ -7,6 +7,7 @@ const DEFAULT_REVENUE_SETTINGS = {
   postPurchaseEmailsEnabled: false,
   bookingAbandonmentEnabled: true,
   referralCodesEnabled: true,
+  backInStockAlertsEnabled: true,
   inventoryPromosEnabled: false,
   lowStockThreshold: 5,
   slowMoverDays: 60,

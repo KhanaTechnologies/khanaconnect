@@ -1,6 +1,7 @@
 const WishList = require('../models/wishList');
 const Customer = require('../models/customer');
 const Client = require('../models/client');
+const Product = require('../models/product');
 const { sendMail } = require('../helpers/mailer');
 const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../helpers/mailHost');
 
@@ -206,10 +207,123 @@ async function handleProductUpdate(prevProduct, nextProduct) {
   }
 }
 
+/**
+ * Merchant-triggered restock blast for wishlist subscribers (notifyOnRestock).
+ */
+async function sendManualRestockAlerts(clientID, productId, { force = false } = {}) {
+  const product = await Product.findOne({ _id: productId, clientID });
+  if (!product) {
+    return { sent: 0, failed: 0, skipped: 0, error: 'product_not_found' };
+  }
+  if (Number(product.countInStock) <= 0) {
+    return { sent: 0, failed: 0, skipped: 0, error: 'out_of_stock' };
+  }
+
+  const lists = await WishList.find({
+    clientID,
+    'items.product': productId,
+    'items.notifyOnRestock': true,
+  });
+
+  const client = await Client.findOne({ clientID }).select(
+    'companyName businessEmail businessEmailPassword smtpHost smtpPort return_url'
+  );
+  if (!client) {
+    return { sent: 0, failed: 0, skipped: 0, error: 'client_not_found' };
+  }
+
+  const host = resolveSmtpHost(client);
+  const port = resolveSmtpPort(client, host);
+  if (!host) {
+    return { sent: 0, failed: 0, skipped: 0, error: 'smtp_not_configured' };
+  }
+
+  let sent = 0;
+  let failed = 0;
+  let skipped = 0;
+  const pid = String(productId);
+  const productName = product.productName || 'Product';
+
+  for (const list of lists) {
+    let listChanged = false;
+    for (const item of list.items) {
+      if (String(item.product) !== pid || !item.notifyOnRestock) continue;
+
+      const afterLine = lineFromSnapshot(product, item);
+      if (!afterLine || Number(afterLine.stock) <= 0) {
+        skipped += 1;
+        continue;
+      }
+
+      const cooldownOk =
+        force ||
+        !item.lastRestockNotifiedAt ||
+        Date.now() - new Date(item.lastRestockNotifiedAt).getTime() > COOLDOWN_MS;
+      if (!cooldownOk) {
+        skipped += 1;
+        continue;
+      }
+
+      const customer = await Customer.findOne({
+        _id: list.customerID,
+        clientID: list.clientID,
+      });
+
+      if (!customer?.emailAddress) {
+        skipped += 1;
+        continue;
+      }
+
+      if (customer.preferences?.notificationPreferences?.restockAlerts === false) {
+        skipped += 1;
+        continue;
+      }
+
+      const listUrl = client.return_url ? String(client.return_url).replace(/\/$/, '') : '';
+      const deepLink = listUrl ? `${listUrl}/wishlist/${list._id}` : '';
+      const parts = [
+        `<p><strong>Back in stock</strong> — <em>${productName}</em> is available again (${afterLine.stock} in stock).</p>`,
+      ];
+      if (afterLine.label) parts.push(`<p>Option: ${afterLine.label}</p>`);
+      if (deepLink) parts.push(`<p><a href="${deepLink}">View your list: ${list.name}</a></p>`);
+
+      const subject = `Wish list: ${productName} is back in stock`;
+      const html = `<div style="font-family:sans-serif">${parts.join('')}<p style="color:#666;font-size:12px">${client.companyName || ''}</p></div>`;
+      const text = parts.map((p) => p.replace(/<[^>]+>/g, ' ')).join('\n');
+
+      try {
+        await sendMail({
+          host,
+          port,
+          secure: resolveSmtpSecure(port),
+          user: client.businessEmail,
+          pass: client.businessEmailPassword,
+          from: `"${client.companyName}" <${client.businessEmail}>`,
+          to: customer.emailAddress,
+          subject,
+          text,
+          html,
+        });
+        item.lastRestockNotifiedAt = new Date();
+        item.lastKnownStock = afterLine.stock;
+        listChanged = true;
+        sent += 1;
+      } catch (e) {
+        console.error('manual restock email failed', e.message);
+        failed += 1;
+      }
+    }
+    if (listChanged) await list.save();
+  }
+
+  return { sent, failed, skipped, error: null };
+}
+
 module.exports = {
   resolveLine,
   effectiveUnitPrice,
   snapshotFromProduct,
   refreshItemSnapshot,
   handleProductUpdate,
+  sendManualRestockAlerts,
 };

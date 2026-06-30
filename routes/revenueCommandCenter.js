@@ -31,6 +31,9 @@ const {
   getCampaignAttribution,
   getAbandonedBookings,
 } = require('../helpers/revenueMetrics');
+const { getProfitView } = require('../helpers/revenueProfit');
+const { getBackInStockOpportunities } = require('../helpers/revenueBackInStock');
+const { sendManualRestockAlerts } = require('../services/wishlistNotifyService');
 
 const router = express.Router();
 
@@ -217,6 +220,38 @@ router.get('/booking-abandonment', authenticateClient, wrapRoute(async (req, res
 }));
 
 // ─── Referral codes ───
+router.get('/referrals/customers', authenticateClient, wrapRoute(async (req, res) => {
+  const search = String(req.query.search || '').trim().toLowerCase();
+  const limit = Math.min(Number(req.query.limit) || 50, 100);
+
+  let customers = await Customer.find({ clientID: req.clientId })
+    .select('customerFirstName customerLastName emailAddress totalOrders lastActivity')
+    .sort({ lastActivity: -1 })
+    .limit(search ? 400 : limit);
+
+  if (search) {
+    customers = customers
+      .filter((c) => {
+        const name = `${c.customerFirstName || ''} ${c.customerLastName || ''}`.toLowerCase();
+        const email = String(c.emailAddress || '').toLowerCase();
+        return name.includes(search) || email.includes(search);
+      })
+      .slice(0, limit);
+  }
+
+  res.json({
+    success: true,
+    customers: customers.map((c) => ({
+      id: c._id,
+      name:
+        `${c.customerFirstName || ''} ${c.customerLastName || ''}`.trim() || 'Customer',
+      email: c.emailAddress,
+      totalOrders: c.totalOrders || 0,
+      lastActivity: c.lastActivity,
+    })),
+  });
+}));
+
 router.get('/referrals', authenticateClient, wrapRoute(async (req, res) => {
   const codes = await DiscountCode.find({
     clientID: req.clientId,
@@ -294,6 +329,57 @@ router.post('/referrals', authenticateClient, wrapRoute(async (req, res) => {
   });
 
   res.status(201).json({ success: true, referral, created: true });
+}));
+
+// ─── Profit view ───
+router.get('/profit', authenticateClient, wrapRoute(async (req, res) => {
+  const days = Math.min(Math.max(Number(req.query.days) || 30, 0), 365);
+  const profit = await getProfitView(req.clientId, days);
+  res.json({ success: true, profit });
+}));
+
+// ─── Back-in-stock alerts ───
+router.get('/back-in-stock', authenticateClient, wrapRoute(async (req, res) => {
+  const client = await loadClient(req.clientId);
+  const settings = mergeRevenueSettings(client?.revenueSettings);
+  const caps = require('../helpers/revenueCapabilities').resolveRevenueCapabilities(client);
+  if (!caps.products) {
+    return res.json({ success: true, enabled: false, products: [], summary: {} });
+  }
+  const data = await getBackInStockOpportunities(req.clientId);
+  res.json({
+    success: true,
+    enabled: settings.backInStockAlertsEnabled,
+    ...data,
+  });
+}));
+
+router.post('/back-in-stock/:productId/notify', authenticateClient, wrapRoute(async (req, res) => {
+  const client = await loadClient(req.clientId);
+  const settings = mergeRevenueSettings(client?.revenueSettings);
+  if (!settings.backInStockAlertsEnabled) {
+    return res.status(400).json({ error: 'Back-in-stock alerts are disabled in Revenue settings' });
+  }
+  if (!resolveSmtpHost(client)) {
+    return res.status(400).json({ error: 'Configure business email / SMTP first' });
+  }
+
+  const { force } = req.body || {};
+  const result = await sendManualRestockAlerts(req.clientId, req.params.productId, {
+    force: force === true || force === 'true',
+  });
+
+  if (result.error === 'product_not_found') {
+    return res.status(404).json({ error: 'Product not found' });
+  }
+  if (result.error === 'out_of_stock') {
+    return res.status(400).json({ error: 'Product is out of stock — update stock first' });
+  }
+  if (result.error === 'smtp_not_configured') {
+    return res.status(400).json({ error: 'Configure SMTP first' });
+  }
+
+  res.json({ success: true, ...result });
 }));
 
 // ─── Discount attribution ───

@@ -112,6 +112,9 @@ router.post(
             images: imagePaths,
             brand: req.body.brand || '',
             price: Number(req.body.price),
+            costPrice: req.body.costPrice !== undefined && req.body.costPrice !== ''
+              ? Number(req.body.costPrice)
+              : null,
             countInStock: Number(req.body.countInStock),
             category: category._id,
             rating: 0,
@@ -195,6 +198,12 @@ router.put(
             images: updatedImages,
             brand: req.body.brand || product.brand,
             price: req.body.price || product.price,
+            costPrice:
+              req.body.costPrice !== undefined && req.body.costPrice !== ''
+                ? Number(req.body.costPrice)
+                : req.body.costPrice === '' || req.body.costPrice === null
+                  ? null
+                  : product.costPrice,
             category: category._id,
             countInStock: req.body.countInStock !== undefined ? req.body.countInStock : product.countInStock,
             salePercentage: req.body.salePercentage !== undefined ? req.body.salePercentage : product.salePercentage,
