@@ -22,6 +22,12 @@ const discountCodeSchema = new mongoose.Schema({
   },
   isActive: { type: Boolean, default: true },
   type: { type: String, enum: ['product', 'category', 'all'], default: 'all' },
+  isReferral: { type: Boolean, default: false },
+  referrerCustomerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer' },
+  referrerLabel: { type: String, default: '' },
 }, { timestamps: true });
+
+discountCodeSchema.index({ clientID: 1, isReferral: 1 });
+discountCodeSchema.index({ clientID: 1, referrerCustomerId: 1 });
 
 module.exports = mongoose.model('DiscountCode', discountCodeSchema);

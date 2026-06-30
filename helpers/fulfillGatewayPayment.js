@@ -2,8 +2,12 @@ const mongoose = require('mongoose');
 const { Order } = require('../models/order');
 const Product = require('../models/product');
 const Client = require('../models/client');
+const Customer = require('../models/customer');
 const { sendOrderConfirmationEmail } = require('../utils/email');
 const { updateCustomerOrderHistory } = require('./orderCustomerHistory');
+const { mergeRevenueSettings } = require('./revenueDefaults');
+const { sendPostPurchaseEmail } = require('./revenueLifecycleEmails');
+const { resolveSmtpHost } = require('./mailHost');
 
 /**
  * Mark order paid, adjust stock, update customer history, send confirmation email.
@@ -49,6 +53,28 @@ async function fulfillGatewayPayment(orderId, totalPrice) {
       );
     } catch (emailError) {
       console.error('Order confirmation email failed:', emailError.message);
+    }
+
+    const settings = mergeRevenueSettings(client.revenueSettings);
+    if (settings.postPurchaseEmailsEnabled && resolveSmtpHost(client)) {
+      const customer = order.customer;
+      const lastSent = customer.revenueLifecycle?.postPurchaseSentAt;
+      const cooldown = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      if (!lastSent || new Date(lastSent).getTime() < cooldown) {
+        setImmediate(async () => {
+          try {
+            await sendPostPurchaseEmail(customer, client);
+            const fresh = await Customer.findById(customer._id);
+            if (fresh) {
+              fresh.revenueLifecycle = fresh.revenueLifecycle || {};
+              fresh.revenueLifecycle.postPurchaseSentAt = new Date();
+              await fresh.save();
+            }
+          } catch (e) {
+            console.error('Post-purchase email failed:', e.message);
+          }
+        });
+      }
     }
   }
 

@@ -234,7 +234,7 @@ async function getBookingOpportunities(clientID, settings) {
 async function resolveSegmentCustomers(clientID, segment) {
   const preset = segment.preset || 'custom';
   const customers = await Customer.find({ clientID }).select(
-    'emailAddress customerFirstName customerLastName cart totalOrders totalSpent lastActivity orderHistory preferences'
+    'emailAddress customerFirstName customerLastName cart totalOrders totalSpent lastActivity orderHistory preferences revenueLifecycle'
   );
 
   switch (preset) {
@@ -325,6 +325,8 @@ const {
   effectiveBusinessType,
   moduleAllowed,
 } = require('./revenueCapabilities');
+const { getCartRecoveryStats, getCampaignAttribution } = require('./revenueMetrics');
+const { getPlaybooksForClient } = require('./revenuePlaybooks');
 
 async function buildOverview(clientID, clientDoc) {
   const settings = mergeRevenueSettings(clientDoc?.revenueSettings);
@@ -334,7 +336,8 @@ async function buildOverview(clientID, clientDoc) {
   const retailEnabled = businessType === 'retail' || businessType === 'mixed';
   const servicesEnabled = businessType === 'services' || businessType === 'mixed';
 
-  const [abandonedCarts, discountAttribution, wishlistOps] = await Promise.all([
+  const [abandonedCarts, discountAttribution, wishlistOps, cartRecoveryStats, campaignAttribution] =
+    await Promise.all([
     settings.cartRecoveryEnabled &&
     retailEnabled &&
     capabilities.orders
@@ -344,6 +347,10 @@ async function buildOverview(clientID, clientDoc) {
     retailEnabled && (capabilities.sales || capabilities.products)
       ? getWishlistOpportunities(clientID, 5)
       : [],
+    settings.cartRecoveryEnabled && capabilities.orders
+      ? getCartRecoveryStats(clientID)
+      : { remindersSent: 0, recoveredCount: 0, recoveredRevenue: 0 },
+    capabilities.sales ? getCampaignAttribution(clientID, 10) : [],
   ]);
 
   const inventoryOps =
@@ -411,7 +418,12 @@ async function buildOverview(clientID, clientDoc) {
       inventoryOpportunities: inventoryOps.length,
       bookingOpportunities: bookingOps.length,
       wishlistOpportunities: wishlistOps.length,
+      cartRemindersSent: cartRecoveryStats.remindersSent,
+      recoveredCartCount: cartRecoveryStats.recoveredCount,
+      recoveredCartRevenue: cartRecoveryStats.recoveredRevenue,
     },
+    playbooks: getPlaybooksForClient(clientDoc),
+    campaignAttribution: campaignAttribution.slice(0, 8),
     actions: actions.filter(
       (a) =>
         a.businessTypes.includes(businessType) &&

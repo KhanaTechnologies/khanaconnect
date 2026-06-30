@@ -90,7 +90,14 @@ const cartReminderSchema = new Schema({
   isActive: { type: Boolean, default: true },
   lastSent: { type: Date },
   nextReminder: { type: Date },
-  customHours: { type: Number, default: 24 } // for custom reminder timing
+  customHours: { type: Number, default: 24 }, // for custom reminder timing
+  autoReminderCount: { type: Number, default: 0 },
+}, { _id: false });
+
+const revenueLifecycleSchema = new Schema({
+  postPurchaseSentAt: { type: Date },
+  winBackSentAt: { type: Date },
+  bookingNudgeSentAt: { type: Date },
 }, { _id: false });
 
 const customerSchema = new Schema({
@@ -116,6 +123,7 @@ const customerSchema = new Schema({
   // Preferences and Analytics
   preferences: { type: customerPreferencesSchema, default: () => ({}) },
   cartReminder: { type: cartReminderSchema, default: () => ({}) },
+  revenueLifecycle: { type: revenueLifecycleSchema, default: () => ({}) },
   
   // Authentication fields (tokens don't need encryption as they're temporary)
   resetPasswordToken: { type: String, default: '' },

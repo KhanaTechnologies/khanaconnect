@@ -382,6 +382,14 @@ mongoose.connect(process.env.CONNECTION_STRING, {
   }
 
   try {
+    const cartRecoveryAutoReminderCron = require('./services/cartRecoveryAutoReminderCron');
+    cartRecoveryAutoReminderCron.start();
+    console.log('✅ Cart recovery auto-reminder cron started');
+  } catch (error) {
+    console.error('❌ Failed to start cart recovery auto-reminder cron:', error);
+  }
+
+  try {
     await startJobScheduler();
   } catch (error) {
     console.error('❌ Failed to start job scheduler:', error);
