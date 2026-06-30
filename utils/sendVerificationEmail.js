@@ -1,4 +1,4 @@
-const nodemailer = require('nodemailer');
+const { sendMailWithRetry } = require('../helpers/mailer');
 const { decrypt } = require('../helpers/encryption');
 const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../helpers/mailHost');
 const { escapeHtml, mergeEmailSignature } = require('../helpers/signatureHtml');
@@ -40,6 +40,7 @@ function extractDomain(url) {
 async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass, websiteURL, clientName, emailSignature = '', branding = '') {
     const decryptedEmail = decrypt(bEmail);
     const decryptedPass = decrypt(BEPass);
+    const recipientEmail = decrypt(userEmail);
 
     const formattedClientName = clientName
         ? 'The ' + clientName.replace(/([A-Z])/g, ' $1').replace(/^./, (str) => str.toUpperCase()).trim() + ' Team'
@@ -51,26 +52,14 @@ async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass,
     }
 
     const domain = extractDomain(websiteURL);
-    const host = resolveSmtpHost({ businessEmail: decryptedEmail });
-    const port = resolveSmtpPort({ businessEmail: decryptedEmail }, host);
-    const secure = resolveSmtpSecure(port);
+    const smtpHost = resolveSmtpHost({ businessEmail: decryptedEmail, smtpHost: branding?.smtpHost });
+    const smtpPort = resolveSmtpPort({ businessEmail: decryptedEmail, smtpPort: branding?.smtpPort }, smtpHost);
+    const secure = resolveSmtpSecure(smtpPort);
 
-    if (!host) {
+    if (!smtpHost) {
         console.error('[sendVerificationEmail] Could not resolve SMTP host for', decryptedEmail, 'site:', domain);
         throw new Error('SMTP host could not be resolved for this business email.');
     }
-
-    const transporter = nodemailer.createTransport({
-        host,
-        port,
-        secure,
-        requireTLS: port === 587,
-        auth: {
-            user: decryptedEmail,
-            pass: decryptedPass,
-        },
-        tls: { rejectUnauthorized: false, minVersion: 'TLSv1.2' },
-    });
 
     const safeUrlDisplay = escapeHtml(verificationURL);
     const brandPlain = formattedClientName.replace('The ', '').replace(' Team', '');
@@ -110,26 +99,40 @@ async function sendVerificationEmail(userEmail, verificationURL, bEmail, BEPass,
             merged = { html: emailContent, text: '' };
         }
     }
+
     const textBody =
         merged.text ||
-        (merged.html || '')
-            .replace(/<br\s*\/?>/gi, '\n')
-            .replace(/<[^>]*>/g, '')
-            .replace(/\n{3,}/g, '\n\n')
-            .trim();
+        `Hi there,
+
+Thanks for registering with ${brandPlain}. Please confirm this email address belongs to you.
+
+Verify your email: ${verificationURL}
+
+This link expires in about one hour. If you did not create an account, you can ignore this message.
+
+— ${formattedClientName.replace(/<[^>]+>/g, '')}`;
+
     const { html: withSigs, attachments: sigAtt } = inlineSignatureImages(merged.html, []);
     const { html: htmlOut, attachments } = await inlineEmailBannerLogosAsync(withSigs, sigAtt, {});
-    const recipientEmail = decrypt(userEmail);
 
     try {
-        await transporter.sendMail({
-            from: `"${formattedClientName.replace(/<[^>]+>/g, '')}" <${decryptedEmail}>`,
-            to: recipientEmail,
-            subject: 'Confirm your email address',
-            text: textBody,
-            html: htmlOut,
-            attachments: formatEmailAttachments(attachments || []),
-        });
+        await sendMailWithRetry(
+            {
+                host: smtpHost,
+                port: smtpPort,
+                secure,
+                user: decryptedEmail,
+                pass: decryptedPass,
+                from: `"${formattedClientName.replace(/<[^>]+>/g, '')}" <${decryptedEmail}>`,
+                to: recipientEmail,
+                subject: 'Confirm your email address',
+                text: textBody,
+                html: htmlOut,
+                attachments: formatEmailAttachments(attachments || []),
+                saveToSent: false,
+            },
+            3
+        );
 
         console.log('Verification email sent successfully');
         failedAttempts.delete(decryptedEmail);

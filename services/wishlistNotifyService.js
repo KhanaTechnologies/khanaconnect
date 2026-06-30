@@ -2,10 +2,22 @@ const WishList = require('../models/wishList');
 const Customer = require('../models/customer');
 const Client = require('../models/client');
 const Product = require('../models/product');
-const { sendMail } = require('../helpers/mailer');
+const { sendMailWithRetry } = require('../helpers/mailer');
+const { decrypt } = require('../helpers/encryption');
 const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../helpers/mailHost');
+const { resolveEmailBrand } = require('../helpers/emailDesignTokens');
+const {
+  buildKhanaEmail,
+  escapeHtml,
+  ctaButton,
+} = require('../helpers/transactionalEmailLayout');
+const { inlineEmailBannerLogosAsync } = require('../helpers/inlineEmailBannerLogo');
+const { formatEmailAttachments } = require('../helpers/formatEmailAttachments');
 
 const COOLDOWN_MS = Number(process.env.WISHLIST_NOTIFY_COOLDOWN_MS || 24 * 60 * 60 * 1000);
+
+const CLIENT_EMAIL_FIELDS =
+  'companyName businessEmail businessEmailPassword smtpHost smtpPort return_url clientID emailLogoUrl emailPrimaryColor dashboardThemeColor';
 
 function salePct(p) {
   return Math.min(100, Math.max(0, Number(p?.salePercentage) || 0));
@@ -60,6 +72,176 @@ function snapshotFromProduct(product, item) {
   };
 }
 
+function storeBaseUrl(client) {
+  return client?.return_url ? String(client.return_url).replace(/\/$/, '') : '';
+}
+
+function buildWishlistAlertBody({
+  customer,
+  productName,
+  saleHit,
+  saleReason,
+  restockHit,
+  stock,
+  variantLabel,
+  listName,
+  actionUrl,
+  shopUrl,
+}) {
+  const first = escapeHtml(customer?.customerFirstName || 'there');
+  const parts = [`<p style="margin:0 0 16px;">Hi ${first},</p>`];
+
+  if (saleHit && saleReason) {
+    parts.push(
+      `<p style="margin:0 0 16px;"><strong>${escapeHtml(saleReason)}</strong> on <em>${escapeHtml(productName)}</em>.</p>`
+    );
+  }
+
+  if (restockHit) {
+    parts.push(
+      `<p style="margin:0 0 16px;"><strong>Back in stock</strong> — <em>${escapeHtml(productName)}</em> is available again${stock > 0 ? ` (${stock} in stock)` : ''}.</p>`
+    );
+  }
+
+  if (variantLabel) {
+    parts.push(`<p style="margin:0 0 16px;">Option: ${escapeHtml(variantLabel)}</p>`);
+  }
+
+  if (actionUrl) {
+    parts.push(
+      ctaButton({
+        href: actionUrl,
+        label: listName ? `View ${listName}` : 'View your wish list',
+      })
+    );
+  }
+
+  if (shopUrl && shopUrl !== actionUrl) {
+    parts.push(
+      `<p style="margin:16px 0 0;text-align:center;">` +
+        `<a href="${escapeHtml(shopUrl)}" style="color:#2563eb;text-decoration:none;font-size:14px;">Browse the store</a>` +
+        `</p>`
+    );
+  }
+
+  return parts.join('\n');
+}
+
+function buildWishlistAlertSubject({ productName, saleHit, restockHit }) {
+  if (saleHit && restockHit) {
+    return `Wish list update: ${productName} — sale & restock`;
+  }
+  if (saleHit) return `Wish list sale: ${productName}`;
+  return `${productName} is back in stock`;
+}
+
+function buildWishlistAlertHeadline({ saleHit, restockHit }) {
+  if (saleHit && restockHit) return 'Wish list update';
+  if (saleHit) return 'Sale on your wish list';
+  return 'Back in stock';
+}
+
+function buildWishlistAlertPreheader({ productName, saleHit, restockHit, saleReason }) {
+  if (saleHit && restockHit) {
+    return `${saleReason || 'Price update'} and ${productName} is back in stock.`;
+  }
+  if (saleHit) return saleReason || `${productName} is on sale on your wish list.`;
+  return `${productName} is available again — shop before it sells out.`;
+}
+
+async function sendWishlistProductAlertEmail({
+  customer,
+  client,
+  productName,
+  saleHit,
+  saleReason,
+  restockHit,
+  stock,
+  variantLabel,
+  listName,
+  actionUrl,
+  shopUrl,
+}) {
+  const decryptedEmail = decrypt(client.businessEmail);
+  const decryptedPass = decrypt(client.businessEmailPassword);
+  const smtpHost = resolveSmtpHost(client);
+  const smtpPort = resolveSmtpPort(client, smtpHost);
+  if (!smtpHost) {
+    throw new Error('SMTP host could not be resolved for client');
+  }
+
+  const brand = resolveEmailBrand(client);
+  const brandName = String(client.companyName || 'Our store');
+  const subject = buildWishlistAlertSubject({ productName, saleHit, restockHit });
+  const headline = buildWishlistAlertHeadline({ saleHit, restockHit });
+  const preheader = buildWishlistAlertPreheader({
+    productName,
+    saleHit,
+    restockHit,
+    saleReason,
+  });
+
+  const bodyHtml = buildWishlistAlertBody({
+    customer,
+    productName,
+    saleHit,
+    saleReason,
+    restockHit,
+    stock,
+    variantLabel,
+    listName,
+    actionUrl,
+    shopUrl,
+  });
+
+  const html = buildKhanaEmail({
+    headline,
+    title: subject,
+    preheader,
+    bodyHtml,
+    brandName,
+    logoUrl: brand.logoUrl || undefined,
+    showKhanaLogo: false,
+    footerHtml: `Automated wishlist alert from ${escapeHtml(brandName)}. Manage alerts in your account settings.`,
+    primaryColor: brand.primaryColor,
+  });
+
+  const textLines = [
+    `Hi ${customer.customerFirstName || 'there'},`,
+    '',
+  ];
+  if (saleHit && saleReason) textLines.push(`${saleReason} on ${productName}.`);
+  if (restockHit) {
+    textLines.push(`${productName} is back in stock${stock > 0 ? ` (${stock} available)` : ''}.`);
+  }
+  if (variantLabel) textLines.push(`Option: ${variantLabel}`);
+  if (actionUrl) textLines.push('', `View your list: ${actionUrl}`);
+  if (shopUrl && shopUrl !== actionUrl) textLines.push(`Shop: ${shopUrl}`);
+  textLines.push('', `— ${brandName}`);
+  const text = textLines.join('\n');
+
+  const { html: htmlOut, attachments } = await inlineEmailBannerLogosAsync(html, [], {});
+
+  await sendMailWithRetry(
+    {
+      host: smtpHost,
+      port: smtpPort,
+      secure: resolveSmtpSecure(smtpPort),
+      user: decryptedEmail,
+      pass: decryptedPass,
+      from: `"${client.companyName}" <${decryptedEmail}>`,
+      to: customer.emailAddress,
+      subject,
+      text,
+      html: htmlOut,
+      attachments: formatEmailAttachments(attachments || []),
+      clientID: client.clientID,
+      saveToSent: false,
+    },
+    3
+  );
+}
+
 /**
  * After adding/updating a wishlist item, store price/stock baseline.
  */
@@ -92,17 +274,17 @@ async function handleProductUpdate(prevProduct, nextProduct) {
 
   if (!lists.length) return;
 
-  const client = await Client.findOne({ clientID }).select(
-    'companyName businessEmail businessEmailPassword smtpHost smtpPort return_url'
-  );
+  const client = await Client.findOne({ clientID }).select(CLIENT_EMAIL_FIELDS);
   if (!client) return;
 
   const host = resolveSmtpHost(client);
-  const port = resolveSmtpPort(client, host);
   if (!host) {
     console.warn('wishlistNotify: no SMTP host for client', clientID);
     return;
   }
+
+  const listUrl = storeBaseUrl(client);
+  const shopUrl = listUrl || '';
 
   for (const list of lists) {
     for (const item of list.items) {
@@ -127,7 +309,7 @@ async function handleProductUpdate(prevProduct, nextProduct) {
         if (cooldownOk && (betterPrice || betterSale)) {
           saleHit = true;
           if (betterSale && saleAfter > saleBefore) saleReason = `New sale: ${saleAfter}% off`;
-          else saleReason = `Price dropped to ${effAfter.toFixed(2)}`;
+          else saleReason = `Price dropped to R${effAfter.toFixed(2)}`;
         }
       }
 
@@ -154,42 +336,22 @@ async function handleProductUpdate(prevProduct, nextProduct) {
       });
 
       const productName = nextProduct.productName || 'Product';
-      const listUrl = client.return_url ? String(client.return_url).replace(/\/$/, '') : '';
       const deepLink = listUrl ? `${listUrl}/wishlist/${list._id}` : '';
-
-      const parts = [];
-      if (saleHit) parts.push(`<p><strong>${saleReason}</strong> on <em>${productName}</em>.</p>`);
-      if (restockHit) {
-        parts.push(
-          `<p><strong>Back in stock</strong> — <em>${productName}</em> is available again (${afterLine.stock} in stock).</p>`
-        );
-      }
-      if (afterLine.label) parts.push(`<p>Option: ${afterLine.label}</p>`);
-      if (deepLink) parts.push(`<p><a href="${deepLink}">View your list: ${list.name}</a></p>`);
-
-      const subject =
-        saleHit && restockHit
-          ? `Wish list update: ${productName} — sale & restock`
-          : saleHit
-            ? `Wish list sale: ${productName}`
-            : `Wish list: ${productName} is back in stock`;
-
-      const html = `<div style="font-family:sans-serif">${parts.join('')}<p style="color:#666;font-size:12px">${client.companyName || ''}</p></div>`;
-      const text = parts.map((p) => p.replace(/<[^>]+>/g, ' ')).join('\n');
 
       if (customer?.emailAddress) {
         try {
-          await sendMail({
-            host,
-            port,
-            secure: resolveSmtpSecure(port),
-            user: client.businessEmail,
-            pass: client.businessEmailPassword,
-            from: `"${client.companyName}" <${client.businessEmail}>`,
-            to: customer.emailAddress,
-            subject,
-            text,
-            html,
+          await sendWishlistProductAlertEmail({
+            customer,
+            client,
+            productName,
+            saleHit,
+            saleReason,
+            restockHit,
+            stock: afterLine.stock,
+            variantLabel: afterLine.label,
+            listName: list.name,
+            actionUrl: deepLink || shopUrl,
+            shopUrl,
           });
           if (saleHit) item.lastSaleNotifiedAt = new Date();
           if (restockHit) item.lastRestockNotifiedAt = new Date();
@@ -225,16 +387,12 @@ async function sendManualRestockAlerts(clientID, productId, { force = false } = 
     'items.notifyOnRestock': true,
   });
 
-  const client = await Client.findOne({ clientID }).select(
-    'companyName businessEmail businessEmailPassword smtpHost smtpPort return_url'
-  );
+  const client = await Client.findOne({ clientID }).select(CLIENT_EMAIL_FIELDS);
   if (!client) {
     return { sent: 0, failed: 0, skipped: 0, error: 'client_not_found' };
   }
 
-  const host = resolveSmtpHost(client);
-  const port = resolveSmtpPort(client, host);
-  if (!host) {
+  if (!resolveSmtpHost(client)) {
     return { sent: 0, failed: 0, skipped: 0, error: 'smtp_not_configured' };
   }
 
@@ -243,6 +401,8 @@ async function sendManualRestockAlerts(clientID, productId, { force = false } = 
   let skipped = 0;
   const pid = String(productId);
   const productName = product.productName || 'Product';
+  const listUrl = storeBaseUrl(client);
+  const shopUrl = listUrl || '';
 
   for (const list of lists) {
     let listChanged = false;
@@ -279,30 +439,21 @@ async function sendManualRestockAlerts(clientID, productId, { force = false } = 
         continue;
       }
 
-      const listUrl = client.return_url ? String(client.return_url).replace(/\/$/, '') : '';
       const deepLink = listUrl ? `${listUrl}/wishlist/${list._id}` : '';
-      const parts = [
-        `<p><strong>Back in stock</strong> — <em>${productName}</em> is available again (${afterLine.stock} in stock).</p>`,
-      ];
-      if (afterLine.label) parts.push(`<p>Option: ${afterLine.label}</p>`);
-      if (deepLink) parts.push(`<p><a href="${deepLink}">View your list: ${list.name}</a></p>`);
-
-      const subject = `Wish list: ${productName} is back in stock`;
-      const html = `<div style="font-family:sans-serif">${parts.join('')}<p style="color:#666;font-size:12px">${client.companyName || ''}</p></div>`;
-      const text = parts.map((p) => p.replace(/<[^>]+>/g, ' ')).join('\n');
 
       try {
-        await sendMail({
-          host,
-          port,
-          secure: resolveSmtpSecure(port),
-          user: client.businessEmail,
-          pass: client.businessEmailPassword,
-          from: `"${client.companyName}" <${client.businessEmail}>`,
-          to: customer.emailAddress,
-          subject,
-          text,
-          html,
+        await sendWishlistProductAlertEmail({
+          customer,
+          client,
+          productName,
+          saleHit: false,
+          saleReason: '',
+          restockHit: true,
+          stock: afterLine.stock,
+          variantLabel: afterLine.label,
+          listName: list.name,
+          actionUrl: deepLink || shopUrl,
+          shopUrl,
         });
         item.lastRestockNotifiedAt = new Date();
         item.lastKnownStock = afterLine.stock;
@@ -326,4 +477,5 @@ module.exports = {
   refreshItemSnapshot,
   handleProductUpdate,
   sendManualRestockAlerts,
+  sendWishlistProductAlertEmail,
 };

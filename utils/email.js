@@ -20,6 +20,7 @@ const {
 const { normalizeEmailBranding } = require('../helpers/clientEmailBranding');
 const { resolveEmailBrand } = require('../helpers/emailDesignTokens');
 const { formatEmailAttachments } = require('../helpers/formatEmailAttachments');
+const { sendVerificationEmail } = require('./sendVerificationEmail');
 
 function brandPlainName(formattedClientName) {
     return String(formattedClientName || '')
@@ -1585,4 +1586,5 @@ module.exports = {
     diffBookingForCustomer,
     createTransporter,
     deliverQueuedOutboundEmail,
+    sendVerificationEmail,
 };

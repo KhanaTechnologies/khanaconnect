@@ -1,53 +1,78 @@
-const { sendMail } = require('./mailer');
+const { sendMailWithRetry } = require('./mailer');
 const { decrypt } = require('./encryption');
 const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('./mailHost');
-const { escapeHtml } = require('./signatureHtml');
+const { resolveEmailBrand } = require('./emailDesignTokens');
+const { escapeHtml, ctaButton, buildKhanaEmail } = require('./transactionalEmailLayout');
+const { inlineEmailBannerLogosAsync } = require('./inlineEmailBannerLogo');
+const { formatEmailAttachments } = require('./formatEmailAttachments');
 
 async function sendPreorderGoLiveEmail({ signup, campaign, client, subject, message, orderUrl }) {
   const decryptedEmail = decrypt(client.businessEmail);
   const decryptedPass = decrypt(client.businessEmailPassword);
-  const smtpHost = resolveSmtpHost({
-    smtpHost: client.smtpHost,
-    imapHost: client.imapHost,
-    businessEmail: decryptedEmail,
-    return_url: client.return_url,
-  });
+  const smtpHost = resolveSmtpHost(client);
   const smtpPort = resolveSmtpPort(client, smtpHost);
+  if (!smtpHost) {
+    throw new Error('SMTP host could not be resolved for client');
+  }
 
-  const name = escapeHtml(signup.customerInfo?.firstName || signup.customerInfo?.name || 'there');
-  const brand = escapeHtml(client.companyName || 'Our store');
-  const campaignName = escapeHtml(campaign.name || 'Our campaign');
-  const bodyHtml = escapeHtml(message || '').replace(/\n/g, '<br>');
-  const shopUrl = escapeHtml(orderUrl || client.return_url || '#');
+  const firstName = signup.customerInfo?.firstName || signup.customerInfo?.name || 'there';
+  const brandName = String(client.companyName || 'Our store');
+  const campaignName = campaign.name || 'Our campaign';
+  const shopUrl = (orderUrl || client.return_url || '').replace(/\/$/, '') || '#';
+  const messageHtml = escapeHtml(message || '').replace(/\n/g, '<br>');
 
-  const html = `
-    <div style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto;color:#111827">
-      <h2 style="color:#0f79bf">${brand}</h2>
-      <p>Hi ${name},</p>
-      <p><strong>${campaignName} is live!</strong></p>
-      <p>${bodyHtml}</p>
-      <p style="margin:24px 0">
-        <a href="${shopUrl}" style="display:inline-block;padding:14px 28px;background:#0f79bf;color:#fff;text-decoration:none;border-radius:6px;font-weight:bold">
-          Order now
-        </a>
-      </p>
-      <p style="font-size:13px;color:#6b7280">You signed up for updates about this campaign.</p>
-    </div>`;
+  const bodyHtml = `
+    <p style="margin:0 0 16px;">Hi ${escapeHtml(firstName)},</p>
+    <p style="margin:0 0 16px;"><strong>${escapeHtml(campaignName)} is live!</strong></p>
+    <p style="margin:0 0 20px;">${messageHtml}</p>
+    ${ctaButton({ href: shopUrl, label: 'Order now' })}
+    <p style="margin:16px 0 0;font-size:13px;color:#6b7280;">You signed up for updates about this campaign.</p>
+  `;
 
-  const text = `Hi ${signup.customerInfo?.firstName || 'there'},\n\n${campaign.name} is live!\n\n${message}\n\nOrder now: ${orderUrl || client.return_url}`;
-
-  await sendMail({
-    host: smtpHost,
-    port: smtpPort,
-    secure: resolveSmtpSecure(smtpPort),
-    user: decryptedEmail,
-    pass: decryptedPass,
-    from: `"${client.companyName}" <${decryptedEmail}>`,
-    to: signup.customerInfo.email,
-    subject: subject || `${campaign.name} — we're live! Order now`,
-    text,
-    html,
+  const brand = resolveEmailBrand(client);
+  const emailSubject = subject || `${campaignName} — we're live! Order now`;
+  const html = buildKhanaEmail({
+    headline: 'We are live!',
+    title: emailSubject,
+    preheader: `${campaignName} is officially live — order now.`,
+    bodyHtml,
+    brandName,
+    logoUrl: brand.logoUrl || undefined,
+    showKhanaLogo: false,
+    footerHtml: `Campaign update from ${escapeHtml(brandName)}.`,
+    primaryColor: brand.primaryColor,
   });
+
+  const text = `Hi ${firstName},
+
+${campaignName} is live!
+
+${message || ''}
+
+Order now: ${shopUrl}
+
+— ${brandName}`;
+
+  const { html: htmlOut, attachments } = await inlineEmailBannerLogosAsync(html, [], {});
+
+  await sendMailWithRetry(
+    {
+      host: smtpHost,
+      port: smtpPort,
+      secure: resolveSmtpSecure(smtpPort),
+      user: decryptedEmail,
+      pass: decryptedPass,
+      from: `"${client.companyName}" <${decryptedEmail}>`,
+      to: signup.customerInfo.email,
+      subject: emailSubject,
+      text,
+      html: htmlOut,
+      attachments: formatEmailAttachments(attachments || []),
+      clientID: client.clientID,
+      saveToSent: false,
+    },
+    3
+  );
 }
 
 module.exports = { sendPreorderGoLiveEmail };

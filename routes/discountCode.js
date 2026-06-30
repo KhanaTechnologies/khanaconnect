@@ -16,7 +16,7 @@ const { buildKhanaEmail, ctaButton, neutralPanel } = require('../helpers/transac
 const { inlineEmailBannerLogosAsync } = require('../helpers/inlineEmailBannerLogo');
 const { formatEmailAttachments } = require('../helpers/formatEmailAttachments');
 const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../helpers/mailHost');
-const { sendMail } = require('../helpers/mailer');
+const { sendMailWithRetry } = require('../helpers/mailer');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const { createDashboardAuth } = require('../helpers/dashboardAuth');
 const { recordTeamActivityFromRequest } = require('../helpers/teamActivity');
@@ -144,19 +144,24 @@ Discount: ${discount}% off
 ${websiteUrl ? `Website: ${websiteUrl}` : ''}`;
 
     try {
-      await sendMail({
-        host,
-        port,
-        secure: resolveSmtpSecure(port),
-        user: clientDoc.businessEmail,
-        pass: clientDoc.businessEmailPassword,
-        from: `"${clientDoc.companyName}" <${clientDoc.businessEmail}>`,
-        to: customer.emailAddress,
-        subject: `Wish list match: ${code} (${discount}% off)`,
-        text,
-        html: htmlOut,
-        attachments: formatEmailAttachments(attachments || []),
-      });
+      await sendMailWithRetry(
+        {
+          host,
+          port,
+          secure: resolveSmtpSecure(port),
+          user: clientDoc.businessEmail,
+          pass: clientDoc.businessEmailPassword,
+          from: `"${clientDoc.companyName}" <${clientDoc.businessEmail}>`,
+          to: customer.emailAddress,
+          subject: `Wish list match: ${code} (${discount}% off)`,
+          text,
+          html: htmlOut,
+          attachments: formatEmailAttachments(attachments || []),
+          clientID: clientId,
+          saveToSent: false,
+        },
+        3
+      );
       sent += 1;
     } catch (e) {
       console.error('wishlist checkout-code alert failed:', e.message);

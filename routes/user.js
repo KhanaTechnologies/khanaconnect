@@ -1,12 +1,14 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const Client = require('../models/client');
 const Customer = require('../models/customer');
-const authJwt = require('../helpers/jwt'); // Import the authJwt middleware
+const authJwt = require('../helpers/jwt');
 const router = express.Router();
-const { sendVerificationEmail } = require('../utils/email');
-const { wrapRoute } = require('../helpers/failureEmail'); // ✅ Import wrapRoute
+const { sendVerificationEmail } = require('../utils/sendVerificationEmail');
+const { clientEmailBrandingPayload } = require('../helpers/clientEmailBranding');
+const { wrapRoute } = require('../helpers/failureEmail');
 const { getJwtSecret } = require('../helpers/jwtSecret');
 
 router.use(authJwt());
@@ -91,14 +93,32 @@ router.post('/', wrapRoute(async (req, res) => {
     const savedUser = await user.save();
 
     if (userType === 'customer') {
-        // Send verification email
-        const verificationToken = jwt.sign({ customerId: savedUser._id }, process.env.emailSecret, { expiresIn: '1h' });
-        await sendVerificationEmail(
-            savedUser.emailAddress,
-            verificationToken,
-            user.businessEmail,
-            user.businessEmailPassword
-        );
+        const client = await Client.findOne({ clientID });
+        if (!client) {
+            return res.status(400).json({ error: 'Client not found for customer registration' });
+        }
+
+        const verificationToken = crypto.randomBytes(32).toString('hex');
+        savedUser.emailVerificationToken = verificationToken;
+        savedUser.emailVerificationExpires = Date.now() + 3600000;
+        await savedUser.save();
+
+        const verifyUrl = `${client.return_url}/verify-email/${verificationToken}`;
+
+        try {
+            await sendVerificationEmail(
+                savedUser.emailAddress,
+                verifyUrl,
+                client.businessEmail,
+                client.businessEmailPassword,
+                client.return_url,
+                client.companyName,
+                client.emailSignature || '',
+                clientEmailBrandingPayload(client)
+            );
+        } catch (emailError) {
+            console.error('Verification email failed:', emailError.message);
+        }
     }
 
     res.json({ user: savedUser });

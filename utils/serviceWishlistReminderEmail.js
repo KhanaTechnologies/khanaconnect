@@ -1,4 +1,4 @@
-const { sendMail } = require('../helpers/mailer');
+const { sendMailWithRetry } = require('../helpers/mailer');
 const { decrypt } = require('../helpers/encryption');
 const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../helpers/mailHost');
 const { mergeEmailSignature, escapeHtml } = require('../helpers/signatureHtml');
@@ -90,21 +90,24 @@ Book or browse: ${bookingUrl}
 
 — ${client.companyName || ''}`;
 
-  await sendMail({
-    host,
-    port: smtpPort,
-    secure: resolveSmtpSecure(smtpPort),
-    user: decryptedEmail,
-    pass: decryptedPass,
-    from: `"${client.companyName}" <${decryptedEmail}>`,
-    to: customer.emailAddress,
-    subject: `Your service wish list — ${label}`,
-    text,
-    html: htmlOut,
-    attachments: formatEmailAttachments(attachments || []),
-    clientID: client.clientID,
-    saveToSent: false,
-  });
+  await sendMailWithRetry(
+    {
+      host,
+      port: smtpPort,
+      secure: resolveSmtpSecure(smtpPort),
+      user: decryptedEmail,
+      pass: decryptedPass,
+      from: `"${client.companyName}" <${decryptedEmail}>`,
+      to: customer.emailAddress,
+      subject: `Your service wish list — ${label}`,
+      text,
+      html: htmlOut,
+      attachments: formatEmailAttachments(attachments || []),
+      clientID: client.clientID,
+      saveToSent: false,
+    },
+    3
+  );
 }
 
 module.exports = { sendServiceWishlistMonthlyReminder };
