@@ -49,6 +49,7 @@ const EMAIL_TOKENS = {
   },
   layout: {
     transactionalMaxWidth: 560,
+    communicationMaxWidth: 580,
     newsletterMaxWidth: 600,
     radius: '8px',
     buttonRadius: '6px',

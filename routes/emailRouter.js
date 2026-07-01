@@ -28,6 +28,11 @@ const { uploadSignatureImage } = require('../helpers/signatureImageUpload');
 const { uploadEmailLogoImage } = require('../helpers/emailLogoUpload');
 const { buildKhanaEmail } = require('../helpers/transactionalEmailLayout');
 const {
+    wrapCommunicationEmailBody,
+    plainTextToHtmlFragment,
+    communicationLayoutEnabledForRequest,
+} = require('../helpers/communicationEmailLayout');
+const {
     isClientSubscriptionActive,
     subscriptionBlockedResponse,
 } = require('../helpers/clientSubscription');
@@ -737,7 +742,18 @@ router.route('/')
         }
 
         const clientSignature = req.client.emailSignature || '';
-        const { html: finalHtml, text: finalText } = mergeEmailSignature(bodyHtml, bodyText, clientSignature);
+        if (!bodyHtml && bodyText) {
+            bodyHtml = plainTextToHtmlFragment(bodyText);
+        }
+        const { html: mergedHtml, text: finalText } = mergeEmailSignature(bodyHtml, bodyText, clientSignature);
+        let finalHtml = mergedHtml;
+        if (communicationLayoutEnabledForRequest(req)) {
+            finalHtml = wrapCommunicationEmailBody({
+                subject: finalSubject,
+                bodyHtml: mergedHtml,
+                client: req.client,
+            });
+        }
 
         const host = resolveSmtpHost(req.client);
         const smtpPort = resolveSmtpPort(req.client, host);

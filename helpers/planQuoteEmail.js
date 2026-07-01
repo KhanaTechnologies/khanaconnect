@@ -2,6 +2,7 @@ const {
   escapeHtml,
   buildKhanaEmail,
 } = require('./transactionalEmailLayout');
+const { buildKhanaCommunicationEmail } = require('./communicationEmailLayout');
 const { existingWebsitePathLabel } = require('./planBuilderPricing');
 
 const QUOTE_VALIDITY_DAYS = 30;
@@ -248,7 +249,8 @@ function buildPlanQuoteProspectHtml(quote, shareUrl, validUntil, companyName) {
     </p>
   `;
 
-  return buildKhanaEmail({
+  return buildKhanaCommunicationEmail({
+    subject: 'Your Khana plan estimate',
     headline: 'Your Khana plan estimate',
     title: 'Your Khana plan estimate',
     preheader: `Your Khana estimate: ${formatZar(est.totalMonthly)}/mo. Valid until ${validLabel}.`,
@@ -260,9 +262,9 @@ function buildPlanQuoteProspectHtml(quote, shareUrl, validUntil, companyName) {
 }
 
 function buildPlanQuoteFollowUpHtml({ subject, bodyHtml, firstName }) {
-  return buildKhanaEmail({
-    headline: 'Following up',
-    title: subject,
+  return buildKhanaCommunicationEmail({
+    subject,
+    headline: subject,
     preheader: `A quick follow-up from Khana Technologies, ${firstName}.`,
     bodyHtml,
     brandName: 'Khana Technologies',
