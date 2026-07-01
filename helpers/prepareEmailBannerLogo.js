@@ -11,6 +11,7 @@ const DARK_BG_THRESHOLD = 32;
 const WHITE_LOGO_THRESHOLD = 175;
 const MATTE_LUMINANCE_MAX = 165;
 const LOGO_DISPLAY_WIDTH = 200;
+const LOGO_MAX_STORAGE_WIDTH = 400;
 
 function pixelLuminance(r, g, b) {
   return 0.299 * r + 0.587 * g + 0.114 * b;
@@ -80,6 +81,77 @@ async function cleanBannerLogoPixels(buffer) {
     .toBuffer();
 }
 
+/** Sample pixels to decide whether this is a white mark vs a full-color logo. */
+async function analyzeLogoProfile(buffer) {
+  const { data } = await sharp(buffer).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  let blackBg = 0;
+  let colorFg = 0;
+  let whiteFg = 0;
+  let visible = 0;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    const a = data[i + 3];
+    if (a < 16) continue;
+    visible += 1;
+    const lum = pixelLuminance(r, g, b);
+    const sat = pixelSaturation(r, g, b);
+    if (r <= DARK_BG_THRESHOLD && g <= DARK_BG_THRESHOLD && b <= DARK_BG_THRESHOLD) {
+      blackBg += 1;
+      continue;
+    }
+    if (lum >= WHITE_LOGO_THRESHOLD && sat < 0.25) {
+      whiteFg += 1;
+      continue;
+    }
+    if (sat >= 0.1 && lum >= 20) {
+      colorFg += 1;
+    }
+  }
+
+  const isColorLogo = colorFg > Math.max(whiteFg * 0.35, 80);
+  const hasDarkBackground = blackBg > visible * 0.12;
+  const isWhiteLogo = whiteFg > colorFg * 1.5 && whiteFg > 80;
+
+  return { isColorLogo, hasDarkBackground, isWhiteLogo, visible };
+}
+
+/** Remove only solid black/near-black backdrops — keeps gradient fills intact. */
+async function keyOutSolidDarkBackground(buffer) {
+  const { data, info } = await sharp(buffer).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  let changed = false;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    if (r <= DARK_BG_THRESHOLD && g <= DARK_BG_THRESHOLD && b <= DARK_BG_THRESHOLD) {
+      if (data[i + 3] > 0) changed = true;
+      data[i + 3] = 0;
+    }
+  }
+
+  if (!changed) return buffer;
+
+  return sharp(data, {
+    raw: { width: info.width, height: info.height, channels: 4 },
+  })
+    .png()
+    .toBuffer();
+}
+
+async function resizeLogoForStorage(buffer) {
+  const meta = await sharp(buffer).metadata();
+  const width = meta.width || 0;
+  if (!width || width <= LOGO_MAX_STORAGE_WIDTH) return buffer;
+  return sharp(buffer)
+    .resize({ width: LOGO_MAX_STORAGE_WIDTH, withoutEnlargement: true })
+    .png()
+    .toBuffer();
+}
+
 async function trimLogoBounds(buffer, sharpOpts) {
   try {
     return await sharp(buffer, sharpOpts).trim({ threshold: 10 }).png().toBuffer();
@@ -136,8 +208,23 @@ async function extractTrimmedLogo(buffer, options = {}) {
   const sharpOpts = isSvg ? { density: 300 } : undefined;
 
   let working = await sharp(buffer, sharpOpts).ensureAlpha().png().toBuffer();
-  working = await cleanBannerLogoPixels(working);
-  return trimLogoBounds(working, sharpOpts);
+  const profile = await analyzeLogoProfile(working);
+
+  if (profile.isColorLogo) {
+    if (profile.hasDarkBackground) {
+      working = await keyOutSolidDarkBackground(working);
+    }
+  } else if (profile.isWhiteLogo) {
+    working = await cleanBannerLogoPixels(working);
+  } else if (profile.hasDarkBackground) {
+    working = await keyOutSolidDarkBackground(working);
+  } else {
+    working = await cleanBannerLogoPixels(working);
+  }
+
+  working = await trimLogoBounds(working, sharpOpts);
+  working = await resizeLogoForStorage(working);
+  return working;
 }
 
 /**
@@ -174,4 +261,6 @@ module.exports = {
   extractTrimmedLogo,
   compositeLogoOnBannerGradient,
   cleanBannerLogoPixels,
+  analyzeLogoProfile,
+  keyOutSolidDarkBackground,
 };
