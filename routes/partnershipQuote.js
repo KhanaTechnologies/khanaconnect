@@ -6,7 +6,7 @@ const Client = require('../models/client');
 const { wrapRoute } = require('../helpers/failureEmail');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const { mergePartnershipPricing } = require('../helpers/partnershipPricingDefaults');
-const { calculatePlanEstimate } = require('../helpers/planBuilderPricing');
+const { calculatePlanEstimate, normalizePlanSelections, existingWebsitePathLabel } = require('../helpers/planBuilderPricing');
 const partnershipPricingRouter = require('./partnershipPricing');
 const {
   QUOTE_VALIDITY_DAYS,
@@ -331,32 +331,13 @@ router.patch('/public/partnership-quote/:quoteId', quotePatchLimiter, wrapRoute(
   }
 
   const pricing = await getPricingConfig();
-  const selections = {
+  const selections = normalizePlanSelections({
     ...quote.selections?.toObject?.() || quote.selections || {},
     ...req.body.selections,
-  };
+  });
 
   if (req.body.sourceRef != null) {
     quote.sourceRef = String(req.body.sourceRef).trim().slice(0, 80);
-  }
-
-  if (selections.teamMembers != null) {
-    selections.teamMembers = Math.min(50, Math.max(1, parseInt(selections.teamMembers, 10) || 1));
-  }
-
-  if (selections.customBrief != null) {
-    selections.customBrief = String(selections.customBrief).trim().slice(0, 2000);
-  }
-  if (selections.customScope != null) {
-    const scope = String(selections.customScope).trim();
-    selections.customScope = scope === 'addon' ? 'addon' : 'standalone';
-  }
-  if (selections.needsCustom === false) {
-    selections.customBrief = '';
-    selections.wantsStandaloneApi = false;
-  }
-  if (selections.wantsStandaloneApi != null) {
-    selections.wantsStandaloneApi = !!selections.wantsStandaloneApi;
   }
 
   const estimate = calculatePlanEstimate(selections, pricing);
@@ -413,7 +394,10 @@ router.post('/public/partnership-quote/:quoteId/submit', quoteSubmitLimiter, wra
 
   if (req.body.selections) {
     const pricing = await getPricingConfig();
-    quote.selections = { ...quote.selections?.toObject?.() || quote.selections, ...req.body.selections };
+    quote.selections = normalizePlanSelections({
+      ...quote.selections?.toObject?.() || quote.selections,
+      ...req.body.selections,
+    });
     quote.estimate = calculatePlanEstimate(quote.selections, pricing);
   }
 

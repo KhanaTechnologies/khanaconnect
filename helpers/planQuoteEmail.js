@@ -2,6 +2,7 @@ const {
   escapeHtml,
   buildKhanaEmail,
 } = require('./transactionalEmailLayout');
+const { existingWebsitePathLabel } = require('./planBuilderPricing');
 
 const QUOTE_VALIDITY_DAYS = 30;
 
@@ -48,6 +49,9 @@ function buildEstimateRows(quote) {
 
   rows.push(['Plan', est.tierName || '—']);
   rows.push(['Once-off setup', formatZar(est.totalSetup)]);
+  if (est.setupWaiver > 0) {
+    rows.push(['Plan setup waived', formatZar(est.setupWaiver)]);
+  }
   rows.push(['Monthly partnership', formatZar(est.totalMonthly)]);
   rows.push(['Team members', String(sel.teamMembers || 1)]);
 
@@ -127,6 +131,22 @@ function buildPlanQuoteTeamHtml(quote, shareUrl, validUntil) {
           : ''
       }
       <tr><td>Revenue tools add-on</td><td align="right"><strong>${yesNo(sel.needsRevenueTools)}</strong></td></tr>
+      <tr><td>Already has a website</td><td align="right"><strong>${
+        sel.hasExistingWebsite === true ? 'Yes' : sel.hasExistingWebsite === false ? 'No' : '—'
+      }</strong></td></tr>
+      ${
+        sel.hasExistingWebsite
+          ? `<tr><td>Current website</td><td align="right"><strong>${escapeHtml(
+              String(sel.existingWebsiteUrl || '').trim() || '—'
+            )}</strong></td></tr>
+      <tr><td>Website path</td><td align="right"><strong>${escapeHtml(
+        existingWebsitePathLabel(
+          sel.existingWebsitePath ||
+            (sel.wantsWebsiteRebuild ? 'full_khana' : 'none')
+        )
+      )}</strong></td></tr>`
+          : ''
+      }
       <tr><td>Site size</td><td align="right"><strong>${escapeHtml(sel.siteSize || '—')}</strong></td></tr>
       <tr><td>Catalogue</td><td align="right"><strong>${escapeHtml(sel.catalogueSize || '—')}</strong></td></tr>
       <tr><td>Advanced email</td><td align="right"><strong>${yesNo(sel.advancedEmail)}</strong></td></tr>

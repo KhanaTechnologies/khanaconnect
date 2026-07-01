@@ -14,6 +14,15 @@ const selectionSchema = new mongoose.Schema(
     },
     customBrief: { type: String, default: '', trim: true, maxlength: 2000 },
     wantsStandaloneApi: { type: Boolean, default: false },
+    hasExistingWebsite: { type: Boolean, default: null },
+    existingWebsiteUrl: { type: String, default: '', trim: true, maxlength: 500 },
+    /** @deprecated use existingWebsitePath — kept for legacy quotes */
+    wantsWebsiteRebuild: { type: Boolean, default: false },
+    existingWebsitePath: {
+      type: String,
+      enum: ['none', 'full_khana', 'keep_hosting_free_rebuild', 'no_rebuild'],
+      default: 'none',
+    },
     siteSize: { type: String, enum: ['starter', 'established'], default: 'starter' },
     catalogueSize: { type: String, enum: ['standard', 'large'], default: 'standard' },
     teamMembers: { type: Number, default: 1, min: 1, max: 50 },
@@ -41,6 +50,7 @@ const estimateSchema = new mongoose.Schema(
       },
     ],
     totalSetup: Number,
+    setupWaiver: Number,
     totalMonthly: Number,
     note: String,
     customDisclaimer: String,

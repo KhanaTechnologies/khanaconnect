@@ -25,6 +25,81 @@ const CUSTOM_SYSTEM_DISCLAIMER =
   'The system runs on shared Khana infrastructure and is not exclusive to your business unless you add a private standalone API ' +
   '(quoted once-off on top of custom setup). We confirm final scope and pricing before development starts.';
 
+const EXISTING_WEBSITE_PATHS = new Set([
+  'none',
+  'full_khana',
+  'keep_hosting_free_rebuild',
+  'no_rebuild',
+]);
+
+function resolveExistingWebsitePath(selections) {
+  const path = selections?.existingWebsitePath;
+  if (EXISTING_WEBSITE_PATHS.has(path)) return path;
+  if (selections?.wantsWebsiteRebuild) return 'full_khana';
+  return 'none';
+}
+
+function existingWebsitePathLabel(path) {
+  switch (path) {
+    case 'full_khana':
+      return 'Full Khana platform rebuild & integration';
+    case 'keep_hosting_free_rebuild':
+      return 'Keep my hosting & domain — free website rebuild';
+    case 'no_rebuild':
+      return 'Not looking for a rebuild right now';
+    default:
+      return '—';
+  }
+}
+
+function normalizePlanSelections(selections) {
+  const next = { ...selections };
+
+  if (next.teamMembers != null) {
+    next.teamMembers = Math.min(50, Math.max(1, parseInt(next.teamMembers, 10) || 1));
+  }
+
+  if (next.customBrief != null) {
+    next.customBrief = String(next.customBrief).trim().slice(0, 2000);
+  }
+  if (next.customScope != null) {
+    const scope = String(next.customScope).trim();
+    next.customScope = scope === 'addon' ? 'addon' : 'standalone';
+  }
+  if (next.needsCustom === false) {
+    next.customBrief = '';
+    next.wantsStandaloneApi = false;
+  }
+  if (next.wantsStandaloneApi != null) {
+    next.wantsStandaloneApi = !!next.wantsStandaloneApi;
+  }
+  if (next.hasExistingWebsite != null) {
+    next.hasExistingWebsite = !!next.hasExistingWebsite;
+  }
+  if (next.hasExistingWebsite === false) {
+    next.existingWebsiteUrl = '';
+    next.wantsWebsiteRebuild = false;
+    next.existingWebsitePath = 'none';
+  }
+  if (next.existingWebsiteUrl != null) {
+    next.existingWebsiteUrl = String(next.existingWebsiteUrl).trim().slice(0, 500);
+  }
+  if (next.existingWebsitePath != null) {
+    const path = String(next.existingWebsitePath).trim();
+    next.existingWebsitePath = EXISTING_WEBSITE_PATHS.has(path) ? path : 'none';
+  } else if (next.wantsWebsiteRebuild) {
+    next.existingWebsitePath = 'full_khana';
+  }
+  next.wantsWebsiteRebuild = ['full_khana', 'keep_hosting_free_rebuild'].includes(
+    resolveExistingWebsitePath(next)
+  );
+  if (next.hasExistingWebsite === true) {
+    next.siteSize = 'established';
+  }
+
+  return next;
+}
+
 function mergePlanBuilderConfig(config) {
   const src = config?.planBuilder || {};
   return {
@@ -124,6 +199,53 @@ function buildCustomEstimateNote(selections) {
   return `${scope}.${briefNote}`;
 }
 
+function buildWebsiteRebuildNote(selections) {
+  if (selections.hasExistingWebsite !== true) return '';
+  const url = String(selections.existingWebsiteUrl || '').trim();
+  const path = resolveExistingWebsitePath(selections);
+  let note = 'You already have a website';
+  if (url) note += ` (${url})`;
+  if (path === 'keep_hosting_free_rebuild') {
+    note +=
+      '. You chose to keep your hosting and domain with a Khana website rebuild — your plan setup fee is waived on this estimate (custom add-ons may still apply).';
+  } else if (path === 'full_khana') {
+    note +=
+      '. You asked about a full Khana platform rebuild with store, bookings, revenue tools, and branded email on one managed partnership.';
+  } else if (path === 'no_rebuild') {
+    note += '. You are not looking for a rebuild right now — we can discuss options on your follow-up call.';
+  } else {
+    note += '. We can walk through migration or integration options on your follow-up call.';
+  }
+  return note;
+}
+
+function applyExistingWebsiteSetupWaiver(selections, tierSetupFee, addOnLines) {
+  const path = resolveExistingWebsitePath(selections);
+  if (path !== 'keep_hosting_free_rebuild' || !(tierSetupFee > 0)) {
+    return 0;
+  }
+  addOnLines.push({
+    name: 'Website rebuild — keep your hosting & domain (setup included)',
+    onceOff: 0,
+  });
+  addOnLines.push({
+    name: `Plan setup fee waived (${formatZarForNote(tierSetupFee)})`,
+    onceOff: 0,
+  });
+  return tierSetupFee;
+}
+
+function formatZarForNote(amount) {
+  if (amount == null || Number.isNaN(Number(amount))) return 'on enquiry';
+  return `R${Number(amount).toLocaleString('en-ZA')}`;
+}
+
+function appendEstimateNotes(selections, parts) {
+  const custom = buildCustomEstimateNote(selections);
+  const website = buildWebsiteRebuildNote(selections);
+  return [custom, website, ...parts].filter(Boolean).join(' ');
+}
+
 function calcTeamSeatCosts(selections, tierId, planBuilder) {
   const teamMembers = Math.max(1, Number(selections.teamMembers) || 1);
   const included = planBuilder.includedSeats[tierId] ?? planBuilder.includedSeats.starter ?? 1;
@@ -154,7 +276,7 @@ function calculatePlanEstimate(selections, pricingConfig) {
       monthlyFee,
       totalSetup: setupAddOns,
       totalMonthly: monthlyFee + seats.seatMonthly,
-      note: buildCustomEstimateNote(selections),
+      note: appendEstimateNotes(selections, []),
       customDisclaimer: CUSTOM_SYSTEM_DISCLAIMER,
       addOnLines,
       includedSeats: seats.included,
@@ -178,7 +300,7 @@ function calculatePlanEstimate(selections, pricingConfig) {
       monthlyFee: null,
       totalSetup: null,
       totalMonthly: null,
-      note: buildCustomEstimateNote(selections) || 'Contact us for a tailored quote.',
+      note: appendEstimateNotes(selections, ['Contact us for a tailored quote.']),
       customDisclaimer: selections.needsCustom ? CUSTOM_SYSTEM_DISCLAIMER : '',
       addOnLines: [],
       includedSeats: 1,
@@ -236,6 +358,7 @@ function calculatePlanEstimate(selections, pricingConfig) {
   const seats = calcTeamSeatCosts(selections, tier.id, planBuilder);
 
   const setupFee = tier.setupFee ?? 0;
+  const setupWaiver = applyExistingWebsiteSetupWaiver(selections, setupFee, addOnLines);
   const monthlyFee = resolveMonthlyPartnershipFee(tier, selections);
   const tierName = selections.needsCustom ? `${tier.name} + custom system` : tier.name;
 
@@ -243,16 +366,17 @@ function calculatePlanEstimate(selections, pricingConfig) {
     tierId: tier.id,
     tierName,
     setupFee,
+    setupWaiver,
     monthlyFee,
     includedSeats: seats.included,
     extraSeats: seats.extraSeats,
     seatMonthlyFee: planBuilder.extraSeatMonthlyFee,
     seatMonthly: seats.seatMonthly,
     addOnLines,
-    totalSetup: setupFee + setupAddOns,
+    totalSetup: Math.max(0, setupFee + setupAddOns - setupWaiver),
     totalMonthly: monthlyFee + monthlyAddOns + seats.seatMonthly,
     highlights: tier.highlights || [],
-    note: selections.needsCustom ? buildCustomEstimateNote(selections) : '',
+    note: appendEstimateNotes(selections, []),
     customDisclaimer: selections.needsCustom ? CUSTOM_SYSTEM_DISCLAIMER : '',
   };
 }
@@ -265,6 +389,9 @@ module.exports = {
   mergePlanBuilderConfig,
   calculatePlanEstimate,
   resolveTierId,
+  normalizePlanSelections,
+  resolveExistingWebsitePath,
+  existingWebsitePathLabel,
   applyRevenueToolsAddOn,
   applyCustomSystemSetup,
   resolveMonthlyPartnershipFee,
