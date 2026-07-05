@@ -1,5 +1,6 @@
 // routes/emailRouter.js
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -42,6 +43,17 @@ const { isKnownTemplateId } = require('../helpers/newsletterTemplates');
 const NewsletterDraft = require('../models/NewsletterDraft');
 
 const router = express.Router();
+
+const contactFormLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    ok: false,
+    message: 'Too many contact requests from this address. Please try again later.',
+  },
+});
 
 // Helper function for extracting clean email (add this to routes/emailRouter.js)
 function extractCleanEmail(emailString) {
@@ -2547,7 +2559,7 @@ router.get('/health', validateClient, wrapRoute(async (req, res) => {
  * Endpoint for contact forms from authenticated clients
  * Sends email to business and auto-reply to customer
  */
-router.post('/contact', validateClient, wrapRoute(async (req, res) => {
+router.post('/contact', contactFormLimiter, validateClient, wrapRoute(async (req, res) => {
     try {
         const { 
             name, 
