@@ -1,4 +1,5 @@
 const Email = require('../models/Email');
+const EmailSubscriber = require('../models/emailSubscriber');
 
 const DESIRED_UID_INDEX = {
   unique: true,
@@ -46,6 +47,20 @@ async function ensureEmailIndexes() {
     console.log('Email indexes synced');
   } catch (err) {
     console.error('Email syncIndexes failed:', err.message);
+  }
+
+  try {
+    const subColl = EmailSubscriber.collection;
+    const subIndexes = await subColl.indexes();
+    const legacyEmailOnly = subIndexes.find((idx) => idx.name === 'email_1' && idx.unique);
+    if (legacyEmailOnly) {
+      await subColl.dropIndex('email_1');
+      console.log('Dropped legacy emailsubscribers email_1 unique index (per-client index replaces it)');
+    }
+    await EmailSubscriber.syncIndexes();
+    console.log('EmailSubscriber indexes synced');
+  } catch (err) {
+    console.error('EmailSubscriber index sync failed:', err.message);
   }
 }
 

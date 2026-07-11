@@ -245,29 +245,47 @@ class NewsletterService {
   }
 
   static async addSubscribers(clientId, subscribers) {
-    const operations = subscribers.map((sub) => ({
-      updateOne: {
-        filter: {
-          email: sub.email.toLowerCase(),
-          clientID: clientId,
-        },
-        update: {
-          $setOnInsert: {
-            email: sub.email.toLowerCase(),
-            clientID: clientId,
-            dateSubscribed: new Date(),
+    const operations = [];
+    const errors = [];
+
+    for (const sub of subscribers) {
+      const email = String(sub.email || '').toLowerCase().trim();
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        errors.push(`Invalid email: ${sub.email || '(empty)'}`);
+        continue;
+      }
+
+      let dateSubscribed = new Date();
+      if (sub.dateSubscribed) {
+        const parsed = new Date(sub.dateSubscribed);
+        if (!Number.isNaN(parsed.getTime())) {
+          dateSubscribed = parsed;
+        }
+      }
+
+      const setOnInsert = {
+        email,
+        clientID: clientId,
+        dateSubscribed,
+      };
+
+      operations.push({
+        updateOne: {
+          filter: { email, clientID: clientId },
+          update: {
+            $setOnInsert: setOnInsert,
+            $set: {
+              isActive: true,
+              name: String(sub.name || '').trim(),
+            },
           },
-          $set: {
-            isActive: true,
-            name: sub.name || '',
-          },
+          upsert: true,
         },
-        upsert: true,
-      },
-    }));
+      });
+    }
 
     if (operations.length === 0) {
-      return { added: 0, updated: 0, errors: [] };
+      return { added: 0, updated: 0, total: 0, skipped: subscribers.length, errors };
     }
 
     try {
@@ -276,11 +294,26 @@ class NewsletterService {
         added: result.upsertedCount,
         updated: result.modifiedCount,
         total: result.upsertedCount + result.modifiedCount,
-        errors: [],
+        skipped: errors.length,
+        errors,
       };
     } catch (error) {
+      const writeErrors = error.writeErrors || [];
+      const partial = error.result || {};
+      const writeErrorMessages = writeErrors.map((e) => e.errmsg || e.message).filter(Boolean);
+
+      if (partial.nUpserted !== undefined || partial.nModified !== undefined) {
+        return {
+          added: partial.nUpserted || 0,
+          updated: partial.nModified || 0,
+          total: (partial.nUpserted || 0) + (partial.nModified || 0),
+          skipped: errors.length + writeErrors.length,
+          errors: [...errors, ...writeErrorMessages],
+        };
+      }
+
       console.error('Error adding subscribers:', error);
-      return { added: 0, updated: 0, errors: [error.message] };
+      return { added: 0, updated: 0, total: 0, skipped: subscribers.length, errors: [...errors, error.message] };
     }
   }
 

@@ -4,17 +4,16 @@ const emailSubscriberSchema = new mongoose.Schema({
     email: {
         type: String,
         required: true,
-        unique: true,
         trim: true,
         lowercase: true,
         validate: {
             validator: function(v) {
-                return /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/.test(v);
+                return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
             },
             message: props => `${props.value} is not a valid email address!`
         }
     },
-    name: { type: String, required: true }, // Changed "Name" to "name" to follow naming convention
+    name: { type: String, default: '' },
     clientID: { type: String, required: true }, // Reference to the client
     dateSubscribed: {
         type: Date,
@@ -25,5 +24,7 @@ const emailSubscriberSchema = new mongoose.Schema({
         default: true
     }
 });
+
+emailSubscriberSchema.index({ email: 1, clientID: 1 }, { unique: true });
 
 module.exports = mongoose.model('EmailSubscriber', emailSubscriberSchema);
