@@ -114,7 +114,8 @@ router.post('/', wrapRoute(async (req, res) => {
                 client.return_url,
                 client.companyName,
                 client.emailSignature || '',
-                clientEmailBrandingPayload(client)
+                clientEmailBrandingPayload(client),
+                client
             );
         } catch (emailError) {
             console.error('Verification email failed:', emailError.message);
