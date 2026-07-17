@@ -19,6 +19,7 @@ const { normalizeEmailBranding } = require('../helpers/clientEmailBranding');
 const { formatEmailAttachments } = require('../helpers/formatEmailAttachments');
 const { resolveEmailBrand } = require('../helpers/emailDesignTokens');
 const Client = require('../models/client');
+const WhatsAppService = require('../services/saas/WhatsAppService');
 
 const failedAttempts = new Map();
 const MAX_ATTEMPTS = 3;
@@ -94,7 +95,8 @@ async function sendVerificationEmail(
     clientName,
     emailSignature = '',
     branding = '',
-    client = null
+    client = null,
+    phone = null
 ) {
     const mailClient =
         client ||
@@ -199,11 +201,22 @@ This link expires in about one hour. If you did not create an account, you can i
         clientID: client?.clientID,
     };
 
+    const fireWhatsApp = () => {
+        if (!phone || !client?.clientID) return;
+        WhatsAppService.safeNotifyVerificationCode({
+            clientId: client.clientID,
+            to: phone,
+            companyName: clientName || client.companyName || 'Account',
+            code: verificationURL,
+        }).catch(() => {});
+    };
+
     try {
         await sendMailWithRetry(mailOptions, 3);
 
         console.log('Verification email sent successfully');
         failedAttempts.delete(smtpUser);
+        fireWhatsApp();
     } catch (error) {
         console.error('Error sending verification email:', error);
 
@@ -212,12 +225,16 @@ This link expires in about one hour. If you did not create an account, you can i
                 const sent = await sendViaKhanaFallback(mailOptions, formattedClientName, smtpUser);
                 if (sent) {
                     failedAttempts.delete(smtpUser);
+                    fireWhatsApp();
                     return;
                 }
             } catch (fallbackError) {
                 console.error('[sendVerificationEmail] Khana fallback failed:', fallbackError.message);
             }
         }
+
+        // Still try WhatsApp if email failed but we have a phone
+        fireWhatsApp();
 
         if (!isSmtpAuthError(error)) {
             const previous = failedAttempts.get(smtpUser) || { count: 0, lastFailed: 0 };

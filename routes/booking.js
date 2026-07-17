@@ -22,6 +22,7 @@ const {
 } = require('../utils/email');
 const { diffBookingForCustomer, normalizeCustomerNotifyChanges } = require('../utils/bookingEmailHelpers');
 const { clientEmailBrandingPayload } = require('../helpers/clientEmailBranding');
+const WhatsAppService = require('../services/saas/WhatsAppService');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const { createDashboardAuth } = require('../helpers/dashboardAuth');
 const { recordTeamActivityFromRequest } = require('../helpers/teamActivity');
@@ -310,6 +311,14 @@ router.post('/', validateClient, wrapRoute(async (req, res) => {
                     );
                 }
                 console.log('✅ Background confirmation email sent successfully');
+
+                WhatsAppService.safeNotifyBookingConfirmation({
+                    clientId: booking.clientID || client.clientID,
+                    to: booking.customerPhone || populatedBooking.customerPhone,
+                    companyName: displayName || client.companyName,
+                    bookingRef: String(booking._id || populatedBooking._id),
+                    when: WhatsAppService.formatBookingWhen(populatedBooking || booking),
+                }).catch(() => {});
             } else {
                 console.log('📧 [DEV MODE] Confirmation email would be sent to:', booking.customerEmail);
             }
@@ -614,6 +623,14 @@ router.put('/:id', validateClient, wrapRoute(async (req, res) => {
                                 clientEmailBrandingPayload(client)
                             );
                             console.log(`✅ Background notification sent for booking ${booking._id}`);
+
+                            WhatsAppService.safeNotifyBookingConfirmation({
+                                clientId: booking.clientID || client.clientID,
+                                to: booking.customerPhone,
+                                companyName: client.companyName || client.clientName || booking.clientID,
+                                bookingRef: String(booking._id),
+                                when: WhatsAppService.formatBookingWhen(booking),
+                            }).catch(() => {});
                         }
                     }
                 } catch (emailError) {
@@ -1094,6 +1111,14 @@ router.post('/waitlist/:id/convert-to-booking', validateClient, wrapRoute(async 
     } catch (emailError) {
         console.error('Failed to send confirmation email:', emailError);
     }
+
+    WhatsAppService.safeNotifyBookingConfirmation({
+        clientId: clientId || client.clientID,
+        to: booking.customerPhone,
+        companyName: client.companyName || client.clientName || clientId,
+        bookingRef: String(booking._id),
+        when: WhatsAppService.formatBookingWhen(booking),
+    }).catch(() => {});
 
     res.json({
         message: 'Waitlist entry successfully converted to booking',

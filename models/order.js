@@ -28,6 +28,13 @@ const orderSchema = mongoose.Schema({
     discountAmount: { type: Number, default: 0 },  // Discount amount calculated from the checkout code
     finalPrice: { type: Number, required: true },  // Final price after applying the discount
     orderNotes: { type: String, required: false },
+
+    orderType: { type: String, enum: ['retail', 'b2b'], default: 'retail' },
+    paymentTerms: { type: String, enum: ['prepaid', 'net30', 'on_account'], default: 'prepaid' },
+    poNumber: { type: String, default: '' },
+    b2bBuyer: { type: mongoose.Schema.Types.ObjectId, ref: 'B2BBuyer', default: null },
+    warehouseId: { type: mongoose.Schema.Types.ObjectId, ref: 'Warehouse', default: null },
+    stockSource: { type: String, enum: ['legacy', 'warehouse'], default: 'legacy' },
 });
 
 // Virtual for calculating the final price after applying the discount

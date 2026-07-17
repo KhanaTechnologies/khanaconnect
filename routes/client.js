@@ -10,6 +10,10 @@ const { wrapRoute } = require('../helpers/failureEmail');
 const { getJwtSecret, verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const { BetaAnalyticsDataClient } = require('@google-analytics/data');
 const metaService = require('../services/metaService');
+const {
+  sanitizeWhatsappSettings,
+  publicWhatsappPayload,
+} = require('../helpers/whatsappLink');
 const googleService = require('../services/googleService');
 const { encrypt, decrypt } = require('../helpers/encryption'); // ✅ Import from helper
 const { authenticateClientLogin } = require('../helpers/teamLogin');
@@ -1512,10 +1516,32 @@ router.get('/:clientId', wrapRoute(async (req, res) => {
     .select('-password -token -sessionToken');
   
   if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  const clientObj = client.toObject({ getters: true });
+  const whatsapp = publicWhatsappPayload(clientObj.whatsapp);
+  clientObj.whatsapp = whatsapp;
+  clientObj.whatsappChatUrl = whatsapp.chatUrl;
   
   res.json({
     success: true,
-    client
+    client: clientObj,
+  });
+}));
+
+/** Public storefront-safe WhatsApp click-to-chat settings (no secrets). */
+router.get('/:clientId/whatsapp', wrapRoute(async (req, res) => {
+  const client = await Client.findOne({ clientID: req.params.clientId })
+    .select('whatsapp companyName clientID');
+
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  const whatsapp = publicWhatsappPayload(client.whatsapp);
+  res.json({
+    success: true,
+    clientID: client.clientID,
+    companyName: client.companyName,
+    whatsapp,
+    chatUrl: whatsapp.chatUrl,
   });
 }));
 
@@ -1533,6 +1559,11 @@ router.put('/:clientId', wrapRoute(async (req, res) => {
   delete updates.clientID; // Don't allow changing clientID
   delete updates.token;
   delete updates.sessionToken;
+  delete updates.whatsappChatUrl;
+
+  if (updates.whatsapp && typeof updates.whatsapp === 'object') {
+    updates.whatsapp = sanitizeWhatsappSettings(updates.whatsapp);
+  }
   
   const updatedClient = await Client.findOneAndUpdate(
     { clientID: req.params.clientId }, 
@@ -1541,11 +1572,16 @@ router.put('/:clientId', wrapRoute(async (req, res) => {
   ).select('-password -token -sessionToken');
   
   if (!updatedClient) return res.status(404).json({ error: 'Client not found' });
+
+  const clientObj = updatedClient.toObject({ getters: true });
+  const whatsapp = publicWhatsappPayload(clientObj.whatsapp);
+  clientObj.whatsapp = whatsapp;
+  clientObj.whatsappChatUrl = whatsapp.chatUrl;
   
   res.json({
     success: true,
     message: 'Client updated successfully',
-    client: updatedClient
+    client: clientObj,
   });
 }));
 

@@ -10,6 +10,7 @@ const Product = require('../models/product');
 const { Size } = require('../models/size');
 const { sendOrderConfirmationEmail, sendOrderStatusUpdateEmail } = require('../utils/email');
 const Client = require('../models/client');
+const WhatsAppService = require('../services/saas/WhatsAppService');
 const { body, validationResult } = require('express-validator');
 const { wrapRoute } = require('../helpers/failureEmail');
 const { clientEmailBrandingPayload } = require('../helpers/clientEmailBranding');
@@ -50,7 +51,12 @@ function calculateNextReminder(reminderType, customHours = null) {
 
 // Get all orders
 router.get('/', authenticateToken, wrapRoute(async (req, res) => {
-    const orderList = await Order.find({ clientID: req.clientId })
+    const filter = { clientID: req.clientId };
+    if (req.query.orderType === 'retail' || req.query.orderType === 'b2b') {
+        filter.orderType = req.query.orderType;
+    }
+
+    const orderList = await Order.find(filter)
         .populate('customer', 'customerFirstName customerLastName emailAddress phoneNumber')
         .populate({
             path: 'orderItems',
@@ -216,6 +222,17 @@ router.post('/', authenticateToken, [
         } catch (emailError) {
             console.error('Order confirmation email failed to send:', emailError.message);
         }
+
+        WhatsAppService.safeNotifyOrderConfirmation({
+            clientId: req.clientId,
+            to: customerDoc.phoneNumber,
+            companyName: client.companyName,
+            orderRef: String(order._id),
+            total:
+                order.finalPrice != null
+                    ? `R${Number(order.finalPrice).toFixed(2)}`
+                    : undefined,
+        }).catch(() => {});
     }
 
     res.status(201).json(order);
@@ -274,6 +291,19 @@ router.put('/:id', authenticateToken, wrapRoute(async (req, res) => {
         } catch (emailError) {
             console.error('Email failed to send:', emailError.message);
         }
+
+        const phone =
+            order.customer?.phoneNumber ||
+            order.customerPhone ||
+            order.phone ||
+            '';
+        WhatsAppService.safeNotifyOrderStatus({
+            clientId: req.clientId,
+            to: phone,
+            companyName: client.companyName,
+            orderRef: String(order._id),
+            status: setStatus || order.status || 'updated',
+        }).catch(() => {});
     }
 
     res.json(order);

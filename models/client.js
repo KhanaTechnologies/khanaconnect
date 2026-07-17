@@ -107,6 +107,7 @@ const clientSchema = new Schema({
     sales: { type: Boolean, default: false },
     services:  { type: Boolean, default: false },
     products: { type: Boolean, default: false },
+    b2b: { type: Boolean, default: false },
     dashboard: { type: Boolean, default: false },
     email_center: { type: Boolean, default: false },
     email_builder: { type: Boolean, default: false },
@@ -265,6 +266,39 @@ const clientSchema = new Schema({
     bundleUpsellsEnabled: { type: Boolean, default: true },
     bookingOptimizerEnabled: { type: Boolean, default: true },
     freeShippingThreshold: { type: Number, default: 0, min: 0 },
+  },
+
+  /** WhatsApp Business App click-to-chat (wa.me). Cloud API lives in SaasWhatsAppAccount. */
+  whatsapp: {
+    enabled: { type: Boolean, default: false },
+    /** Digits-only E.164 without + (e.g. 27673572252) */
+    phoneE164: { type: String, default: '', trim: true },
+    displayLabel: { type: String, default: 'Chat on WhatsApp', trim: true },
+    defaultMessage: { type: String, default: '', trim: true },
+    /** Automated Cloud API template notifications (orders, bookings, OTP) */
+    notificationsEnabled: { type: Boolean, default: false },
+  },
+
+  /** B2B module — security & multi-warehouse settings */
+  b2bSettings: {
+    requireTwoFactor: { type: Boolean, default: true },
+    sessionHours: { type: Number, default: 24, min: 1, max: 168 },
+    maxLoginAttempts: { type: Number, default: 5, min: 3, max: 20 },
+    lockoutMinutes: { type: Number, default: 30, min: 5, max: 1440 },
+    otpExpiryMinutes: { type: Number, default: 10, min: 5, max: 60 },
+    multiWarehouseEnabled: { type: Boolean, default: false },
+    allowBuyerWarehouseChoice: { type: Boolean, default: true },
+    defaultAllocationStrategy: {
+      type: String,
+      enum: ['nearest', 'highest_stock', 'preferred'],
+      default: 'preferred',
+    },
+    warehouseLowStockAlertsEnabled: { type: Boolean, default: true },
+    warehouseLowStockDefaultThreshold: { type: Number, default: 5, min: 0 },
+    warehouseLowStockAlertCooldownHours: { type: Number, default: 24, min: 1, max: 168 },
+    warehouseLowStockAlertEmails: [{ type: String, trim: true, lowercase: true }],
+    buyerLowStockWarningsEnabled: { type: Boolean, default: false },
+    buyerLowStockShowQuantity: { type: Boolean, default: true },
   },
 }, {
   timestamps: true,

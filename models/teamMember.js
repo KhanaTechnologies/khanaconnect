@@ -26,6 +26,7 @@ const permissionSchema = {
   sales: { type: Boolean, default: false },
   services: { type: Boolean, default: false },
   products: { type: Boolean, default: false },
+  b2b: { type: Boolean, default: false },
   dashboard: { type: Boolean, default: true },
   email_center: { type: Boolean, default: false },
   email_builder: { type: Boolean, default: false },

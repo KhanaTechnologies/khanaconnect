@@ -1097,7 +1097,8 @@ const registerCustomer = async (req, res) => {
         client.companyName,
         client.emailSignature || '',
         clientEmailBrandingPayload(client),
-        client
+        client,
+        savedCustomer.phoneNumber
       );
     } catch (emailError) {
       console.error('Email failed to send:', emailError.message);
@@ -1181,7 +1182,8 @@ router.post('/login', loginLimiter, validatePaidStorefrontToken, async (req, res
             client.companyName,
             client.emailSignature || '',
             clientEmailBrandingPayload(client),
-            client
+            client,
+            customer.phoneNumber
           );
         } catch (emailError) {
           console.error('Verification email failed to send:', emailError.message);
@@ -1352,7 +1354,8 @@ router.post('/resend-verification', validatePaidStorefrontToken, async (req, res
         client.companyName,
         client.emailSignature || '',
         clientEmailBrandingPayload(client),
-        client
+        client,
+        customer.phoneNumber
       );
     } catch (emailError) {
       console.error('Verification email failed to send:', emailError.message);

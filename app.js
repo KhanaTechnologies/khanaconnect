@@ -286,6 +286,7 @@ const revenueCommandCenterRouter = require('./routes/revenueCommandCenter');
 const partnershipPricingRouter = require('./routes/partnershipPricing');
 const partnershipQuoteRouter = require('./routes/partnershipQuote');
 const teamRouter = require('./routes/team');
+const b2bRouter = require('./routes/b2b');
 
 app.use('/', indexRouter);
 
@@ -322,6 +323,7 @@ app.use(`${api}/email`, emailRouter);
 app.use(`${api}/saas`, saasRouter);
 app.use(`${api}/revenue`, revenueCommandCenterRouter);
 app.use(`${api}/team`, teamRouter);
+app.use(`${api}/b2b`, b2bRouter);
 app.use(`${api}`, partnershipPricingRouter);
 app.use(`${api}`, partnershipQuoteRouter);
 
@@ -357,6 +359,11 @@ mongoose.connect(process.env.CONNECTION_STRING, {
   const { ensureEmailIndexes } = require('./helpers/ensureEmailIndexes');
   ensureEmailIndexes().catch((err) => {
     console.error('Failed to ensure email indexes:', err.message);
+  });
+
+  const { ensureKhanaWhatsAppAccountFromEnv } = require('./helpers/ensureKhanaWhatsAppAccount');
+  ensureKhanaWhatsAppAccountFromEnv().catch((err) => {
+    console.error('[whatsapp] Failed to upsert Khana Cloud API account:', err.message);
   });
 
   // Create indexes for tracking events

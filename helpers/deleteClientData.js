@@ -17,6 +17,14 @@ const NewsletterDraft = require('../models/NewsletterDraft');
 const NewsletterOpen = require('../models/NewsletterOpen');
 const CustomerSegment = require('../models/CustomerSegment');
 const ProductBundle = require('../models/ProductBundle');
+const B2BTier = require('../models/B2BTier');
+const B2BBuyer = require('../models/B2BBuyer');
+const B2BPriceList = require('../models/B2BPriceList');
+const B2BLoginChallenge = require('../models/B2BLoginChallenge');
+const B2BAuditLog = require('../models/B2BAuditLog');
+const Warehouse = require('../models/Warehouse');
+const WarehouseStock = require('../models/WarehouseStock');
+const WarehouseLowStockAlert = require('../models/WarehouseLowStockAlert');
 const TrackingEvent = require('../models/TrackingEvent');
 const Resource = require('../models/resource');
 const { Size } = require('../models/size');
@@ -79,6 +87,14 @@ async function deleteAllClientData(client) {
     NewsletterOpen.deleteMany({ clientID }),
     CustomerSegment.deleteMany({ clientID }),
     ProductBundle.deleteMany({ clientID }),
+    B2BTier.deleteMany({ clientID }),
+    B2BBuyer.deleteMany({ clientID }),
+    B2BPriceList.deleteMany({ clientID }),
+    B2BLoginChallenge.deleteMany({ clientID }),
+    B2BAuditLog.deleteMany({ clientID }),
+    WarehouseStock.deleteMany({ clientID }),
+    WarehouseLowStockAlert.deleteMany({ clientID }),
+    Warehouse.deleteMany({ clientID }),
     TrackingEvent.deleteMany({ clientID }),
     Resource.deleteMany({ clientID }),
     Size.deleteMany({ clientID }),

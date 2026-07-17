@@ -7,6 +7,7 @@ const {
     sendCheckInReminderEmail,
     sendCheckOutReminderEmail 
 } = require('../utils/email');
+const WhatsAppService = require('../services/saas/WhatsAppService');
 
 class ReminderService {
     constructor() {
@@ -115,6 +116,14 @@ class ReminderService {
                     );
                 }
 
+                WhatsAppService.safeNotifyBookingReminder({
+                    clientId: booking.clientID || client.clientID,
+                    to: booking.customerPhone,
+                    companyName: client.companyName || client.clientName || booking.clientID,
+                    bookingRef: String(booking._id),
+                    when: WhatsAppService.formatBookingWhen(booking),
+                }).catch(() => {});
+
                 // Mark this specific reminder as sent
                 await Booking.updateOne(
                     { 
@@ -182,6 +191,14 @@ class ReminderService {
                     client.clientName || booking.clientID,
                     client.emailSignature || ''
                 );
+
+                WhatsAppService.safeNotifyBookingReminder({
+                    clientId: booking.clientID || client.clientID,
+                    to: booking.customerPhone,
+                    companyName: client.companyName || client.clientName || booking.clientID,
+                    bookingRef: String(booking._id),
+                    when: WhatsAppService.formatBookingWhen(booking),
+                }).catch(() => {});
 
                 await this.markReminderSent(booking, 'service');
                 remindersSent++;

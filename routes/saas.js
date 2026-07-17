@@ -20,7 +20,36 @@ const router = express.Router();
 router.get('/webhooks/whatsapp', handleMetaWebhookChallenge('WHATSAPP_WEBHOOK_VERIFY_TOKEN'));
 router.get('/webhooks/meta-ads', handleMetaWebhookChallenge('META_WEBHOOK_VERIFY_TOKEN'));
 router.post('/webhooks/whatsapp', verifyMetaWebhookSignature('WHATSAPP_APP_SECRET'), wrapRoute(async (req, res) => {
-  // TODO: fan-out per tenant using phone_number_id/waba_id map if needed.
+  try {
+    const body = req.body || {};
+    const entries = Array.isArray(body.entry) ? body.entry : [];
+    for (const entry of entries) {
+      const changes = Array.isArray(entry.changes) ? entry.changes : [];
+      for (const change of changes) {
+        const value = change.value || {};
+        const phoneNumberId = value.metadata?.phone_number_id || '';
+        const statuses = Array.isArray(value.statuses) ? value.statuses : [];
+        for (const st of statuses) {
+          const level =
+            st.status === 'failed' || st.errors?.length ? 'error' : 'log';
+          const msg = `[whatsapp webhook] phone_number_id=${phoneNumberId} id=${st.id} status=${st.status} recipient=${st.recipient_id || ''}`;
+          if (level === 'error') {
+            console.error(msg, st.errors || st);
+          } else {
+            console.log(msg);
+          }
+        }
+        const messages = Array.isArray(value.messages) ? value.messages : [];
+        if (messages.length) {
+          console.log(
+            `[whatsapp webhook] inbound ${messages.length} message(s) for phone_number_id=${phoneNumberId} (inbox not handled)`
+          );
+        }
+      }
+    }
+  } catch (e) {
+    console.error('[whatsapp webhook] parse error:', e.message);
+  }
   res.status(200).json({ ok: true, received: true });
 }));
 router.post('/webhooks/meta-ads', verifyMetaWebhookSignature('META_APP_SECRET'), wrapRoute(async (req, res) => {
@@ -54,18 +83,107 @@ router.post('/whatsapp/accounts', requireRoles('owner', 'manager', 'operator'), 
     },
     { upsert: true, new: true }
   );
-  res.status(201).json({ ok: true, data: doc });
+  res.status(201).json({
+    ok: true,
+    data: {
+      client_id: doc.client_id,
+      waba_id: doc.waba_id,
+      phone_number_id: doc.phone_number_id,
+      mode: doc.mode,
+      status: doc.status,
+      has_token: true,
+    },
+  });
+}));
+
+router.get('/whatsapp/account', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const doc = await SaasWhatsAppAccount.findOne({
+    client_id: req.tenant.clientId,
+    status: 'active',
+  }).sort({ updated_at: -1 });
+
+  if (!doc) {
+    return res.json({ ok: true, data: null });
+  }
+
+  res.json({
+    ok: true,
+    data: {
+      client_id: doc.client_id,
+      waba_id: doc.waba_id,
+      phone_number_id: doc.phone_number_id,
+      mode: doc.mode,
+      status: doc.status,
+      has_token: !!doc.access_token_encrypted,
+      updated_at: doc.updated_at,
+    },
+  });
 }));
 
 router.post('/whatsapp/messages/template', requireRoles('owner', 'manager', 'operator'), idempotencyGuard('saas.whatsapp.template.send'), wrapRoute(async (req, res) => {
-  const { to, templateName, languageCode, components } = req.body;
+  const { to, templateName, languageCode, components, messageType } = req.body;
   const data = await WhatsAppService.sendTemplateMessage({
     clientId: req.tenant.clientId,
     to,
     templateName,
     languageCode,
     components,
+    messageType: messageType || 'utility',
   });
+  res.status(202).json({ ok: true, data });
+}));
+
+router.post('/whatsapp/messages/test', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
+  const { to, templateName = 'order_confirmation' } = req.body || {};
+  if (!to) {
+    return res.status(400).json({ ok: false, message: 'to (phone number) is required' });
+  }
+
+  const client = await Client.findOne({ clientID: req.tenant.clientId }).select('companyName');
+  const companyName = client?.companyName || req.tenant.clientId;
+
+  let data;
+  if (templateName === 'order_status_update') {
+    data = await WhatsAppService.notifyOrderStatus({
+      clientId: req.tenant.clientId,
+      to,
+      companyName,
+      orderRef: 'TEST-001',
+      status: 'processing',
+    });
+  } else if (templateName === 'booking_confirmation') {
+    data = await WhatsAppService.notifyBookingConfirmation({
+      clientId: req.tenant.clientId,
+      to,
+      companyName,
+      bookingRef: 'TEST-BK',
+      when: 'Tomorrow 10:00',
+    });
+  } else if (templateName === 'booking_reminder') {
+    data = await WhatsAppService.notifyBookingReminder({
+      clientId: req.tenant.clientId,
+      to,
+      companyName,
+      bookingRef: 'TEST-BK',
+      when: 'Tomorrow 10:00',
+    });
+  } else if (templateName === 'account_verification') {
+    data = await WhatsAppService.notifyVerificationCode({
+      clientId: req.tenant.clientId,
+      to,
+      companyName,
+      code: '123456',
+    });
+  } else {
+    data = await WhatsAppService.notifyOrderConfirmation({
+      clientId: req.tenant.clientId,
+      to,
+      companyName,
+      orderRef: 'TEST-001',
+      total: 'R0.00',
+    });
+  }
+
   res.status(202).json({ ok: true, data });
 }));
 

@@ -6,6 +6,7 @@ const JOB_NAMES = {
   EVENT_BATCH: 'event-processing:batch',
   EVENT_SINGLE: 'event-processing:single',
   SAAS_USAGE: 'saas-usage-billing',
+  B2B_WAREHOUSE_LOW_STOCK: 'b2b-warehouse:low-stock-check',
 };
 
 let agendaInstance = null;
@@ -101,6 +102,7 @@ function registerJobHandlers(agenda) {
     processSaasUsageBilling,
     markSaasUsageBillingFailed,
   } = require('../jobs/handlers/processSaasUsageBilling');
+  const { processB2bWarehouseLowStock } = require('../jobs/handlers/processB2bWarehouseLowStock');
 
   agenda.define(
     JOB_NAMES.EVENT_BATCH,
@@ -190,6 +192,12 @@ function registerJobHandlers(agenda) {
     }
   );
 
+  agenda.define(
+    JOB_NAMES.B2B_WAREHOUSE_LOW_STOCK,
+    { concurrency: 1, lockLifetime: 15 * 60 * 1000 },
+    async () => processB2bWarehouseLowStock()
+  );
+
   agenda.on('start', (job) => {
     if (job.attrs.name === JOB_NAMES.OUTBOUND_EMAIL) {
       console.log(`📤 Outbound email job ${job.attrs._id} started`);
@@ -249,6 +257,10 @@ async function startJobScheduler() {
 
   registerJobHandlers(agendaInstance);
   await agendaInstance.start();
+
+  const lowStockInterval = process.env.B2B_WAREHOUSE_ALERT_INTERVAL || '6 hours';
+  await agendaInstance.every(lowStockInterval, JOB_NAMES.B2B_WAREHOUSE_LOW_STOCK, {});
+  console.log(`📦 B2B warehouse low-stock job scheduled every ${lowStockInterval}`);
 
   console.log('✅ MongoDB job scheduler (Agenda) started');
   return agendaInstance;

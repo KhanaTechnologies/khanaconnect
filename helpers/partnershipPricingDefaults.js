@@ -167,6 +167,17 @@ const DEFAULT_PARTNERSHIP_PRICING = {
       sortOrder: 3,
     },
     {
+      id: 'b2b-module',
+      name: 'B2B trade ordering',
+      description:
+        'Buyer portal with trade pricing, bulk ordering, 2FA security, multi-warehouse stock, and separate B2B order queue',
+      monthlyFee: 299,
+      onceOffFee: 85000,
+      pricingType: 'monthly',
+      active: true,
+      sortOrder: 5,
+    },
+    {
       id: 'custom-system',
       name: 'Custom system development',
       description:
