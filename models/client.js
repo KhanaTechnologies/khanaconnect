@@ -271,7 +271,7 @@ const clientSchema = new Schema({
   /** WhatsApp Business App click-to-chat (wa.me). Cloud API lives in SaasWhatsAppAccount. */
   whatsapp: {
     enabled: { type: Boolean, default: false },
-    /** Digits-only E.164 without + (e.g. 27673572252) */
+    /** Digits-only E.164 without + (e.g. 27766356790) */
     phoneE164: { type: String, default: '', trim: true },
     displayLabel: { type: String, default: 'Chat on WhatsApp', trim: true },
     defaultMessage: { type: String, default: '', trim: true },

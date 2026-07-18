@@ -8,7 +8,7 @@
  * South African local numbers starting with 0 become 27…
  * @param {string} raw
  * @param {string} [defaultCountryCode='27']
- * @returns {string} e.g. '27673572252' or '' if invalid
+ * @returns {string} e.g. '27766356790' or '' if invalid
  */
 function normalizePhoneE164(raw, defaultCountryCode = '27') {
   if (raw == null) return '';

@@ -366,6 +366,11 @@ mongoose.connect(process.env.CONNECTION_STRING, {
     console.error('[whatsapp] Failed to upsert Khana Cloud API account:', err.message);
   });
 
+  const { ensureWhatsAppPricingDefaults } = require('./helpers/ensureWhatsAppPricingDefaults');
+  ensureWhatsAppPricingDefaults().catch((err) => {
+    console.error('[whatsapp] Failed to seed WhatsApp pricing defaults:', err.message);
+  });
+
   // Create indexes for tracking events
   const TrackingEvent = require('./models/TrackingEvent');
   TrackingEvent.createIndexes().catch(err => {

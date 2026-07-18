@@ -5,6 +5,8 @@ const SaasUsageEvent = require('../../models/SaasUsageEvent');
 const Client = require('../../models/client');
 const { usageBillingQueue } = require('../../queues/saasQueues');
 const { normalizePhoneE164 } = require('../../helpers/whatsappLink');
+const BillingService = require('./BillingService');
+const PricingService = require('./PricingService');
 
 const WA_API_BASE = process.env.WHATSAPP_GRAPH_BASE || 'https://graph.facebook.com/v21.0';
 const TEMPLATE_LANG = process.env.WHATSAPP_TEMPLATE_LANG || 'en';
@@ -38,6 +40,21 @@ class WhatsAppService {
     return client?.whatsapp?.notificationsEnabled === true;
   }
 
+  /** Ensure the billed client has enough SaaS credits for one WhatsApp unit. */
+  static async assertCreditsAvailable(clientId, messageType = 'utility') {
+    if (!clientId || clientId === 'Khana') return;
+    const client = await Client.findOne({ clientID: clientId }).select('tier').lean();
+    const tier = client?.tier || 'bronze';
+    const rule = await PricingService.getActiveRule('whatsapp', messageType, tier);
+    const need = PricingService.computeCredits(rule, 1);
+    const account = await BillingService.ensureAccount(clientId);
+    if (Number(account.credit_balance || 0) < need) {
+      throw new Error(
+        `Insufficient WhatsApp credits (need ${need}, have ${account.credit_balance}). Top up in Account Management.`
+      );
+    }
+  }
+
   static async sendTemplateMessage({
     clientId,
     to,
@@ -50,6 +67,8 @@ class WhatsAppService {
     if (!e164) {
       throw new Error('Invalid WhatsApp recipient phone number');
     }
+
+    await this.assertCreditsAvailable(clientId, messageType);
 
     const { account, resolvedClientId } = await this.getClientAccount(clientId);
     const token = decrypt(account.access_token_encrypted);

@@ -96,6 +96,28 @@ router.post('/whatsapp/accounts', requireRoles('owner', 'manager', 'operator'), 
   });
 }));
 
+router.get('/whatsapp/setup', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (_req, res) => {
+  const apiBase = (process.env.PUBLIC_API_BASE || process.env.API_PUBLIC_URL || 'https://khanaconnect.onrender.com').replace(
+    /\/$/,
+    ''
+  );
+  const apiPath = (process.env.API_URL || '/api/v1').replace(/\/$/, '');
+  res.json({
+    ok: true,
+    data: {
+      callbackUrl: `${apiBase}${apiPath}/saas/webhooks/whatsapp`,
+      verifyToken: String(process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || ''),
+      requiredTemplates: [
+        'order_confirmation',
+        'order_status_update',
+        'booking_confirmation',
+        'booking_reminder',
+        'account_verification',
+      ],
+    },
+  });
+}));
+
 router.get('/whatsapp/account', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
   const doc = await SaasWhatsAppAccount.findOne({
     client_id: req.tenant.clientId,
@@ -215,9 +237,53 @@ router.post('/ads/campaigns', requireRoles('owner', 'manager'), idempotencyGuard
 }));
 
 router.get('/billing', requireRoles('owner', 'manager', 'billing_admin', 'viewer', 'operator'), wrapRoute(async (req, res) => {
-  const account = await BillingService.ensureAccount(req.tenant.clientId);
-  const recent = await SaasTransaction.find({ client_id: req.tenant.clientId }).sort({ created_at: -1 }).limit(30);
-  res.json({ ok: true, data: { account, recentTransactions: recent } });
+  const clientId = req.tenant.clientId;
+  const account = await BillingService.ensureAccount(clientId);
+  const recent = await SaasTransaction.find({ client_id: clientId }).sort({ created_at: -1 }).limit(30);
+  const whatsappDeductions = recent.filter(
+    (t) => t.type === 'deduction' && (t.metadata?.service === 'whatsapp' || String(t.reference || '').startsWith('wamid.'))
+  );
+  const SaasUsageEvent = require('../models/SaasUsageEvent');
+  const usageAgg = await SaasUsageEvent.aggregate([
+    { $match: { client_id: clientId, service: 'whatsapp' } },
+    {
+      $group: {
+        _id: '$status',
+        count: { $sum: 1 },
+      },
+    },
+  ]);
+  const whatsappUsage = { queued: 0, processed: 0, failed: 0 };
+  for (const row of usageAgg) {
+    if (row._id && whatsappUsage[row._id] !== undefined) whatsappUsage[row._id] = row.count;
+  }
+  const utilityRule = await SaasPricingRule.findOne({
+    service: 'whatsapp',
+    message_type: 'utility',
+    active: true,
+  })
+    .sort({ updated_at: -1 })
+    .lean();
+
+  res.json({
+    ok: true,
+    data: {
+      account,
+      recentTransactions: recent,
+      whatsapp: {
+        usage: whatsappUsage,
+        recentDeductions: whatsappDeductions.slice(0, 10),
+        utilityCreditsPerMessage: utilityRule
+          ? Number(
+              (
+                Number(utilityRule.cost_per_unit || 0) *
+                (1 + Number(utilityRule.markup_percentage || 0) / 100)
+              ).toFixed(4)
+            )
+          : null,
+      },
+    },
+  });
 }));
 
 router.post('/billing/topup/manual', requireRoles('billing_admin', 'owner', 'manager'), wrapRoute(async (req, res) => {
