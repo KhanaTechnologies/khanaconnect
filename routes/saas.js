@@ -322,6 +322,141 @@ router.post('/admin/pricing', adminOnly, wrapRoute(async (req, res) => {
   res.status(201).json({ ok: true, data: rule });
 }));
 
+router.get('/admin/whatsapp-usage', adminOnly, wrapRoute(async (req, res) => {
+  const SaasUsageEvent = require('../models/SaasUsageEvent');
+  const days = Math.min(Math.max(Number(req.query.days || 30), 1), 365);
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+  const [statusAgg, typeAgg, clientAgg, recentFailures, recentEvents, accounts, billingAccounts, pricingRules] =
+    await Promise.all([
+      SaasUsageEvent.aggregate([
+        { $match: { service: 'whatsapp', created_at: { $gte: since } } },
+        { $group: { _id: '$status', count: { $sum: 1 }, units: { $sum: '$units' } } },
+      ]),
+      SaasUsageEvent.aggregate([
+        { $match: { service: 'whatsapp', created_at: { $gte: since } } },
+        { $group: { _id: '$message_type', count: { $sum: 1 } } },
+      ]),
+      SaasUsageEvent.aggregate([
+        { $match: { service: 'whatsapp', created_at: { $gte: since } } },
+        {
+          $group: {
+            _id: '$client_id',
+            total: { $sum: 1 },
+            processed: { $sum: { $cond: [{ $eq: ['$status', 'processed'] }, 1, 0] } },
+            failed: { $sum: { $cond: [{ $eq: ['$status', 'failed'] }, 1, 0] } },
+            queued: { $sum: { $cond: [{ $eq: ['$status', 'queued'] }, 1, 0] } },
+            billedCredits: {
+              $sum: {
+                $cond: [
+                  { $eq: ['$status', 'processed'] },
+                  { $ifNull: ['$metadata.billedCredits', 0] },
+                  0,
+                ],
+              },
+            },
+            lastAt: { $max: '$created_at' },
+          },
+        },
+        { $sort: { total: -1 } },
+        { $limit: 100 },
+      ]),
+      SaasUsageEvent.find({ service: 'whatsapp', status: 'failed', created_at: { $gte: since } })
+        .sort({ created_at: -1 })
+        .limit(25)
+        .lean(),
+      SaasUsageEvent.find({ service: 'whatsapp', created_at: { $gte: since } })
+        .sort({ created_at: -1 })
+        .limit(40)
+        .lean(),
+      SaasWhatsAppAccount.find({ status: 'active' })
+        .select('client_id phone_number_id waba_id updated_at mode')
+        .lean(),
+      SaasBillingAccount.find({}).lean(),
+      SaasPricingRule.find({ service: 'whatsapp' }).sort({ message_type: 1, updated_at: -1 }).lean(),
+    ]);
+
+  const clientIds = [...new Set(clientAgg.map((r) => r._id).filter(Boolean))];
+  const clients = await Client.find({ clientID: { $in: clientIds } })
+    .select('clientID companyName whatsapp.notificationsEnabled tier')
+    .lean();
+  const clientMap = Object.fromEntries(clients.map((c) => [c.clientID, c]));
+  const billingMap = Object.fromEntries(billingAccounts.map((b) => [b.client_id, b]));
+  const accountClientIds = new Set(accounts.map((a) => a.client_id));
+
+  const byStatus = { queued: 0, processed: 0, failed: 0 };
+  let totalEvents = 0;
+  for (const row of statusAgg) {
+    const key = row._id;
+    const count = row.count || 0;
+    totalEvents += count;
+    if (key && byStatus[key] !== undefined) byStatus[key] = count;
+  }
+
+  const byMessageType = {};
+  for (const row of typeAgg) {
+    if (row._id) byMessageType[row._id] = row.count || 0;
+  }
+
+  const byClient = clientAgg.map((row) => {
+    const c = clientMap[row._id] || {};
+    const bill = billingMap[row._id] || {};
+    return {
+      clientId: row._id,
+      companyName: c.companyName || row._id,
+      tier: c.tier || 'bronze',
+      notificationsEnabled: c.whatsapp?.notificationsEnabled === true,
+      hasCloudAccount: accountClientIds.has(row._id),
+      total: row.total,
+      processed: row.processed,
+      failed: row.failed,
+      queued: row.queued,
+      billedCredits: Number(Number(row.billedCredits || 0).toFixed(4)),
+      creditBalance: Number(bill.credit_balance || 0),
+      totalSpent: Number(bill.total_spent || 0),
+      lastAt: row.lastAt,
+    };
+  });
+
+  const totalBilledCredits = byClient.reduce((sum, r) => sum + (r.billedCredits || 0), 0);
+
+  res.json({
+    ok: true,
+    data: {
+      days,
+      since: since.toISOString(),
+      summary: {
+        totalEvents,
+        byStatus,
+        byMessageType,
+        totalBilledCredits: Number(totalBilledCredits.toFixed(4)),
+        activeCloudAccounts: accounts.length,
+        clientsWithUsage: byClient.length,
+      },
+      byClient,
+      cloudAccounts: accounts,
+      recentFailures: recentFailures.map((e) => ({
+        clientId: e.client_id,
+        messageType: e.message_type,
+        sourceRef: e.source_ref,
+        error: e.metadata?.billingError || e.metadata?.error || null,
+        templateName: e.metadata?.templateName || null,
+        createdAt: e.created_at,
+      })),
+      recentEvents: recentEvents.map((e) => ({
+        clientId: e.client_id,
+        status: e.status,
+        messageType: e.message_type,
+        sourceRef: e.source_ref,
+        templateName: e.metadata?.templateName || null,
+        billedCredits: e.metadata?.billedCredits ?? null,
+        createdAt: e.created_at,
+      })),
+      pricingRules,
+    },
+  });
+}));
+
 router.get('/overview', requireRoles('owner', 'manager', 'billing_admin', 'viewer', 'operator'), wrapRoute(async (req, res) => {
   const clientId = req.tenant.clientId;
   const [billing, waAccounts, clientSnap] = await Promise.all([
