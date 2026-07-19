@@ -42,7 +42,11 @@ function formatMetaSendError(err) {
   const detail = [code != null ? `#${code}` : null, subcode != null ? `sub ${subcode}` : null]
     .filter(Boolean)
     .join(' ');
-  const message = detail ? `${metaMsg} (${detail})` : metaMsg;
+  let message = detail ? `${metaMsg} (${detail})` : metaMsg;
+  if (Number(code) === 133010 || /not registered/i.test(String(metaMsg))) {
+    message +=
+      ' — Open WhatsApp usage → Register Cloud API number (6-digit PIN), then retry Send test.';
+  }
   return httpError(message, status, { meta: data?.error || data || null });
 }
 
