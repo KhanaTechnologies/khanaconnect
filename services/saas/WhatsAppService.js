@@ -68,6 +68,49 @@ class WhatsAppService {
     return client?.whatsapp?.notificationsEnabled === true;
   }
 
+  /**
+   * Register a Cloud API phone number (required once before sending).
+   * Meta error 133010 = number added/verified but not registered yet.
+   * @param {{ clientId: string, pin?: string }} opts
+   */
+  static async registerPhoneNumber({ clientId, pin }) {
+    const pinDigits = String(pin || '').replace(/\D/g, '');
+    if (pinDigits.length !== 6) {
+      throw httpError('Two-step PIN must be exactly 6 digits', 400);
+    }
+
+    const { account, resolvedClientId } = await this.getClientAccount(clientId);
+    const token = decrypt(account.access_token_encrypted);
+    const url = `${WA_API_BASE}/${account.phone_number_id}/register`;
+
+    let response;
+    try {
+      response = await axios.post(
+        url,
+        {
+          messaging_product: 'whatsapp',
+          pin: pinDigits,
+        },
+        {
+          timeout: 20000,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+    } catch (err) {
+      throw formatMetaSendError(err);
+    }
+
+    return {
+      clientId: resolvedClientId,
+      phone_number_id: account.phone_number_id,
+      waba_id: account.waba_id,
+      meta: response.data,
+    };
+  }
+
   /** Ensure the billed client has enough SaaS credits for one WhatsApp unit. */
   static async assertCreditsAvailable(clientId, messageType = 'utility') {
     if (!clientId || clientId === 'Khana') return;

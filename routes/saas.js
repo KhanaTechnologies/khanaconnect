@@ -358,6 +358,16 @@ router.post('/admin/whatsapp/messages/test', adminOnly, wrapRoute(async (req, re
   });
 }));
 
+router.post('/admin/whatsapp/register', adminOnly, wrapRoute(async (req, res) => {
+  const body = req.body || {};
+  const clientId = String(body.client_id || body.clientId || 'Khana').trim() || 'Khana';
+  const pin = String(body.pin || '').trim();
+
+  const data = await WhatsAppService.registerPhoneNumber({ clientId, pin });
+  console.log(`[whatsapp] registered phone_number_id=${data.phone_number_id} for ${clientId}`);
+  res.json({ ok: true, data });
+}));
+
 router.post('/admin/pricing', adminOnly, wrapRoute(async (req, res) => {
   const { service, message_type, tier, cost_per_unit, markup_percentage, active = true, notes = '' } = req.body;
   if (!service) return res.status(400).json({ ok: false, message: 'service is required' });
