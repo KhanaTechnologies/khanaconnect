@@ -316,6 +316,19 @@ router.get('/admin/pricing', adminOnly, wrapRoute(async (_req, res) => {
   res.json({ ok: true, data: rules });
 }));
 
+router.post('/admin/whatsapp/messages/sandbox-validate', adminOnly, wrapRoute(async (req, res) => {
+  const body = req.body || {};
+  const phoneNumberId = String(body.phone_number_id || body.phoneNumberId || '').trim();
+  const accessToken = String(body.access_token || body.accessToken || '').trim();
+
+  const data = await WhatsAppService.validateSandboxCredentials({
+    phoneNumberId,
+    accessToken,
+  });
+
+  res.json({ ok: true, data });
+}));
+
 router.post('/admin/whatsapp/messages/sandbox-test', adminOnly, wrapRoute(async (req, res) => {
   const body = req.body || {};
   const to = String(body.to || body.phone || '').trim();

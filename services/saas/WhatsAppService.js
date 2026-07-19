@@ -81,6 +81,42 @@ class WhatsAppService {
   }
 
   /**
+   * Validate that an access token can read a Phone number ID (debug #100/33).
+   */
+  static async validateSandboxCredentials({ phoneNumberId, accessToken }) {
+    const phone_number_id = String(
+      phoneNumberId || process.env.WHATSAPP_TEST_PHONE_NUMBER_ID || ''
+    ).trim();
+    const token = String(accessToken || process.env.WHATSAPP_TEST_ACCESS_TOKEN || '').trim();
+
+    if (!phone_number_id || !token) {
+      throw httpError(
+        'Paste Phone number ID and access token (or set WHATSAPP_TEST_* on Render).',
+        400
+      );
+    }
+
+    const url = `${WA_API_BASE}/${phone_number_id}?fields=id,display_phone_number,verified_name,quality_rating,code_verification_status`;
+    let response;
+    try {
+      response = await axios.get(url, {
+        timeout: 20000,
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch (err) {
+      throw formatMetaSendError(err);
+    }
+
+    return {
+      ok: true,
+      phone_number_id,
+      graphBase: WA_API_BASE,
+      meta: response.data,
+      hint: 'Token can read this Phone number ID. Retry Send Meta sandbox test with the same pair.',
+    };
+  }
+
+  /**
    * Send via Meta's API Setup sandbox / test phone number (usually hello_world).
    * Bypasses SaasWhatsAppAccount + credit billing — credentials from args or WHATSAPP_TEST_* env.
    */
