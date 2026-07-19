@@ -47,6 +47,10 @@ function formatMetaSendError(err) {
     message +=
       ' — Open WhatsApp usage → Register Cloud API number (6-digit PIN), then retry Send test.';
   }
+  if (/not available for SMB/i.test(String(metaMsg))) {
+    message +=
+      ' — This number is on an SMB / WhatsApp Business App account. Meta blocks /register for SMB. Use a Cloud API (API) number, Meta’s test number, or migrate via Embedded Signup / full API migration — not the Register button.';
+  }
   return httpError(message, status, { meta: data?.error || data || null });
 }
 
