@@ -60,11 +60,15 @@ function formatMetaSendError(err) {
 
 class WhatsAppService {
   static async getClientAccount(clientId) {
-    const account = await SaasWhatsAppAccount.findOne({ client_id: clientId, status: 'active' });
+    const account = await SaasWhatsAppAccount.findOne({ client_id: clientId, status: 'active' }).sort({
+      updated_at: -1,
+    });
     if (account) return { account, resolvedClientId: clientId };
 
     if (clientId !== 'Khana') {
-      const khana = await SaasWhatsAppAccount.findOne({ client_id: 'Khana', status: 'active' });
+      const khana = await SaasWhatsAppAccount.findOne({ client_id: 'Khana', status: 'active' }).sort({
+        updated_at: -1,
+      });
       if (khana) return { account: khana, resolvedClientId: 'Khana' };
     }
 
@@ -299,6 +303,9 @@ class WhatsAppService {
     const token = decrypt(account.access_token_encrypted);
     const url = `${WA_API_BASE}/${account.phone_number_id}/messages`;
 
+    console.log(
+      `[whatsapp] send template=${templateName} client=${clientId} resolved=${resolvedClientId} phone_number_id=${account.phone_number_id} to=${e164}`
+    );
     const payload = {
       messaging_product: 'whatsapp',
       to: e164,

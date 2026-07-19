@@ -32,7 +32,22 @@ async function ensureKhanaWhatsAppAccountFromEnv() {
     { upsert: true, new: true }
   );
 
-  console.log('[whatsapp] Khana Cloud API account active for phone_number_id', phone_number_id);
+  // Avoid #100/33 from findOne picking an older active Khana row (different Phone number ID).
+  const stale = await SaasWhatsAppAccount.updateMany(
+    {
+      client_id: 'Khana',
+      status: 'active',
+      phone_number_id: { $ne: phone_number_id },
+    },
+    { $set: { status: 'disabled' } }
+  );
+  if (stale.modifiedCount > 0) {
+    console.log(
+      `[whatsapp] disabled ${stale.modifiedCount} stale Khana WhatsApp account(s); active phone_number_id=${phone_number_id}`
+    );
+  } else {
+    console.log('[whatsapp] Khana Cloud API account active for phone_number_id', phone_number_id);
+  }
   return doc;
 }
 
