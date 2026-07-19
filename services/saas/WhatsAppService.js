@@ -8,7 +8,7 @@ const { normalizePhoneE164 } = require('../../helpers/whatsappLink');
 const BillingService = require('./BillingService');
 const PricingService = require('./PricingService');
 
-const WA_API_BASE = process.env.WHATSAPP_GRAPH_BASE || 'https://graph.facebook.com/v21.0';
+const WA_API_BASE = process.env.WHATSAPP_GRAPH_BASE || 'https://graph.facebook.com/v25.0';
 const TEMPLATE_LANG = process.env.WHATSAPP_TEMPLATE_LANG || 'en';
 
 function bodyTextParams(values) {
