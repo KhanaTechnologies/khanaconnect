@@ -316,6 +316,19 @@ router.get('/admin/pricing', adminOnly, wrapRoute(async (_req, res) => {
   res.json({ ok: true, data: rules });
 }));
 
+router.post('/admin/whatsapp/messages/sandbox-phones', adminOnly, wrapRoute(async (req, res) => {
+  const body = req.body || {};
+  const wabaId = String(body.waba_id || body.wabaId || '').trim();
+  const accessToken = String(body.access_token || body.accessToken || '').trim();
+
+  const data = await WhatsAppService.listSandboxPhoneNumbers({
+    wabaId,
+    accessToken,
+  });
+
+  res.json({ ok: true, data });
+}));
+
 router.post('/admin/whatsapp/messages/sandbox-validate', adminOnly, wrapRoute(async (req, res) => {
   const body = req.body || {};
   const phoneNumberId = String(body.phone_number_id || body.phoneNumberId || '').trim();

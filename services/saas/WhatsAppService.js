@@ -81,6 +81,45 @@ class WhatsAppService {
   }
 
   /**
+   * List phone numbers a token can access on a WABA (debug #100/33 pairing).
+   */
+  static async listSandboxPhoneNumbers({ wabaId, accessToken }) {
+    const waba_id = String(
+      wabaId || process.env.WHATSAPP_TEST_WABA_ID || process.env.WHATSAPP_WABA_ID || ''
+    ).trim();
+    const token = String(accessToken || process.env.WHATSAPP_TEST_ACCESS_TOKEN || '').trim();
+
+    if (!waba_id || !token) {
+      throw httpError(
+        'Paste WhatsApp Business Account ID (WABA) and access token to list phone numbers.',
+        400
+      );
+    }
+
+    const url = `${WA_API_BASE}/${waba_id}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating,code_verification_status`;
+    let response;
+    try {
+      response = await axios.get(url, {
+        timeout: 20000,
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch (err) {
+      throw formatMetaSendError(err);
+    }
+
+    const phones = Array.isArray(response.data?.data) ? response.data.data : [];
+    return {
+      waba_id,
+      count: phones.length,
+      phones,
+      hint:
+        phones.length > 0
+          ? 'Use one of the id values below as Test Phone number ID with this same token.'
+          : 'Token cannot list phones on this WABA. Generate a Temporary access token on API Setup for this app/WABA.',
+    };
+  }
+
+  /**
    * Validate that an access token can read a Phone number ID (debug #100/33).
    */
   static async validateSandboxCredentials({ phoneNumberId, accessToken }) {
