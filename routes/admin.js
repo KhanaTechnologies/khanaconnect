@@ -56,6 +56,7 @@ function generateToken(client) {
     merchant_id: client.merchant_id,
     merchant_key: client.merchant_key,
     passphrase: client.passphrase,
+    role: client.role || 'client',
   };
   return jwt.sign(payload, secret, { expiresIn: '1y' });
 }
