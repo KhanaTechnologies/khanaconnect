@@ -316,6 +316,37 @@ router.get('/admin/pricing', adminOnly, wrapRoute(async (_req, res) => {
   res.json({ ok: true, data: rules });
 }));
 
+router.post('/admin/whatsapp/messages/sandbox-test', adminOnly, wrapRoute(async (req, res) => {
+  const body = req.body || {};
+  const to = String(body.to || body.phone || '').trim();
+  const phoneNumberId = String(body.phone_number_id || body.phoneNumberId || '').trim();
+  const accessToken = String(body.access_token || body.accessToken || '').trim();
+  const templateName = String(body.templateName || body.template_name || 'hello_world').trim();
+  const languageCode = String(body.languageCode || body.language_code || 'en_US').trim();
+
+  if (!to) {
+    return res.status(400).json({
+      ok: false,
+      message: 'to (recipient phone) is required',
+      hint: 'Add your WhatsApp number under Meta → WhatsApp → API Setup → To (allowed list), then send hello_world.',
+    });
+  }
+
+  console.log(
+    `[whatsapp] admin sandbox test to=${to} template=${templateName} phone_number_id=${phoneNumberId || process.env.WHATSAPP_TEST_PHONE_NUMBER_ID || '(env/blank)'} by=${req.tenant.clientId}`
+  );
+
+  const data = await WhatsAppService.sendSandboxTemplateMessage({
+    to,
+    phoneNumberId,
+    accessToken,
+    templateName,
+    languageCode,
+  });
+
+  res.status(202).json({ ok: true, data });
+}));
+
 router.post('/admin/whatsapp/messages/test', adminOnly, wrapRoute(async (req, res) => {
   const body = req.body || {};
   const to = String(body.to || body.phone || '').trim();

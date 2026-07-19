@@ -77,6 +77,69 @@ class WhatsAppService {
   }
 
   /**
+   * Send via Meta's API Setup sandbox / test phone number (usually hello_world).
+   * Bypasses SaasWhatsAppAccount + credit billing — credentials from args or WHATSAPP_TEST_* env.
+   */
+  static async sendSandboxTemplateMessage({
+    to,
+    phoneNumberId,
+    accessToken,
+    templateName = 'hello_world',
+    languageCode = TEMPLATE_LANG,
+  }) {
+    const e164 = normalizePhoneE164(to);
+    if (!e164) {
+      throw httpError(
+        'Invalid WhatsApp recipient phone number. Use e.g. 0766356790 or +27766356790.',
+        400
+      );
+    }
+
+    const phone_number_id = String(
+      phoneNumberId || process.env.WHATSAPP_TEST_PHONE_NUMBER_ID || ''
+    ).trim();
+    const token = String(accessToken || process.env.WHATSAPP_TEST_ACCESS_TOKEN || '').trim();
+
+    if (!phone_number_id || !token) {
+      throw httpError(
+        'Sandbox credentials missing. Paste Meta API Setup test Phone number ID + temporary token, or set WHATSAPP_TEST_PHONE_NUMBER_ID and WHATSAPP_TEST_ACCESS_TOKEN on Render.',
+        400
+      );
+    }
+
+    const url = `${WA_API_BASE}/${phone_number_id}/messages`;
+    const payload = {
+      messaging_product: 'whatsapp',
+      to: e164,
+      type: 'template',
+      template: {
+        name: templateName || 'hello_world',
+        language: { code: languageCode || 'en_US' },
+      },
+    };
+
+    let response;
+    try {
+      response = await axios.post(url, payload, {
+        timeout: 20000,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+    } catch (err) {
+      throw formatMetaSendError(err);
+    }
+
+    return {
+      phone_number_id,
+      to: e164,
+      templateName: templateName || 'hello_world',
+      meta: response.data,
+    };
+  }
+
+  /**
    * Register a Cloud API phone number (required once before sending).
    * Meta error 133010 = number added/verified but not registered yet.
    * @param {{ clientId: string, pin?: string }} opts
