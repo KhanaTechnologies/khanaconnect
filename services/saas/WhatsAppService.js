@@ -21,6 +21,31 @@ function bodyTextParams(values) {
   };
 }
 
+function httpError(message, status = 400, extra = {}) {
+  const err = new Error(message);
+  err.status = status;
+  Object.assign(err, extra);
+  return err;
+}
+
+function formatMetaSendError(err) {
+  const data = err?.response?.data;
+  const metaMsg =
+    data?.error?.message ||
+    data?.error?.error_user_msg ||
+    data?.message ||
+    err?.message ||
+    'WhatsApp send failed';
+  const code = data?.error?.code;
+  const subcode = data?.error?.error_subcode;
+  const status = err?.response?.status && err.response.status >= 400 ? err.response.status : 502;
+  const detail = [code != null ? `#${code}` : null, subcode != null ? `sub ${subcode}` : null]
+    .filter(Boolean)
+    .join(' ');
+  const message = detail ? `${metaMsg} (${detail})` : metaMsg;
+  return httpError(message, status, { meta: data?.error || data || null });
+}
+
 class WhatsAppService {
   static async getClientAccount(clientId) {
     const account = await SaasWhatsAppAccount.findOne({ client_id: clientId, status: 'active' });
@@ -31,7 +56,10 @@ class WhatsAppService {
       if (khana) return { account: khana, resolvedClientId: 'Khana' };
     }
 
-    throw new Error('No active WhatsApp Cloud API account for client or Khana fallback');
+    throw httpError(
+      'No active WhatsApp Cloud API account for this client or Khana fallback. Save Cloud API credentials first.',
+      400
+    );
   }
 
   static async clientAllowsNotifications(clientId) {
@@ -49,8 +77,9 @@ class WhatsAppService {
     const need = PricingService.computeCredits(rule, 1);
     const account = await BillingService.ensureAccount(clientId);
     if (Number(account.credit_balance || 0) < need) {
-      throw new Error(
-        `Insufficient WhatsApp credits (need ${need}, have ${account.credit_balance}). Top up in Account Management.`
+      throw httpError(
+        `Insufficient WhatsApp credits (need ${need}, have ${account.credit_balance}). Top up in Account Management.`,
+        402
       );
     }
   }
@@ -65,7 +94,10 @@ class WhatsAppService {
   }) {
     const e164 = normalizePhoneE164(to);
     if (!e164) {
-      throw new Error('Invalid WhatsApp recipient phone number');
+      throw httpError(
+        'Invalid WhatsApp recipient phone number. Use e.g. 0766356790 or +27766356790.',
+        400
+      );
     }
 
     await this.assertCreditsAvailable(clientId, messageType);
@@ -85,13 +117,18 @@ class WhatsAppService {
       },
     };
 
-    const response = await axios.post(url, payload, {
-      timeout: 20000,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-    });
+    let response;
+    try {
+      response = await axios.post(url, payload, {
+        timeout: 20000,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+    } catch (err) {
+      throw formatMetaSendError(err);
+    }
 
     const messageId = response.data?.messages?.[0]?.id || `wa-${Date.now()}`;
     const billingClientId = clientId || resolvedClientId;

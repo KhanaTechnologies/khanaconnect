@@ -317,22 +317,28 @@ router.get('/admin/pricing', adminOnly, wrapRoute(async (_req, res) => {
 }));
 
 router.post('/admin/whatsapp/messages/test', adminOnly, wrapRoute(async (req, res) => {
-  const {
-    to,
-    templateName = 'order_confirmation',
-    client_id: bodyClientId,
-  } = req.body || {};
+  const body = req.body || {};
+  const to = String(body.to || body.phone || '').trim();
+  const templateName = String(body.templateName || body.template_name || 'order_confirmation').trim();
+  const bodyClientId = String(body.client_id || body.clientId || '').trim();
+
   if (!to) {
-    return res.status(400).json({ ok: false, message: 'to (phone number) is required' });
+    return res.status(400).json({
+      ok: false,
+      message: 'to (phone number) is required',
+      hint: 'Send JSON body: { "to": "0766356790", "client_id": "Khana", "templateName": "order_confirmation" }',
+      receivedKeys: Object.keys(body),
+    });
   }
 
-  const clientId = String(bodyClientId || req.tenant.clientId || 'Khana').trim();
-  if (!clientId) {
-    return res.status(400).json({ ok: false, message: 'client_id is required' });
-  }
+  const clientId = bodyClientId || String(req.tenant.clientId || 'Khana').trim() || 'Khana';
 
   const client = await Client.findOne({ clientID: clientId }).select('companyName');
   const companyName = client?.companyName || clientId;
+
+  console.log(
+    `[whatsapp] admin test send client=${clientId} to=${to} template=${templateName} by=${req.tenant.clientId}`
+  );
 
   const data = await sendWhatsAppTestTemplate({
     clientId,
@@ -345,7 +351,7 @@ router.post('/admin/whatsapp/messages/test', adminOnly, wrapRoute(async (req, re
     ok: true,
     data: {
       clientId,
-      templateName: templateName || 'order_confirmation',
+      templateName,
       to,
       meta: data,
     },
