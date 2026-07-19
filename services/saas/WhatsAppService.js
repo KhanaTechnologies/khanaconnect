@@ -51,6 +51,10 @@ function formatMetaSendError(err) {
     message +=
       ' — This number is on an SMB / WhatsApp Business App account. Meta blocks /register for SMB. Use a Cloud API (API) number, Meta’s test number, or migrate via Embedded Signup / full API migration — not the Register button.';
   }
+  if (Number(code) === 100 && Number(subcode) === 33) {
+    message +=
+      ' — Token cannot access this Phone number ID. Generate a Temporary access token on the same API Setup page as this ID (or assign that WABA to your System User), then paste both again. Do not mix a production System User token with a different app’s test number ID.';
+  }
   return httpError(message, status, { meta: data?.error || data || null });
 }
 
