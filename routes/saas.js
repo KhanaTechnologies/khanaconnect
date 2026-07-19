@@ -164,50 +164,61 @@ router.post('/whatsapp/messages/test', requireRoles('owner', 'manager', 'operato
   const client = await Client.findOne({ clientID: req.tenant.clientId }).select('companyName');
   const companyName = client?.companyName || req.tenant.clientId;
 
-  let data;
-  if (templateName === 'order_status_update') {
-    data = await WhatsAppService.notifyOrderStatus({
-      clientId: req.tenant.clientId,
+  const data = await sendWhatsAppTestTemplate({
+    clientId: req.tenant.clientId,
+    to,
+    templateName,
+    companyName,
+  });
+
+  res.status(202).json({ ok: true, data });
+}));
+
+async function sendWhatsAppTestTemplate({ clientId, to, templateName, companyName }) {
+  const name = templateName || 'order_confirmation';
+  if (name === 'order_status_update') {
+    return WhatsAppService.notifyOrderStatus({
+      clientId,
       to,
       companyName,
       orderRef: 'TEST-001',
       status: 'processing',
     });
-  } else if (templateName === 'booking_confirmation') {
-    data = await WhatsAppService.notifyBookingConfirmation({
-      clientId: req.tenant.clientId,
+  }
+  if (name === 'booking_confirmation') {
+    return WhatsAppService.notifyBookingConfirmation({
+      clientId,
       to,
       companyName,
       bookingRef: 'TEST-BK',
       when: 'Tomorrow 10:00',
     });
-  } else if (templateName === 'booking_reminder') {
-    data = await WhatsAppService.notifyBookingReminder({
-      clientId: req.tenant.clientId,
+  }
+  if (name === 'booking_reminder') {
+    return WhatsAppService.notifyBookingReminder({
+      clientId,
       to,
       companyName,
       bookingRef: 'TEST-BK',
       when: 'Tomorrow 10:00',
     });
-  } else if (templateName === 'account_verification') {
-    data = await WhatsAppService.notifyVerificationCode({
-      clientId: req.tenant.clientId,
+  }
+  if (name === 'account_verification') {
+    return WhatsAppService.notifyVerificationCode({
+      clientId,
       to,
       companyName,
       code: '123456',
     });
-  } else {
-    data = await WhatsAppService.notifyOrderConfirmation({
-      clientId: req.tenant.clientId,
-      to,
-      companyName,
-      orderRef: 'TEST-001',
-      total: 'R0.00',
-    });
   }
-
-  res.status(202).json({ ok: true, data });
-}));
+  return WhatsAppService.notifyOrderConfirmation({
+    clientId,
+    to,
+    companyName,
+    orderRef: 'TEST-001',
+    total: 'R0.00',
+  });
+}
 
 router.post('/ads/accounts', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
   const { ad_account_id, ownership_type, meta_business_id } = req.body;
@@ -303,6 +314,42 @@ router.post('/billing/topup/manual', requireRoles('billing_admin', 'owner', 'man
 router.get('/admin/pricing', adminOnly, wrapRoute(async (_req, res) => {
   const rules = await SaasPricingRule.find({}).sort({ service: 1, message_type: 1, updated_at: -1 });
   res.json({ ok: true, data: rules });
+}));
+
+router.post('/admin/whatsapp/messages/test', adminOnly, wrapRoute(async (req, res) => {
+  const {
+    to,
+    templateName = 'order_confirmation',
+    client_id: bodyClientId,
+  } = req.body || {};
+  if (!to) {
+    return res.status(400).json({ ok: false, message: 'to (phone number) is required' });
+  }
+
+  const clientId = String(bodyClientId || req.tenant.clientId || 'Khana').trim();
+  if (!clientId) {
+    return res.status(400).json({ ok: false, message: 'client_id is required' });
+  }
+
+  const client = await Client.findOne({ clientID: clientId }).select('companyName');
+  const companyName = client?.companyName || clientId;
+
+  const data = await sendWhatsAppTestTemplate({
+    clientId,
+    to,
+    templateName,
+    companyName,
+  });
+
+  res.status(202).json({
+    ok: true,
+    data: {
+      clientId,
+      templateName: templateName || 'order_confirmation',
+      to,
+      meta: data,
+    },
+  });
 }));
 
 router.post('/admin/pricing', adminOnly, wrapRoute(async (req, res) => {
