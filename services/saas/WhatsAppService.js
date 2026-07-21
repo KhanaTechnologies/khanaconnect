@@ -21,6 +21,38 @@ function bodyTextParams(values) {
   };
 }
 
+/** Dynamic CTA URL button — template must define Visit website with …/{{1}} suffix. */
+function urlButtonParam(suffix, index = 0) {
+  const text = String(suffix ?? '')
+    .trim()
+    .replace(/^\/+/, '')
+    .slice(0, 2000);
+  return {
+    type: 'button',
+    sub_type: 'url',
+    index: String(index),
+    parameters: [{ type: 'text', text: text || 'ORD-78421' }],
+  };
+}
+
+/**
+ * Path suffix for order_confirmation URL button.
+ * Meta template base must match WHATSAPP_ORDER_BUTTON_BASE (default: demo order page).
+ */
+function orderViewButtonSuffix({ clientId, orderRef }) {
+  const ref = String(orderRef || 'ORD-78421').trim() || 'ORD-78421';
+  // Demo / review sample stays a simple path segment.
+  if (/^ORD-78421$/i.test(ref) || /^TEST-/i.test(ref)) {
+    return 'ORD-78421';
+  }
+  const cid = String(clientId || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, '')
+    .slice(0, 64);
+  if (cid) return `${cid}-${ref}`.slice(0, 200);
+  return ref.slice(0, 200);
+}
+
 function httpError(message, status = 400, extra = {}) {
   const err = new Error(message);
   err.status = status;
@@ -371,6 +403,7 @@ class WhatsAppService {
           orderRef || '—',
           total != null ? String(total) : '—',
         ]),
+        urlButtonParam(orderViewButtonSuffix({ clientId, orderRef }), 0),
       ],
     });
   }
