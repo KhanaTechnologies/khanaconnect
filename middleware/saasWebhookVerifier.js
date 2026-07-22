@@ -20,10 +20,12 @@ function verifyMetaWebhookSignature(appSecretEnvName) {
   return function (req, res, next) {
     const appSecret = process.env[appSecretEnvName] || '';
     if (!appSecret) {
+      console.error(`[webhook] missing env ${appSecretEnvName} — Meta POST rejected`);
       return res.status(500).json({ ok: false, message: `Missing ${appSecretEnvName} for webhook signature validation` });
     }
     const signature = String(req.headers['x-hub-signature-256'] || '');
     if (!signature.startsWith('sha256=')) {
+      console.warn(`[webhook] Meta POST rejected: missing x-hub-signature-256 (${appSecretEnvName})`);
       return res.status(401).json({ ok: false, message: 'Missing Meta webhook signature' });
     }
     const digest = crypto
@@ -32,6 +34,9 @@ function verifyMetaWebhookSignature(appSecretEnvName) {
       .digest('hex');
     const expected = `sha256=${digest}`;
     if (!safeEqualHex(signature, expected)) {
+      console.warn(
+        `[webhook] Meta POST rejected: invalid signature (${appSecretEnvName}) — check WHATSAPP_APP_SECRET matches the Meta app`
+      );
       return res.status(401).json({ ok: false, message: 'Invalid Meta webhook signature' });
     }
     return next();

@@ -23,6 +23,10 @@ router.post('/webhooks/whatsapp', verifyMetaWebhookSignature('WHATSAPP_APP_SECRE
   try {
     const body = req.body || {};
     const entries = Array.isArray(body.entry) ? body.entry : [];
+    console.log(
+      `[whatsapp webhook] POST received object=${body.object || '(none)'} entries=${entries.length}`
+    );
+    let statusCount = 0;
     for (const entry of entries) {
       const changes = Array.isArray(entry.changes) ? entry.changes : [];
       for (const change of changes) {
@@ -30,6 +34,7 @@ router.post('/webhooks/whatsapp', verifyMetaWebhookSignature('WHATSAPP_APP_SECRE
         const phoneNumberId = value.metadata?.phone_number_id || '';
         const statuses = Array.isArray(value.statuses) ? value.statuses : [];
         for (const st of statuses) {
+          statusCount += 1;
           const level =
             st.status === 'failed' || st.errors?.length ? 'error' : 'log';
           const msg = `[whatsapp webhook] phone_number_id=${phoneNumberId} id=${st.id} status=${st.status} recipient=${st.recipient_id || ''}`;
@@ -46,6 +51,9 @@ router.post('/webhooks/whatsapp', verifyMetaWebhookSignature('WHATSAPP_APP_SECRE
           );
         }
       }
+    }
+    if (entries.length && statusCount === 0) {
+      console.log('[whatsapp webhook] no status/message payloads in this POST (test ping or empty change)');
     }
   } catch (e) {
     console.error('[whatsapp webhook] parse error:', e.message);
