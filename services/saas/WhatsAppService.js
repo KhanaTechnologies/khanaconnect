@@ -366,6 +366,23 @@ class WhatsAppService {
     const billingClientId = clientId || resolvedClientId;
 
     try {
+      const WhatsAppInboxService = require('./WhatsAppInboxService');
+      await WhatsAppInboxService.recordOutbound({
+        clientId: billingClientId,
+        phoneNumberId: account.phone_number_id,
+        to: e164,
+        wamid: messageId,
+        type: 'template',
+        body: `Template: ${templateName}`,
+        templateName,
+        status: 'sent',
+        raw: response.data,
+      });
+    } catch (inboxErr) {
+      console.warn('[whatsapp] inbox outbound record failed:', inboxErr.message);
+    }
+
+    try {
       await SaasUsageEvent.create({
         client_id: billingClientId,
         service: 'whatsapp',

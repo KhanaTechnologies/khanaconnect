@@ -5,6 +5,7 @@ const { verifyMetaWebhookSignature, handleMetaWebhookChallenge } = require('../m
 const { encrypt } = require('../helpers/encryption');
 const { wrapRoute } = require('../helpers/failureEmail');
 const WhatsAppService = require('../services/saas/WhatsAppService');
+const WhatsAppInboxService = require('../services/saas/WhatsAppInboxService');
 const AdsService = require('../services/saas/AdsService');
 const BillingService = require('../services/saas/BillingService');
 const PayFastCreditsService = require('../services/saas/PayFastCreditsService');
@@ -27,6 +28,7 @@ router.post('/webhooks/whatsapp', verifyMetaWebhookSignature('WHATSAPP_APP_SECRE
       `[whatsapp webhook] POST received object=${body.object || '(none)'} entries=${entries.length}`
     );
     let statusCount = 0;
+    let inboundCount = 0;
     for (const entry of entries) {
       const changes = Array.isArray(entry.changes) ? entry.changes : [];
       for (const change of changes) {
@@ -45,14 +47,25 @@ router.post('/webhooks/whatsapp', verifyMetaWebhookSignature('WHATSAPP_APP_SECRE
           }
         }
         const messages = Array.isArray(value.messages) ? value.messages : [];
+        inboundCount += messages.length;
         if (messages.length) {
           console.log(
-            `[whatsapp webhook] inbound ${messages.length} message(s) for phone_number_id=${phoneNumberId} (inbox not handled)`
+            `[whatsapp webhook] inbound ${messages.length} message(s) for phone_number_id=${phoneNumberId}`
           );
+        }
+        try {
+          const result = await WhatsAppInboxService.ingestWebhookValue(value);
+          if (result.ingested || result.statusUpdates) {
+            console.log(
+              `[whatsapp inbox] client=${result.clientId} ingested=${result.ingested} statusUpdates=${result.statusUpdates}`
+            );
+          }
+        } catch (inboxErr) {
+          console.error('[whatsapp inbox] ingest error:', inboxErr.message);
         }
       }
     }
-    if (entries.length && statusCount === 0) {
+    if (entries.length && statusCount === 0 && inboundCount === 0) {
       console.log('[whatsapp webhook] no status/message payloads in this POST (test ping or empty change)');
     }
   } catch (e) {
@@ -251,6 +264,29 @@ router.put('/whatsapp/notifications', requireRoles('owner', 'manager'), wrapRout
       notificationsEnabled: client.whatsapp?.notificationsEnabled === true,
     },
   });
+}));
+
+router.get('/whatsapp/inbox/threads', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const limit = Number(req.query.limit) || 40;
+  const threads = await WhatsAppInboxService.listThreads(req.tenant.clientId, { limit });
+  res.json({ ok: true, data: { threads } });
+}));
+
+router.get('/whatsapp/inbox/threads/:contactWaId', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const limit = Number(req.query.limit) || 100;
+  const thread = await WhatsAppInboxService.getThread(req.tenant.clientId, req.params.contactWaId, { limit });
+  res.json({ ok: true, data: thread });
+}));
+
+router.post('/whatsapp/inbox/reply', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
+  const to = req.body?.to || req.body?.contact_wa_id || req.body?.contactWaId;
+  const text = req.body?.text || req.body?.message || req.body?.body;
+  const data = await WhatsAppInboxService.sendTextReply({
+    clientId: req.tenant.clientId,
+    to,
+    text,
+  });
+  res.status(202).json({ ok: true, data });
 }));
 
 router.post('/whatsapp/messages/template', requireRoles('owner', 'manager', 'operator'), idempotencyGuard('saas.whatsapp.template.send'), wrapRoute(async (req, res) => {
