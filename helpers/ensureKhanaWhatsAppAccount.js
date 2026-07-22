@@ -48,6 +48,14 @@ async function ensureKhanaWhatsAppAccountFromEnv() {
   } else {
     console.log('[whatsapp] Khana Cloud API account active for phone_number_id', phone_number_id);
   }
+
+  try {
+    const WhatsAppService = require('../services/saas/WhatsAppService');
+    await WhatsAppService.subscribeWabaApp({ wabaId: waba_id, accessToken: access_token });
+  } catch (e) {
+    console.warn('[whatsapp] WABA app subscribe on boot failed:', e.message);
+  }
+
   return doc;
 }
 

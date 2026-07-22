@@ -110,6 +110,49 @@ class WhatsAppService {
     );
   }
 
+  /**
+   * Subscribe this developer app to a WABA so Meta delivers inbound customer messages
+   * (and statuses) to the configured webhook. Without this, outbound works but replies never arrive.
+   */
+  static async subscribeWabaApp({ wabaId, accessToken }) {
+    const waba_id = String(wabaId || '').trim();
+    const token = String(accessToken || '').trim();
+    if (!waba_id || !token) {
+      return { ok: false, skipped: true, reason: 'missing waba_id or token' };
+    }
+
+    const url = `${WA_API_BASE}/${waba_id}/subscribed_apps`;
+    try {
+      const existing = await axios.get(url, {
+        timeout: 15000,
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const apps = existing.data?.data || [];
+      if (apps.length > 0) {
+        console.log(`[whatsapp] WABA ${waba_id} already has ${apps.length} subscribed app(s)`);
+        return { ok: true, alreadySubscribed: true, apps };
+      }
+    } catch (e) {
+      console.warn(
+        '[whatsapp] could not list subscribed_apps:',
+        e.response?.data?.error?.message || e.message
+      );
+    }
+
+    try {
+      const response = await axios.post(url, null, {
+        timeout: 15000,
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      console.log(`[whatsapp] subscribed app to WABA ${waba_id}:`, response.data);
+      return { ok: true, subscribed: true, data: response.data };
+    } catch (e) {
+      const msg = e.response?.data?.error?.message || e.message;
+      console.error(`[whatsapp] failed to subscribe app to WABA ${waba_id}:`, msg);
+      return { ok: false, error: msg, meta: e.response?.data?.error || null };
+    }
+  }
+
   static async clientAllowsNotifications(clientId) {
     if (!clientId) return false;
     const client = await Client.findOne({ clientID: clientId }).select('whatsapp');

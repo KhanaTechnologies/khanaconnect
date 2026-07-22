@@ -104,6 +104,12 @@ router.post('/whatsapp/accounts', requireRoles('owner', 'manager', 'operator'), 
     },
     { upsert: true, new: true }
   );
+
+  const subscribe = await WhatsAppService.subscribeWabaApp({
+    wabaId: waba_id,
+    accessToken: access_token,
+  });
+
   res.status(201).json({
     ok: true,
     data: {
@@ -113,6 +119,7 @@ router.post('/whatsapp/accounts', requireRoles('owner', 'manager', 'operator'), 
       mode: doc.mode,
       status: doc.status,
       has_token: true,
+      webhook_subscribed: subscribe?.ok === true,
     },
   });
 }));
