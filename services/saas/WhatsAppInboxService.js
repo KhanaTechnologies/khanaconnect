@@ -93,6 +93,7 @@ class WhatsAppInboxService {
       const contactName = contactNameByWaId[from] || '';
 
       try {
+        // Do not mix contact_name in both $set and $setOnInsert — Mongo rejects that conflict.
         await SaasWhatsAppMessage.updateOne(
           { wamid },
           {
@@ -109,10 +110,15 @@ class WhatsAppInboxService {
               timestamp,
               raw: msg,
             },
-            ...(contactName ? { $set: { contact_name: contactName } } : {}),
           },
           { upsert: true }
         );
+        if (contactName) {
+          await SaasWhatsAppMessage.updateMany(
+            { client_id: threadClientId, contact_wa_id: from },
+            { $set: { contact_name: contactName } }
+          );
+        }
         ingested += 1;
       } catch (e) {
         if (e?.code !== 11000) {
