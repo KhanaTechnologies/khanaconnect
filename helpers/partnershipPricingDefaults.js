@@ -1,6 +1,6 @@
 const { DEFAULT_PLAN_BUILDER, mergePlanBuilderConfig } = require('./planBuilderPricing');
 
-const PRICING_CONFIG_VERSION = 11;
+const PRICING_CONFIG_VERSION = 12;
 
 /** Default partnership pricing for the SA market. */
 const DEFAULT_PARTNERSHIP_PRICING = {
@@ -9,7 +9,7 @@ const DEFAULT_PARTNERSHIP_PRICING = {
   currency: 'ZAR',
   currencySymbol: 'R',
   billingNote:
-    'Pricing depends on scope and features. Request a personalised estimate for exact setup and monthly fees — most partnerships start from R450/month after go-live. WhatsApp automated alerts use prepaid credits (platform fee per message; Meta may bill your WABA separately).',
+    'Pricing depends on scope and features. Request a personalised estimate for exact setup and monthly fees — most partnerships start from R450/month after go-live. WhatsApp order & booking alerts are available with our help to set up; usage is billed with prepaid credits.',
   vatNote: '',
   tiers: [
     {
@@ -29,7 +29,7 @@ const DEFAULT_PARTNERSHIP_PRICING = {
         'Up to 5-page business website',
         'Online store',
         'Online booking system',
-        'WhatsApp order & booking alerts (usage billed)',
+        'WhatsApp confirmations & updates (we help set up)',
         'Managed hosting & SSL',
         'Mobile-responsive design',
         'Contact form & basic analytics',
@@ -53,6 +53,7 @@ const DEFAULT_PARTNERSHIP_PRICING = {
         'Up to 10-page website',
         'Everything in Starter',
         'Online store & booking system',
+        'WhatsApp customer alerts (usage billed)',
         'Blog or news section',
         'SEO-ready structure',
         'Priority email support',
@@ -77,6 +78,7 @@ const DEFAULT_PARTNERSHIP_PRICING = {
         'Revenue Command Center',
         'Cart recovery & customer segments',
         'Orders & appointment dashboard',
+        'WhatsApp order & booking notifications',
         'Campaign & promo tools',
         'Priority support',
       ],
