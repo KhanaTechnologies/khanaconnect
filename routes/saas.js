@@ -105,7 +105,7 @@ router.post('/whatsapp/accounts', requireRoles('owner', 'manager', 'operator'), 
 }));
 
 router.get('/whatsapp/setup', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (_req, res) => {
-  const apiBase = (process.env.PUBLIC_API_BASE || process.env.API_PUBLIC_URL || 'https://khanaconnect.onrender.com').replace(
+  const apiBase = (process.env.PUBLIC_API_BASE || process.env.PUBLIC_API_URL || process.env.API_PUBLIC_URL || 'https://khanaconnect.onrender.com').replace(
     /\/$/,
     ''
   );
@@ -122,6 +122,7 @@ router.get('/whatsapp/setup', requireRoles('owner', 'manager', 'operator', 'view
         'booking_reminder',
         'account_verification',
       ],
+      templateLanguage: String(process.env.WHATSAPP_TEMPLATE_LANG || 'en_US'),
     },
   });
 }));
@@ -146,6 +147,108 @@ router.get('/whatsapp/account', requireRoles('owner', 'manager', 'operator', 'vi
       status: doc.status,
       has_token: !!doc.access_token_encrypted,
       updated_at: doc.updated_at,
+    },
+  });
+}));
+
+/** Readiness for client WhatsApp Cloud API notifications (toggle + credits + sender). */
+router.get('/whatsapp/status', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const clientId = req.tenant.clientId;
+  const client = await Client.findOne({ clientID: clientId }).select('whatsapp companyName');
+  const notificationsEnabled = client?.whatsapp?.notificationsEnabled === true;
+
+  const ownAccount = await SaasWhatsAppAccount.findOne({
+    client_id: clientId,
+    status: 'active',
+  })
+    .sort({ updated_at: -1 })
+    .lean();
+
+  const khanaAccount =
+    clientId === 'Khana'
+      ? ownAccount
+      : await SaasWhatsAppAccount.findOne({ client_id: 'Khana', status: 'active' })
+          .sort({ updated_at: -1 })
+          .lean();
+
+  const usingOwnAccount = !!ownAccount;
+  const usingKhanaFallback = !usingOwnAccount && !!khanaAccount;
+  const hasSender = usingOwnAccount || usingKhanaFallback;
+
+  const billing = await BillingService.ensureAccount(clientId);
+  const creditBalance = Number(billing.credit_balance || 0);
+  const creditsOk = clientId === 'Khana' || creditBalance > 0;
+
+  const ready = notificationsEnabled && hasSender && creditsOk;
+
+  res.json({
+    ok: true,
+    data: {
+      notificationsEnabled,
+      hasSender,
+      usingOwnAccount,
+      usingKhanaFallback,
+      creditBalance,
+      creditsOk,
+      ready,
+      sender: usingOwnAccount
+        ? {
+            source: 'client',
+            phone_number_id: ownAccount.phone_number_id,
+            waba_id: ownAccount.waba_id,
+          }
+        : usingKhanaFallback
+          ? {
+              source: 'khana',
+              phone_number_id: khanaAccount.phone_number_id,
+              waba_id: khanaAccount.waba_id,
+            }
+          : null,
+      checklist: [
+        {
+          id: 'notifications',
+          label: 'Automated alerts enabled',
+          ok: notificationsEnabled,
+        },
+        {
+          id: 'sender',
+          label: usingKhanaFallback
+            ? 'Sender ready (Khana platform WhatsApp)'
+            : usingOwnAccount
+              ? 'Sender ready (your Cloud API number)'
+              : 'Cloud API sender configured',
+          ok: hasSender,
+        },
+        {
+          id: 'credits',
+          label: 'WhatsApp credits available',
+          ok: creditsOk,
+        },
+      ],
+    },
+  });
+}));
+
+/** Persist notifications toggle without saving the whole Account Management form. */
+router.put('/whatsapp/notifications', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const enabled = req.body?.enabled === true || req.body?.notificationsEnabled === true;
+  const clientId = req.tenant.clientId;
+
+  const client = await Client.findOneAndUpdate(
+    { clientID: clientId },
+    { $set: { 'whatsapp.notificationsEnabled': enabled } },
+    { new: true }
+  ).select('whatsapp companyName clientID');
+
+  if (!client) {
+    return res.status(404).json({ ok: false, message: 'Client not found' });
+  }
+
+  res.json({
+    ok: true,
+    data: {
+      clientID: client.clientID,
+      notificationsEnabled: client.whatsapp?.notificationsEnabled === true,
     },
   });
 }));
