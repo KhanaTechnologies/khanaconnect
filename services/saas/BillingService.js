@@ -53,6 +53,31 @@ class BillingService {
     const rule = await PricingService.getActiveRule(service, messageType, tier);
     const creditsToDeduct = PricingService.computeCredits(rule, units);
 
+    // Platform account: track usage for ops/reporting but do not require prepaid credits.
+    if (clientId === 'Khana') {
+      const account = await this.ensureAccount(clientId);
+      const txn = await SaasTransaction.create({
+        client_id: clientId,
+        type: 'deduction',
+        amount: 0,
+        credits: 0,
+        method: 'internal',
+        reference: sourceRef,
+        status: 'success',
+        metadata: {
+          ...metadata,
+          service,
+          messageType,
+          units,
+          pricingRuleId: rule ? String(rule._id) : null,
+          clientTier: tier,
+          platformExempt: true,
+          listCredits: creditsToDeduct,
+        },
+      });
+      return { account, transaction: txn, rule, deductedCredits: 0 };
+    }
+
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
