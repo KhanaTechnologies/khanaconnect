@@ -2,6 +2,7 @@ const axios = require('axios');
 const SaasWhatsAppMessage = require('../../models/SaasWhatsAppMessage');
 const SaasWhatsAppAccount = require('../../models/SaasWhatsAppAccount');
 const SaasWhatsAppWebhookEvent = require('../../models/SaasWhatsAppWebhookEvent');
+const Customer = require('../../models/customer');
 const { decrypt } = require('../../helpers/encryption');
 const { normalizePhoneE164 } = require('../../helpers/whatsappLink');
 
@@ -13,6 +14,47 @@ function httpError(message, status = 400, extra = {}) {
   err.status = status;
   Object.assign(err, extra);
   return err;
+}
+
+function phoneLookupKeys(raw) {
+  const e164 = normalizePhoneE164(raw) || String(raw || '').replace(/\D/g, '');
+  if (!e164) return [];
+  const keys = [e164];
+  if (e164.length >= 9) keys.push(e164.slice(-9));
+  return keys;
+}
+
+/** Derive a simple CRM level from order history (aligned with high_value ~ R500). */
+function customerLevelFromStats(totalOrders, totalSpent) {
+  const orders = Number(totalOrders) || 0;
+  const spent = Number(totalSpent) || 0;
+  if (spent >= 2000 || orders >= 15) {
+    return { id: 'vip', label: 'VIP', tone: 'violet' };
+  }
+  if (spent >= 500 || orders >= 5) {
+    return { id: 'valued', label: 'Valued', tone: 'amber' };
+  }
+  if (orders >= 1) {
+    return { id: 'regular', label: 'Regular', tone: 'sky' };
+  }
+  return { id: 'new', label: 'New', tone: 'slate' };
+}
+
+function customerProfileFromDoc(c) {
+  if (!c) return null;
+  const first = String(c.customerFirstName || '').trim();
+  const last = String(c.customerLastName || '').trim();
+  const name = [first, last].filter(Boolean).join(' ').trim();
+  const level = customerLevelFromStats(c.totalOrders, c.totalSpent);
+  return {
+    id: String(c._id),
+    name: name || 'Customer',
+    first_name: first,
+    last_name: last,
+    total_orders: Number(c.totalOrders) || 0,
+    total_spent: Number(c.totalSpent) || 0,
+    level,
+  };
 }
 
 function extractInboundBody(msg) {
@@ -51,6 +93,43 @@ class WhatsAppInboxService {
       .select('client_id')
       .lean();
     return account?.client_id || 'Khana';
+  }
+
+  /**
+   * Build phone→customer map for a tenant. Phones are encrypted at rest, so we decrypt in memory.
+   */
+  static async buildCustomerPhoneIndex(clientId) {
+    const map = new Map();
+    if (!clientId) return map;
+    try {
+      const customers = await Customer.find({ clientID: clientId })
+        .select('customerFirstName customerLastName phoneNumber totalOrders totalSpent')
+        .limit(3000);
+      for (const c of customers) {
+        const profile = customerProfileFromDoc(c);
+        if (!profile) continue;
+        for (const key of phoneLookupKeys(c.phoneNumber)) {
+          if (!map.has(key)) map.set(key, profile);
+        }
+      }
+    } catch (e) {
+      console.warn('[whatsapp inbox] customer index failed:', e.message);
+    }
+    return map;
+  }
+
+  static lookupCustomerInIndex(index, contactWaId) {
+    if (!index || !contactWaId) return null;
+    for (const key of phoneLookupKeys(contactWaId)) {
+      const hit = index.get(key);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  static async resolveCustomerForContact(clientId, contactWaId) {
+    const index = await this.buildCustomerPhoneIndex(clientId);
+    return this.lookupCustomerInIndex(index, contactWaId);
   }
 
   /** Persist raw webhook value before ingest (survives processing failures). */
@@ -274,6 +353,8 @@ class WhatsAppInboxService {
       { $limit: lim },
     ]);
 
+    const customerIndex = await this.buildCustomerPhoneIndex(clientId);
+
     const withUnread = await Promise.all(
       rows.map(async (row) => {
         const unread = await SaasWhatsAppMessage.countDocuments({
@@ -295,10 +376,11 @@ class WhatsAppInboxService {
           ? new Date(new Date(lastInbound.timestamp).getTime() + SESSION_HOURS * 60 * 60 * 1000)
           : null;
         const canReplyFreeform = !!(windowOpenUntil && windowOpenUntil > new Date());
+        const customer = this.lookupCustomerInIndex(customerIndex, row.contact_wa_id);
 
         return {
           contact_wa_id: row.contact_wa_id,
-          contact_name: row.contact_name || '',
+          contact_name: customer?.name || row.contact_name || '',
           phone_number_id: row.phone_number_id,
           last_body: row.last_body || '',
           last_direction: row.last_direction,
@@ -308,6 +390,7 @@ class WhatsAppInboxService {
           unread,
           can_reply_freeform: canReplyFreeform,
           window_open_until: windowOpenUntil,
+          customer,
         };
       })
     );
@@ -366,12 +449,15 @@ class WhatsAppInboxService {
       ? new Date(new Date(lastInbound.timestamp).getTime() + SESSION_HOURS * 60 * 60 * 1000)
       : null;
     const canReplyFreeform = !!(windowOpenUntil && windowOpenUntil > new Date());
+    const customer = await this.resolveCustomerForContact(clientId, contact);
+    const waName = messages.find((m) => m.contact_name)?.contact_name || '';
 
     return {
       contact_wa_id: contact,
-      contact_name: messages.find((m) => m.contact_name)?.contact_name || '',
+      contact_name: customer?.name || waName || '',
       can_reply_freeform: canReplyFreeform,
       window_open_until: windowOpenUntil,
+      customer,
       messages,
     };
   }
