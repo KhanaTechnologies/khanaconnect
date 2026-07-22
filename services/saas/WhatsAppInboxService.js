@@ -315,6 +315,34 @@ class WhatsAppInboxService {
     return withUnread;
   }
 
+  static async getUnreadSummary(clientId) {
+    const unread = await SaasWhatsAppMessage.countDocuments({
+      client_id: clientId,
+      direction: 'inbound',
+      read_at: null,
+    });
+    const latest = await SaasWhatsAppMessage.findOne({
+      client_id: clientId,
+      direction: 'inbound',
+      read_at: null,
+    })
+      .sort({ timestamp: -1 })
+      .select('contact_wa_id contact_name body timestamp')
+      .lean();
+
+    return {
+      unread,
+      latest: latest
+        ? {
+            contact_wa_id: latest.contact_wa_id,
+            contact_name: latest.contact_name || '',
+            body: latest.body || '',
+            timestamp: latest.timestamp,
+          }
+        : null,
+    };
+  }
+
   static async getThread(clientId, contactWaId, { limit = 100 } = {}) {
     const contact = normalizePhoneE164(contactWaId) || String(contactWaId || '').replace(/\D/g, '');
     if (!contact) throw httpError('Invalid contact WhatsApp number', 400);

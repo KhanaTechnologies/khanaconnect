@@ -294,6 +294,11 @@ router.get('/whatsapp/inbox/threads', requireRoles('owner', 'manager', 'operator
   res.json({ ok: true, data: { threads } });
 }));
 
+router.get('/whatsapp/inbox/unread', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const data = await WhatsAppInboxService.getUnreadSummary(req.tenant.clientId);
+  res.json({ ok: true, data });
+}));
+
 router.get('/whatsapp/inbox/threads/:contactWaId', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
   const limit = Number(req.query.limit) || 100;
   const thread = await WhatsAppInboxService.getThread(req.tenant.clientId, req.params.contactWaId, { limit });
