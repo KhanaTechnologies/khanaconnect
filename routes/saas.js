@@ -10,6 +10,7 @@ const AdsService = require('../services/saas/AdsService');
 const BillingService = require('../services/saas/BillingService');
 const PayFastCreditsService = require('../services/saas/PayFastCreditsService');
 const SaasWhatsAppAccount = require('../models/SaasWhatsAppAccount');
+const SaasWhatsAppWebhookEvent = require('../models/SaasWhatsAppWebhookEvent');
 const SaasBillingAccount = require('../models/SaasBillingAccount');
 const SaasTransaction = require('../models/SaasTransaction');
 const SaasPricingRule = require('../models/SaasPricingRule');
@@ -53,8 +54,12 @@ router.post('/webhooks/whatsapp', verifyMetaWebhookSignature('WHATSAPP_APP_SECRE
             `[whatsapp webhook] inbound ${messages.length} message(s) for phone_number_id=${phoneNumberId}`
           );
         }
+        // Archive first so Meta's 200 ack cannot leave us with no recoverable copy on ingest bugs.
+        const archived = await WhatsAppInboxService.archiveWebhookValue(value);
         try {
-          const result = await WhatsAppInboxService.ingestWebhookValue(value);
+          const result = await WhatsAppInboxService.ingestWebhookValue(value, {
+            archiveId: archived?._id || null,
+          });
           if (result.ingested || result.statusUpdates) {
             console.log(
               `[whatsapp inbox] client=${result.clientId} ingested=${result.ingested} statusUpdates=${result.statusUpdates}`
@@ -62,6 +67,16 @@ router.post('/webhooks/whatsapp', verifyMetaWebhookSignature('WHATSAPP_APP_SECRE
           }
         } catch (inboxErr) {
           console.error('[whatsapp inbox] ingest error:', inboxErr.message);
+          if (archived?._id) {
+            try {
+              await SaasWhatsAppWebhookEvent.updateOne(
+                { _id: archived._id },
+                { $set: { process_error: inboxErr.message } }
+              );
+            } catch {
+              /* ignore */
+            }
+          }
         }
       }
     }
@@ -567,6 +582,13 @@ router.post('/admin/whatsapp/messages/test', adminOnly, wrapRoute(async (req, re
       meta: data,
     },
   });
+}));
+
+router.post('/admin/whatsapp/inbox/reprocess', adminOnly, wrapRoute(async (req, res) => {
+  const limit = Number(req.body?.limit) || 50;
+  const onlyUnprocessed = req.body?.onlyUnprocessed !== false;
+  const data = await WhatsAppInboxService.reprocessArchivedWebhooks({ limit, onlyUnprocessed });
+  res.json({ ok: true, data });
 }));
 
 router.post('/admin/whatsapp/register', adminOnly, wrapRoute(async (req, res) => {

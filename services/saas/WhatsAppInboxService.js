@@ -1,6 +1,7 @@
 const axios = require('axios');
 const SaasWhatsAppMessage = require('../../models/SaasWhatsAppMessage');
 const SaasWhatsAppAccount = require('../../models/SaasWhatsAppAccount');
+const SaasWhatsAppWebhookEvent = require('../../models/SaasWhatsAppWebhookEvent');
 const { decrypt } = require('../../helpers/encryption');
 const { normalizePhoneE164 } = require('../../helpers/whatsappLink');
 
@@ -52,7 +53,24 @@ class WhatsAppInboxService {
     return account?.client_id || 'Khana';
   }
 
-  static async ingestWebhookValue(value) {
+  /** Persist raw webhook value before ingest (survives processing failures). */
+  static async archiveWebhookValue(value) {
+    if (!value || typeof value !== 'object') return null;
+    try {
+      return await SaasWhatsAppWebhookEvent.create({
+        phone_number_id: String(value.metadata?.phone_number_id || ''),
+        inbound_count: Array.isArray(value.messages) ? value.messages.length : 0,
+        status_count: Array.isArray(value.statuses) ? value.statuses.length : 0,
+        processed: false,
+        payload: value,
+      });
+    } catch (e) {
+      console.error('[whatsapp inbox] archive webhook failed:', e.message);
+      return null;
+    }
+  }
+
+  static async ingestWebhookValue(value, { archiveId = null } = {}) {
     if (!value || typeof value !== 'object') return { ingested: 0, statusUpdates: 0 };
 
     const phoneNumberId = String(value.metadata?.phone_number_id || '').trim();
@@ -153,7 +171,42 @@ class WhatsAppInboxService {
       if (updated.modifiedCount) statusUpdates += 1;
     }
 
+    if (archiveId) {
+      try {
+        await SaasWhatsAppWebhookEvent.updateOne(
+          { _id: archiveId },
+          { $set: { processed: true, process_error: '' } }
+        );
+      } catch {
+        /* non-fatal */
+      }
+    }
+
     return { ingested, statusUpdates, clientId, phoneNumberId };
+  }
+
+  /** Re-run inbox ingest for archived webhook payloads that failed or were never marked processed. */
+  static async reprocessArchivedWebhooks({ limit = 50, onlyUnprocessed = true } = {}) {
+    const q = onlyUnprocessed ? { processed: false, inbound_count: { $gt: 0 } } : { inbound_count: { $gt: 0 } };
+    const rows = await SaasWhatsAppWebhookEvent.find(q).sort({ created_at: 1 }).limit(Math.min(limit, 200));
+    let ok = 0;
+    let failed = 0;
+    let ingestedTotal = 0;
+    for (const row of rows) {
+      try {
+        const result = await this.ingestWebhookValue(row.payload, { archiveId: row._id });
+        ingestedTotal += result.ingested || 0;
+        row.processed = true;
+        row.process_error = '';
+        await row.save();
+        ok += 1;
+      } catch (e) {
+        row.process_error = e.message || 'reprocess failed';
+        await row.save();
+        failed += 1;
+      }
+    }
+    return { scanned: rows.length, ok, failed, ingestedTotal };
   }
 
   static async recordOutbound({
