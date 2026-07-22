@@ -1,8 +1,14 @@
 const axios = require('axios');
+const FormData = require('form-data');
 const SaasWhatsAppMessage = require('../../models/SaasWhatsAppMessage');
 const SaasWhatsAppAccount = require('../../models/SaasWhatsAppAccount');
 const SaasWhatsAppWebhookEvent = require('../../models/SaasWhatsAppWebhookEvent');
+const SaasWhatsAppCannedReply = require('../../models/SaasWhatsAppCannedReply');
+const SaasWhatsAppThread = require('../../models/SaasWhatsAppThread');
 const Customer = require('../../models/customer');
+const { Order } = require('../../models/order');
+const Booking = require('../../models/booking');
+const TeamMember = require('../../models/teamMember');
 const { decrypt } = require('../../helpers/encryption');
 const { normalizePhoneE164 } = require('../../helpers/whatsappLink');
 
@@ -56,6 +62,17 @@ function customerProfileFromDoc(c) {
     level,
   };
 }
+
+function escapeRegex(s) {
+  return String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+const DEFAULT_CANNED = [
+  { title: 'Thanks', body: 'Thank you for your message — we will get back to you shortly.', shortcut: 'thanks', sort_order: 1 },
+  { title: 'Order received', body: 'We have received your order and will update you once it is being prepared.', shortcut: 'order', sort_order: 2 },
+  { title: 'Booking confirmed', body: 'Your booking is confirmed. Please reply if you need to reschedule.', shortcut: 'booking', sort_order: 3 },
+  { title: 'More info', body: 'Could you please share a bit more detail so we can help you better?', shortcut: 'info', sort_order: 4 },
+];
 
 function extractInboundBody(msg) {
   if (!msg || typeof msg !== 'object') return { type: 'unknown', body: '' };
@@ -331,10 +348,22 @@ class WhatsAppInboxService {
     }
   }
 
-  static async listThreads(clientId, { limit = 40 } = {}) {
+  static async listThreads(clientId, { limit = 40, q = '' } = {}) {
     const lim = Math.min(Math.max(Number(limit) || 40, 1), 100);
+    const query = String(q || '').trim();
+    const match = { client_id: clientId };
+
+    if (query) {
+      const rx = new RegExp(escapeRegex(query), 'i');
+      const contactIds = await SaasWhatsAppMessage.distinct('contact_wa_id', {
+        client_id: clientId,
+        $or: [{ contact_wa_id: rx }, { contact_name: rx }, { body: rx }],
+      });
+      match.contact_wa_id = { $in: contactIds.length ? contactIds : ['__none__'] };
+    }
+
     const rows = await SaasWhatsAppMessage.aggregate([
-      { $match: { client_id: clientId } },
+      { $match: match },
       { $sort: { timestamp: -1 } },
       {
         $group: {
@@ -354,6 +383,12 @@ class WhatsAppInboxService {
     ]);
 
     const customerIndex = await this.buildCustomerPhoneIndex(clientId);
+    const contactIds = rows.map((r) => r.contact_wa_id);
+    const threadMetas = await SaasWhatsAppThread.find({
+      client_id: clientId,
+      contact_wa_id: { $in: contactIds },
+    }).lean();
+    const metaByContact = Object.fromEntries(threadMetas.map((t) => [t.contact_wa_id, t]));
 
     const withUnread = await Promise.all(
       rows.map(async (row) => {
@@ -377,6 +412,7 @@ class WhatsAppInboxService {
           : null;
         const canReplyFreeform = !!(windowOpenUntil && windowOpenUntil > new Date());
         const customer = this.lookupCustomerInIndex(customerIndex, row.contact_wa_id);
+        const meta = metaByContact[row.contact_wa_id];
 
         return {
           contact_wa_id: row.contact_wa_id,
@@ -391,6 +427,13 @@ class WhatsAppInboxService {
           can_reply_freeform: canReplyFreeform,
           window_open_until: windowOpenUntil,
           customer,
+          assignment: meta?.assigned_member_id
+            ? {
+                member_id: meta.assigned_member_id,
+                name: meta.assigned_name || '',
+                assigned_at: meta.assigned_at,
+              }
+            : null,
         };
       })
     );
@@ -451,6 +494,7 @@ class WhatsAppInboxService {
     const canReplyFreeform = !!(windowOpenUntil && windowOpenUntil > new Date());
     const customer = await this.resolveCustomerForContact(clientId, contact);
     const waName = messages.find((m) => m.contact_name)?.contact_name || '';
+    const meta = await SaasWhatsAppThread.findOne({ client_id: clientId, contact_wa_id: contact }).lean();
 
     return {
       contact_wa_id: contact,
@@ -458,18 +502,18 @@ class WhatsAppInboxService {
       can_reply_freeform: canReplyFreeform,
       window_open_until: windowOpenUntil,
       customer,
+      assignment: meta?.assigned_member_id
+        ? {
+            member_id: meta.assigned_member_id,
+            name: meta.assigned_name || '',
+            assigned_at: meta.assigned_at,
+          }
+        : null,
       messages,
     };
   }
 
-  static async sendTextReply({ clientId, to, text }) {
-    const body = String(text || '').trim();
-    if (!body) throw httpError('Message text is required', 400);
-    if (body.length > 4096) throw httpError('Message too long (max 4096 characters)', 400);
-
-    const e164 = normalizePhoneE164(to);
-    if (!e164) throw httpError('Invalid recipient phone number', 400);
-
+  static async assertFreeformWindow(clientId, e164) {
     const lastInbound = await SaasWhatsAppMessage.findOne({
       client_id: clientId,
       contact_wa_id: e164,
@@ -494,11 +538,13 @@ class WhatsAppInboxService {
         400
       );
     }
+    return windowOpenUntil;
+  }
 
-    const account = await SaasWhatsAppAccount.findOne({ client_id: clientId, status: 'active' }).sort({
+  static async resolveSendAccount(clientId) {
+    let sendAccount = await SaasWhatsAppAccount.findOne({ client_id: clientId, status: 'active' }).sort({
       updated_at: -1,
     });
-    let sendAccount = account;
     if (!sendAccount && clientId !== 'Khana') {
       sendAccount = await SaasWhatsAppAccount.findOne({ client_id: 'Khana', status: 'active' }).sort({
         updated_at: -1,
@@ -507,7 +553,19 @@ class WhatsAppInboxService {
     if (!sendAccount) {
       throw httpError('No active WhatsApp Cloud API account for this client.', 400);
     }
+    return sendAccount;
+  }
 
+  static async sendTextReply({ clientId, to, text }) {
+    const body = String(text || '').trim();
+    if (!body) throw httpError('Message text is required', 400);
+    if (body.length > 4096) throw httpError('Message too long (max 4096 characters)', 400);
+
+    const e164 = normalizePhoneE164(to);
+    if (!e164) throw httpError('Invalid recipient phone number', 400);
+
+    const windowOpenUntil = await this.assertFreeformWindow(clientId, e164);
+    const sendAccount = await this.resolveSendAccount(clientId);
     const token = decrypt(sendAccount.access_token_encrypted);
     const url = `${WA_API_BASE}/${sendAccount.phone_number_id}/messages`;
     const payload = {
@@ -549,6 +607,335 @@ class WhatsAppInboxService {
       meta: response.data,
       window_open_until: windowOpenUntil,
     };
+  }
+
+  static async sendMediaReply({ clientId, to, fileBuffer, mimeType, filename, caption = '' }) {
+    const e164 = normalizePhoneE164(to);
+    if (!e164) throw httpError('Invalid recipient phone number', 400);
+    if (!fileBuffer?.length) throw httpError('File is required', 400);
+
+    const mime = String(mimeType || '').toLowerCase();
+    let msgType = 'document';
+    if (mime.startsWith('image/')) msgType = 'image';
+    else if (mime.startsWith('video/')) msgType = 'video';
+    else if (mime.startsWith('audio/')) msgType = 'audio';
+    else if (mime === 'application/pdf' || mime.includes('document') || mime.includes('msword') || mime.includes('sheet')) {
+      msgType = 'document';
+    } else if (!mime) {
+      throw httpError('Unsupported file type', 400);
+    }
+
+    const windowOpenUntil = await this.assertFreeformWindow(clientId, e164);
+    const sendAccount = await this.resolveSendAccount(clientId);
+    const token = decrypt(sendAccount.access_token_encrypted);
+
+    const form = new FormData();
+    form.append('messaging_product', 'whatsapp');
+    form.append('type', mime);
+    form.append('file', fileBuffer, {
+      filename: filename || `upload.${mime.split('/')[1] || 'bin'}`,
+      contentType: mime,
+    });
+
+    let mediaId;
+    try {
+      const upload = await axios.post(`${WA_API_BASE}/${sendAccount.phone_number_id}/media`, form, {
+        timeout: 60000,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...form.getHeaders(),
+        },
+        maxContentLength: 20 * 1024 * 1024,
+        maxBodyLength: 20 * 1024 * 1024,
+      });
+      mediaId = upload.data?.id;
+    } catch (err) {
+      const data = err?.response?.data;
+      throw httpError(data?.error?.message || err.message || 'Media upload failed', err?.response?.status || 502, {
+        meta: data?.error || data || null,
+      });
+    }
+    if (!mediaId) throw httpError('Meta did not return a media id', 502);
+
+    const mediaPayload = { id: mediaId };
+    const cap = String(caption || '').trim().slice(0, 1024);
+    if (cap && (msgType === 'image' || msgType === 'video' || msgType === 'document')) {
+      mediaPayload.caption = cap;
+    }
+    if (msgType === 'document' && filename) mediaPayload.filename = String(filename).slice(0, 240);
+
+    const payload = {
+      messaging_product: 'whatsapp',
+      to: e164,
+      type: msgType,
+      [msgType]: mediaPayload,
+    };
+
+    let response;
+    try {
+      response = await axios.post(`${WA_API_BASE}/${sendAccount.phone_number_id}/messages`, payload, {
+        timeout: 20000,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+    } catch (err) {
+      const data = err?.response?.data;
+      throw httpError(data?.error?.message || err.message || 'Media send failed', err?.response?.status || 502, {
+        meta: data?.error || data || null,
+      });
+    }
+
+    const wamid = response.data?.messages?.[0]?.id || `wa-out-${Date.now()}`;
+    const preview =
+      msgType === 'image'
+        ? cap || '[Image]'
+        : msgType === 'document'
+          ? filename || cap || '[Document]'
+          : cap || `[${msgType}]`;
+
+    const doc = await this.recordOutbound({
+      clientId,
+      phoneNumberId: sendAccount.phone_number_id,
+      to: e164,
+      wamid,
+      type: msgType,
+      body: preview,
+      status: 'sent',
+      raw: response.data,
+    });
+
+    return { message: doc, meta: response.data, window_open_until: windowOpenUntil, media_id: mediaId };
+  }
+
+  static async listAssignees(clientId) {
+    const members = await TeamMember.find({
+      clientID: clientId,
+      status: 'active',
+    })
+      .select('firstName lastName email orgRole status')
+      .sort({ orgRole: 1, firstName: 1 })
+      .limit(100);
+
+    return members.map((m) => {
+      const json = m.toJSON ? m.toJSON() : m;
+      return {
+        id: String(json._id),
+        name: json.displayName || [json.firstName, json.lastName].filter(Boolean).join(' ') || json.email,
+        email: json.email,
+        org_role: json.orgRole,
+      };
+    });
+  }
+
+  static async assignThread({ clientId, contactWaId, memberId }) {
+    const contact = normalizePhoneE164(contactWaId) || String(contactWaId || '').replace(/\D/g, '');
+    if (!contact) throw httpError('Invalid contact WhatsApp number', 400);
+
+    const memberIdStr = String(memberId || '').trim();
+    if (!memberIdStr) {
+      await SaasWhatsAppThread.findOneAndUpdate(
+        { client_id: clientId, contact_wa_id: contact },
+        {
+          $set: {
+            assigned_member_id: '',
+            assigned_name: '',
+            assigned_at: null,
+          },
+        },
+        { upsert: true }
+      );
+      return { contact_wa_id: contact, assignment: null };
+    }
+
+    const member = await TeamMember.findOne({ _id: memberIdStr, clientID: clientId, status: 'active' });
+    if (!member) throw httpError('Team member not found', 404);
+    const json = member.toJSON ? member.toJSON() : member;
+    const name = json.displayName || [json.firstName, json.lastName].filter(Boolean).join(' ') || json.email;
+
+    const doc = await SaasWhatsAppThread.findOneAndUpdate(
+      { client_id: clientId, contact_wa_id: contact },
+      {
+        $set: {
+          assigned_member_id: String(json._id),
+          assigned_name: name,
+          assigned_at: new Date(),
+        },
+      },
+      { upsert: true, new: true }
+    );
+
+    return {
+      contact_wa_id: contact,
+      assignment: {
+        member_id: doc.assigned_member_id,
+        name: doc.assigned_name,
+        assigned_at: doc.assigned_at,
+      },
+    };
+  }
+
+  static async listCannedReplies(clientId) {
+    let rows = await SaasWhatsAppCannedReply.find({ client_id: clientId }).sort({ sort_order: 1, title: 1 }).lean();
+    if (!rows.length) {
+      await SaasWhatsAppCannedReply.insertMany(
+        DEFAULT_CANNED.map((r) => ({ ...r, client_id: clientId }))
+      );
+      rows = await SaasWhatsAppCannedReply.find({ client_id: clientId }).sort({ sort_order: 1, title: 1 }).lean();
+    }
+    return rows.map((r) => ({
+      id: String(r._id),
+      title: r.title,
+      body: r.body,
+      shortcut: r.shortcut || '',
+      sort_order: r.sort_order || 0,
+    }));
+  }
+
+  static async createCannedReply(clientId, { title, body, shortcut = '' }) {
+    const t = String(title || '').trim();
+    const b = String(body || '').trim();
+    if (!t || !b) throw httpError('title and body are required', 400);
+    const count = await SaasWhatsAppCannedReply.countDocuments({ client_id: clientId });
+    if (count >= 50) throw httpError('Maximum 50 canned replies per account', 400);
+    const doc = await SaasWhatsAppCannedReply.create({
+      client_id: clientId,
+      title: t.slice(0, 80),
+      body: b.slice(0, 1000),
+      shortcut: String(shortcut || '').trim().slice(0, 40),
+      sort_order: count + 1,
+    });
+    return {
+      id: String(doc._id),
+      title: doc.title,
+      body: doc.body,
+      shortcut: doc.shortcut,
+      sort_order: doc.sort_order,
+    };
+  }
+
+  static async deleteCannedReply(clientId, id) {
+    const res = await SaasWhatsAppCannedReply.deleteOne({ _id: id, client_id: clientId });
+    if (!res.deletedCount) throw httpError('Canned reply not found', 404);
+    return { ok: true };
+  }
+
+  static async getContactContext(clientId, contactWaId) {
+    const contact = normalizePhoneE164(contactWaId) || String(contactWaId || '').replace(/\D/g, '');
+    if (!contact) throw httpError('Invalid contact WhatsApp number', 400);
+
+    const customer = await this.resolveCustomerForContact(clientId, contact);
+    let customerDoc = null;
+    if (customer?.id) {
+      customerDoc = await Customer.findOne({ _id: customer.id, clientID: clientId }).select(
+        'customerFirstName customerLastName emailAddress phoneNumber totalOrders totalSpent customerSince lastActivity address city'
+      );
+    }
+
+    let orders = [];
+    if (customer?.id) {
+      orders = await Order.find({ clientID: clientId, customer: customer.id })
+        .sort({ dateOrdered: -1 })
+        .limit(10)
+        .select('_id status finalPrice totalPrice dateOrdered orderTrackingCode paid')
+        .lean();
+    }
+
+    const bookingsRaw = await Booking.find({ clientID: clientId })
+      .sort({ date: -1, time: -1 })
+      .limit(200)
+      .select('_id customerName customerEmail customerPhone date time endTime status services bookingType notes')
+      .lean();
+
+    const keys = new Set(phoneLookupKeys(contact));
+    if (customerDoc?.phoneNumber) {
+      for (const k of phoneLookupKeys(customerDoc.phoneNumber)) keys.add(k);
+    }
+    const email = customerDoc?.emailAddress ? String(customerDoc.emailAddress).toLowerCase() : '';
+
+    const bookings = bookingsRaw
+      .filter((b) => {
+        const phoneKeys = phoneLookupKeys(b.customerPhone);
+        if (phoneKeys.some((k) => keys.has(k))) return true;
+        if (email && String(b.customerEmail || '').toLowerCase() === email) return true;
+        return false;
+      })
+      .slice(0, 10);
+
+    return {
+      contact_wa_id: contact,
+      customer: customer
+        ? {
+            ...customer,
+            email: customerDoc?.emailAddress || '',
+            phone: customerDoc?.phoneNumber || contact,
+            address: customerDoc?.address || '',
+            city: customerDoc?.city || '',
+            customer_since: customerDoc?.customerSince || null,
+            last_activity: customerDoc?.lastActivity || null,
+          }
+        : null,
+      orders: orders.map((o) => ({
+        id: String(o._id),
+        status: o.status,
+        total: o.finalPrice ?? o.totalPrice ?? 0,
+        date: o.dateOrdered,
+        tracking_code: o.orderTrackingCode || '',
+        paid: !!o.paid,
+      })),
+      bookings: bookings.map((b) => ({
+        id: String(b._id),
+        customer_name: b.customerName || '',
+        date: b.date,
+        time: b.time || '',
+        end_time: b.endTime || '',
+        status: b.status,
+        booking_type: b.bookingType || '',
+        services: b.services || [],
+        notes: b.notes || '',
+      })),
+    };
+  }
+
+  static async getCustomerSummary(clientId, customerId) {
+    const customerDoc = await Customer.findOne({ _id: customerId, clientID: clientId }).select(
+      'customerFirstName customerLastName emailAddress phoneNumber totalOrders totalSpent customerSince lastActivity address city'
+    );
+    if (!customerDoc) throw httpError('Customer not found', 404);
+
+    const profile = customerProfileFromDoc(customerDoc);
+    const phone = customerDoc.phoneNumber || '';
+    const e164 = normalizePhoneE164(phone) || String(phone || '').replace(/\D/g, '');
+    const context = e164
+      ? await this.getContactContext(clientId, e164)
+      : {
+          contact_wa_id: '',
+          customer: {
+            ...profile,
+            email: customerDoc.emailAddress || '',
+            phone,
+            address: customerDoc.address || '',
+            city: customerDoc.city || '',
+            customer_since: customerDoc.customerSince || null,
+            last_activity: customerDoc.lastActivity || null,
+          },
+          orders: [],
+          bookings: [],
+        };
+
+    if (!context.customer && profile) {
+      context.customer = {
+        ...profile,
+        email: customerDoc.emailAddress || '',
+        phone,
+        address: customerDoc.address || '',
+        city: customerDoc.city || '',
+        customer_since: customerDoc.customerSince || null,
+        last_activity: customerDoc.lastActivity || null,
+      };
+    }
+    return context;
   }
 }
 
