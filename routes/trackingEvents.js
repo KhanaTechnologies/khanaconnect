@@ -10,6 +10,8 @@ const failureEmail = require('../helpers/failureEmail');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
+const { requireAdmin } = require('../middleware/requireAdmin');
+const { requireSelfOrAdmin } = require('../middleware/requireSelfOrAdmin');
 
 // Middleware to extract client and session info
 const extractTrackingInfo = (req, res, next) => {
@@ -429,7 +431,7 @@ router.post('/convert-anonymous',
 );
 
 // Get event statistics for a client
-router.get('/stats/:clientId', asyncHandler(async (req, res) => {
+router.get('/stats/:clientId', requireSelfOrAdmin('clientId'), asyncHandler(async (req, res) => {
   const { clientId } = req.params;
   const { days = 7 } = req.query;
   
@@ -534,8 +536,8 @@ const decryptClientData = (client) => {
 };
 
 
-// Add this to your trackingEvents.js - WITHOUT authentication for debugging
-router.get('/debug/queue-status', async (req, res) => {
+// Debug endpoints — platform admin only (never public)
+router.get('/debug/queue-status', requireAdmin, async (req, res) => {
   try {
     // Try to load the queue
     let eventQueue;
@@ -619,7 +621,7 @@ router.get('/debug/queue-status', async (req, res) => {
 });
 
 // Simple test endpoint to check if events are being queued
-router.post('/debug/test-simple/:clientId', async (req, res) => {
+router.post('/debug/test-simple/:clientId', requireAdmin, async (req, res) => {
   const { clientId } = req.params;
   
   console.log(`🔍 Testing queue for client: ${clientId}`);

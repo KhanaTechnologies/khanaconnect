@@ -1,7 +1,5 @@
-// routes/admin.js
 const express = require("express");
 const jwt = require('jsonwebtoken');
-const authJwt = require('../helpers/jwt'); // Import the authJwt middleware
 const bcrypt = require('bcryptjs');
 const Client = require("../models/client");
 const { Order } = require('../models/order');
@@ -63,9 +61,8 @@ function generateToken(client) {
 
 /**
  * Admin route to check the time until a client's token expires
- * Protected by authJwt()
  */
-router.get('/clients/:id/token-expiration', authJwt(), wrapRoute(async (req, res) => {
+router.get('/clients/:id/token-expiration', requireAdmin, wrapRoute(async (req, res) => {
   const { id } = req.params;
   const clientID = await getClientIDFromParams(id);
   const client = await Client.findOne({ clientID });
@@ -99,7 +96,7 @@ router.get('/clients/:id/token-expiration', authJwt(), wrapRoute(async (req, res
 /**
  * Admin route to generate a new token for a client
  */
-router.post('/clients/:id/generate-client-token', authJwt(), wrapRoute(async (req, res) => {
+router.post('/clients/:id/generate-client-token', requireAdmin, wrapRoute(async (req, res) => {
   const { id } = req.params;
   const clientID = await getClientIDFromParams(id);
   const client = await Client.findOne({ clientID });
@@ -116,7 +113,7 @@ router.post('/clients/:id/generate-client-token', authJwt(), wrapRoute(async (re
 /**
  * Admin route to delete a token for a client
  */
-router.post('/clients/:id/delete-client-token', authJwt(), wrapRoute(async (req, res) => {
+router.post('/clients/:id/delete-client-token', requireAdmin, wrapRoute(async (req, res) => {
   const { id } = req.params;
   const clientID = await getClientIDFromParams(id);
   const client = await Client.findOne({ clientID });
@@ -267,13 +264,13 @@ router.post("/clients/:id/subscription/suspend", requireAdmin, wrapRoute(async (
 }));
 
 // 🔹 GET total number of clients
-router.get("/numberOfClients", wrapRoute(async (req, res) => {
+router.get("/numberOfClients", requireAdmin, wrapRoute(async (req, res) => {
   const count = await Client.countDocuments();
   res.json({ totalClients: count });
 }));
 
 // 🔹 GET number of orders for a client
-router.get("/clients/:id/numberOfOrders", wrapRoute(async (req, res) => {
+router.get("/clients/:id/numberOfOrders", requireAdmin, wrapRoute(async (req, res) => {
   const { id } = req.params;
   const clientId = await getClientIDFromParams(id);
   const count = await Order.countDocuments({ clientID: clientId });
@@ -281,7 +278,7 @@ router.get("/clients/:id/numberOfOrders", wrapRoute(async (req, res) => {
 }));
 
 // 🔹 GET number of products for a client
-router.get("/clients/:id/numberOfProducts", wrapRoute(async (req, res) => {
+router.get("/clients/:id/numberOfProducts", requireAdmin, wrapRoute(async (req, res) => {
   const { id } = req.params;
   const clientID = await getClientIDFromParams(id);
   const count = await Product.countDocuments({ clientID: clientID });
@@ -289,7 +286,7 @@ router.get("/clients/:id/numberOfProducts", wrapRoute(async (req, res) => {
 }));
 
 // 🔹 GET number of categories for a client
-router.get("/clients/:id/numberOfCategories", wrapRoute(async (req, res) => {
+router.get("/clients/:id/numberOfCategories", requireAdmin, wrapRoute(async (req, res) => {
   const { id } = req.params;
   const clientID = await getClientIDFromParams(id);
   const count = await Category.countDocuments({ clientID: clientID });
@@ -297,7 +294,7 @@ router.get("/clients/:id/numberOfCategories", wrapRoute(async (req, res) => {
 }));
 
 // 🔹 GET number of bookings for a client
-router.get("/clients/:id/numberOfBookings", wrapRoute(async (req, res) => {
+router.get("/clients/:id/numberOfBookings", requireAdmin, wrapRoute(async (req, res) => {
   const { id } = req.params;
   const clientID = await getClientIDFromParams(id);
   const count = await Booking.countDocuments({ clientID: clientID });
@@ -305,7 +302,7 @@ router.get("/clients/:id/numberOfBookings", wrapRoute(async (req, res) => {
 }));
 
 // 🔹 GET number of services for a client
-router.get("/clients/:id/numberOfServices", wrapRoute(async (req, res) => {
+router.get("/clients/:id/numberOfServices", requireAdmin, wrapRoute(async (req, res) => {
   const { id } = req.params;
   const clientID = await getClientIDFromParams(id);
   const count = await Service.countDocuments({ clientID: clientID });
@@ -313,7 +310,7 @@ router.get("/clients/:id/numberOfServices", wrapRoute(async (req, res) => {
 }));
 
 // 🔹 GET number of staff for a client
-router.get("/clients/:id/numberOfStaff", wrapRoute(async (req, res) => {
+router.get("/clients/:id/numberOfStaff", requireAdmin, wrapRoute(async (req, res) => {
   const { id } = req.params;
   const clientID = await getClientIDFromParams(id);
   const count = await Staff.countDocuments({ clientID: clientID });
@@ -321,7 +318,7 @@ router.get("/clients/:id/numberOfStaff", wrapRoute(async (req, res) => {
 }));
 
 // 🔹 GET number of sales for a client
-router.get("/clients/:id/numberOfSales", wrapRoute(async (req, res) => {
+router.get("/clients/:id/numberOfSales", requireAdmin, wrapRoute(async (req, res) => {
   const { id } = req.params;
   const clientID = await getClientIDFromParams(id);
   const count = await SalesItem.countDocuments({ clientID: clientID });
@@ -329,7 +326,7 @@ router.get("/clients/:id/numberOfSales", wrapRoute(async (req, res) => {
 }));
 
 // 🔹 GET number of discount codes for a client
-router.get("/clients/:id/numberOfDiscountCodes", wrapRoute(async (req, res) => {
+router.get("/clients/:id/numberOfDiscountCodes", requireAdmin, wrapRoute(async (req, res) => {
   const { id } = req.params;
   const clientID = await getClientIDFromParams(id);
   const count = await DiscountCode.countDocuments({ clientID: clientID });

@@ -14,6 +14,7 @@ const compression = require('compression');
 require('dotenv/config');
 const authJwt = require('./helpers/jwt');
 const errorHandler = require('./helpers/error-handler');
+const { mongoSanitize } = require('./middleware/mongoSanitize');
 
 // Tracking System Imports
 const trackingRoutes = require('./routes/trackingEvents');
@@ -177,6 +178,9 @@ app.use(express.json({
   },
 }));
 app.use(express.urlencoded({ extended: true, limit: '10mb', parameterLimit: 100 }));
+
+// Strip MongoDB operators ($gt, etc.) from body/query/params — after parsers, before routes
+app.use(mongoSanitize);
 
 app.use(cookieParser());
 app.use(logger('combined'));

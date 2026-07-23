@@ -19,6 +19,9 @@ const { encrypt, decrypt } = require('../helpers/encryption'); // ✅ Import fro
 const { authenticateClientLogin } = require('../helpers/teamLogin');
 const { resolveSessionFromToken, requireTeamSession, requireTeamManager } = require('../helpers/teamAuth');
 const { createDashboardAuth } = require('../helpers/dashboardAuth');
+const { requireSelfOrAdmin } = require('../middleware/requireSelfOrAdmin');
+const { requireAdmin: requirePlatformAdmin } = require('../middleware/requireAdmin');
+const { publicClientPayload, stripClientSecrets } = require('../helpers/publicClientPayload');
 
 router.use(authJwt());
 
@@ -1374,8 +1377,8 @@ function formatDuration(seconds) {
 // CLIENT ROUTES
 // --------------------
 
-// Create a new client
-router.post('/', wrapRoute(async (req, res) => {
+// Create a new client (platform admin only — dashboard uses POST /admin/clients)
+router.post('/', requirePlatformAdmin, wrapRoute(async (req, res) => {
   const { 
     clientID, 
     companyName, 
@@ -1495,38 +1498,61 @@ router.post('/', wrapRoute(async (req, res) => {
   const savedClient = await newClient.save();
   
   // Remove sensitive data from response
-  const clientResponse = savedClient.toObject();
-  delete clientResponse.password;
+  const clientResponse = stripClientSecrets(savedClient.toObject());
   
   res.json({ client: clientResponse, token });
 }));
 
-// Get all clients
-router.get('/', wrapRoute(async (req, res) => {
-  const clients = await Client.find().select('-password -token -sessionToken');
+// Get all clients (platform admin only)
+router.get('/', requirePlatformAdmin, wrapRoute(async (req, res) => {
+  const clients = await Client.find().select('-password -token -sessionToken -businessEmailPassword');
   res.json({
     success: true,
     count: clients.length,
-    clients
+    clients: clients.map((c) => stripClientSecrets(c.toObject({ getters: true }))),
   });
 }));
 
-// Get client by ID
+// Get client by ID — unauthenticated callers only get public fields (return_url / WhatsApp).
+// Authenticated owner or platform admin get account details (secrets masked).
 router.get('/:clientId', wrapRoute(async (req, res) => {
   const client = await Client.findOne({ clientID: req.params.clientId })
     .select('-password -token -sessionToken');
-  
+
   if (!client) return res.status(404).json({ error: 'Client not found' });
 
-  const clientObj = client.toObject({ getters: true });
-  const whatsapp = publicWhatsappPayload(clientObj.whatsapp);
-  clientObj.whatsapp = whatsapp;
-  clientObj.whatsappChatUrl = whatsapp.chatUrl;
-  
-  res.json({
-    success: true,
-    client: clientObj,
-  });
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith('Bearer ')) {
+    return res.json({
+      success: true,
+      client: publicClientPayload(client),
+    });
+  }
+
+  try {
+    const tokenValue = auth.split(' ')[1];
+    const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
+    const caller = await Client.findOne({ clientID: decoded.clientID }).select('clientID role');
+    if (!caller) {
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+    const isAdmin = caller.role === 'admin';
+    if (!isAdmin && decoded.clientID !== req.params.clientId) {
+      return res.status(403).json({ error: 'You can only access your own organization' });
+    }
+
+    const clientObj = stripClientSecrets(client.toObject({ getters: true }));
+    const whatsapp = publicWhatsappPayload(clientObj.whatsapp);
+    clientObj.whatsapp = whatsapp;
+    clientObj.whatsappChatUrl = whatsapp.chatUrl;
+
+    return res.json({
+      success: true,
+      client: clientObj,
+    });
+  } catch (_err) {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
 }));
 
 /** Public storefront-safe WhatsApp click-to-chat settings (no secrets). */
@@ -1546,8 +1572,8 @@ router.get('/:clientId/whatsapp', wrapRoute(async (req, res) => {
   });
 }));
 
-// Edit client details
-router.put('/:clientId', wrapRoute(async (req, res) => {
+// Edit client details (owner or platform admin)
+router.put('/:clientId', requireSelfOrAdmin('clientId'), wrapRoute(async (req, res) => {
   const updates = { ...req.body };
   
   // Hash password if provided
@@ -1561,6 +1587,8 @@ router.put('/:clientId', wrapRoute(async (req, res) => {
   delete updates.token;
   delete updates.sessionToken;
   delete updates.whatsappChatUrl;
+  delete updates.role; // role changes only via admin routes
+  delete updates.permissions; // use dedicated permissions endpoints
 
   if (updates.whatsapp && typeof updates.whatsapp === 'object') {
     updates.whatsapp = sanitizeWhatsappSettings(updates.whatsapp);
@@ -1574,7 +1602,7 @@ router.put('/:clientId', wrapRoute(async (req, res) => {
   
   if (!updatedClient) return res.status(404).json({ error: 'Client not found' });
 
-  const clientObj = updatedClient.toObject({ getters: true });
+  const clientObj = stripClientSecrets(updatedClient.toObject({ getters: true }));
   const whatsapp = publicWhatsappPayload(clientObj.whatsapp);
   clientObj.whatsapp = whatsapp;
   clientObj.whatsappChatUrl = whatsapp.chatUrl;
@@ -1586,14 +1614,17 @@ router.put('/:clientId', wrapRoute(async (req, res) => {
   });
 }));
 
-// Delete client
-router.delete('/:clientId', wrapRoute(async (req, res) => {
-  const client = await Client.findOneAndDelete({ clientID: req.params.clientId });
+// Delete client (platform admin only — prefer DELETE /admin/clients/:id)
+router.delete('/:clientId', requirePlatformAdmin, wrapRoute(async (req, res) => {
+  const client = await Client.findOne({ clientID: req.params.clientId });
   
   if (!client) return res.status(404).json({ error: 'Client not found' });
-  
-  // Also delete related tracking events? Optional - depends on requirements
-  // await TrackingEvent.deleteMany({ clientID: req.params.clientId });
+
+  if (client.role === 'admin') {
+    return res.status(403).json({ error: 'Cannot delete the platform admin account' });
+  }
+
+  await Client.findOneAndDelete({ clientID: req.params.clientId });
   
   res.json({
     success: true,
@@ -1624,8 +1655,8 @@ router.put('/:clientId/permissions', requireTeamSession(), requireTeamManager(),
   });
 }));
 
-// Get client permissions (returns team member permissions when logged in as a member)
-router.get('/:clientId/permissions', wrapRoute(async (req, res) => {
+// Get client permissions (authenticated owner / member / admin only)
+router.get('/:clientId/permissions', requireSelfOrAdmin('clientId'), wrapRoute(async (req, res) => {
   const client = await Client.findOne({ clientID: req.params.clientId })
     .select('permissions role companyName clientID');
 
@@ -1634,21 +1665,10 @@ router.get('/:clientId/permissions', wrapRoute(async (req, res) => {
   let permissions = client.permissions;
   let orgRole = null;
 
-  const auth = req.headers.authorization;
-  if (auth && auth.startsWith('Bearer ')) {
-    try {
-      const token = auth.split(' ')[1];
-      const { decoded } = verifyJwtWithAnySecret(jwt, token);
-      if (decoded.clientID === client.clientID) {
-        const session = await resolveSessionFromToken(decoded);
-        if (session) {
-          permissions = session.permissions;
-          orgRole = session.member?.orgRole || session.orgRole || null;
-        }
-      }
-    } catch (_err) {
-      // fall back to client permissions
-    }
+  const session = req.teamSession;
+  if (session && session.client?.clientID === client.clientID) {
+    permissions = session.permissions;
+    orgRole = session.member?.orgRole || session.orgRole || null;
   }
 
   res.json({
@@ -1663,7 +1683,7 @@ router.get('/:clientId/permissions', wrapRoute(async (req, res) => {
 }));
 
 // Update client analytics configuration
-router.put('/:clientId/analytics/config', wrapRoute(async (req, res) => {
+router.put('/:clientId/analytics/config', requireSelfOrAdmin('clientId'), wrapRoute(async (req, res) => {
   const { googleAnalytics } = req.body;
   
   const updatedClient = await Client.findOneAndUpdate(
@@ -1679,23 +1699,33 @@ router.put('/:clientId/analytics/config', wrapRoute(async (req, res) => {
 
   if (!updatedClient) return res.status(404).json({ error: 'Client not found' });
 
+  const config = updatedClient.analyticsConfig;
+  if (config?.googleAnalytics?.apiSecret) {
+    config.googleAnalytics = { ...config.googleAnalytics, apiSecret: '[set]' };
+  }
+
   res.json({ 
     success: true, 
     message: 'Analytics configuration updated',
-    analyticsConfig: updatedClient.analyticsConfig
+    analyticsConfig: config,
   });
 }));
 
 // Get client analytics configuration
-router.get('/:clientId/analytics/config', wrapRoute(async (req, res) => {
+router.get('/:clientId/analytics/config', requireSelfOrAdmin('clientId'), wrapRoute(async (req, res) => {
   const client = await Client.findOne({ clientID: req.params.clientId })
     .select('analyticsConfig ga4PropertyId');
   
   if (!client) return res.status(404).json({ error: 'Client not found' });
 
+  const config = client.analyticsConfig ? JSON.parse(JSON.stringify(client.analyticsConfig)) : null;
+  if (config?.googleAnalytics?.apiSecret) {
+    config.googleAnalytics.apiSecret = '[set]';
+  }
+
   res.json({
     success: true,
-    analyticsConfig: client.analyticsConfig
+    analyticsConfig: config,
   });
 }));
 
@@ -1817,8 +1847,17 @@ router.post('/login', loginLimiter, wrapRoute(async (req, res) => {
 
 // Client logout
 router.post('/logout', wrapRoute(async (req, res) => {
-  const token = req.headers.authorization.split(' ')[1];
-  const { decoded } = verifyJwtWithAnySecret(jwt, token);
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const token = auth.split(' ')[1];
+  let decoded;
+  try {
+    ({ decoded } = verifyJwtWithAnySecret(jwt, token));
+  } catch (_err) {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
   const client = await Client.findOne({ clientID: decoded.clientID });
   if (!client) return res.status(400).send('Client not found');
 

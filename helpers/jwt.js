@@ -1,6 +1,11 @@
 const { expressjwt } = require('express-jwt');
 const { getJwtSecret } = require('./jwtSecret');
- 
+
+/**
+ * Global JWT gate for /api/v1.
+ * Only truly public paths are exempt. Everything else must present a valid Bearer JWT;
+ * route-level middleware still enforces tenant ownership / admin / storefront rules.
+ */
 const authJwt = () => {
   const secret = getJwtSecret();
   const api = process.env.API_URL || '/api/v1';
@@ -8,71 +13,65 @@ const authJwt = () => {
   return expressjwt({
     secret,
     algorithms: ['HS256'],
-    isRevoked: isRevoked
+    isRevoked: isRevoked,
   }).unless({
     path: [
-     { url: /\/api\/v1\/emailsub(.*)/, methods: ['POST', 'OPTIONS'] },
-     { url: /\/public\/uploads(.*)/, methods: ['GET', 'OPTIONS'] },
-     { url: /^\/uploads(\/.*)?$/, methods: ['GET', 'HEAD', 'OPTIONS'] },
-     // Customer endpoints use route-level token validation that supports secret fallback.
-     { url: /\/api\/v1\/customer(.*)/, methods: ['GET','POST', 'OPTIONS'] },
-     { url: /\/api\/v1\/b2b\/portal(.*)/, methods: ['GET', 'POST', 'PUT', 'OPTIONS'] },
-     { url: /\/api\/v1\/client(.*)/, methods: ['GET','POST', 'OPTIONS'] },
-     { url: /\/api\/v1\/categories(.*)/, methods: ['GET', 'OPTIONS'] },
-     { url: /\/api\/v1\/tradecation(.*)/, methods: ['GET', 'OPTIONS'] },
-     { url: /\/api\/v1\/membership(.*)/, methods: ['GET', 'OPTIONS'] },
-     { url: /\/api\/v1\/module(.*)/, methods: ['GET', 'OPTIONS'] },
-     { url: /\/api\/v1\/signal(.*)/, methods: ['GET', 'OPTIONS'] },
-     { url: /\/api\/v1\/bookings(.*)/, methods: ['GET', 'OPTIONS'] },
-     { url: /\/api\/v1\/services(.*)/, methods: ['GET', 'OPTIONS'] },
-     { url: /\/api\/v1\/staff(.*)/, methods: ['GET', 'OPTIONS'] },
-     { url: /\/api\/v1\/admin(.*)/, methods: ['GET', 'OPTIONS'] },
-     { url: /\/api\/v1\/users(.*)/, methods:['GET','OPTIONS']},
-     // Public email endpoints only (do not exempt all /email — that would skip JWT globally)
-     { url: new RegExp(`^${apiEsc}/email/subscribe/?$`), methods: ['POST', 'OPTIONS'] },
-     { url: new RegExp(`^${apiEsc}/email/unsubscribe/?$`), methods: ['POST', 'OPTIONS'] },
-     // Public contact form — route-level validateClient supports JWT secret fallback.
-     { url: new RegExp(`^${apiEsc}/email/contact/?$`), methods: ['POST', 'OPTIONS'] },
-     { url: /\/api\/v1\/email\/contact\/?$/, methods: ['POST', 'OPTIONS'] },
-     { url: new RegExp(`^${apiEsc}/email/newsletter/open\\.gif`), methods: ['GET', 'OPTIONS'] },
-     { url: new RegExp(`^${apiEsc}/email/newsletter/unsubscribe`), methods: ['GET', 'OPTIONS'] },
-     { url: /\/api\/v1\/orders(.*)/, methods:['GET','OPTIONS']},
-     { url: /\/api\/v1\/product(.*)/, methods: ['GET'] },
-     { url: /\/api\/v1\/productsales(.*)/, methods: ['GET'] },
-     { url: /\/api\/v1\/resource(.*)/, methods: ['GET'] },
-     { url: /\/api\/v1\/campaigns(.*)/, methods: ['GET','POST'] },
-     { url: new RegExp(`^${apiEsc}/votingcampaigns/public`), methods: ['GET', 'OPTIONS'] },
-     
-     // IMPORTANT: Add this regex for tracking events
-     { url: new RegExp(`^${apiEsc}/events(/.*)?`), methods: ['POST', 'OPTIONS'] },
-     { url: new RegExp(`^${apiEsc}/payments/payfast/itn/?$`), methods: ['POST', 'OPTIONS'] },
-     { url: new RegExp(`^${apiEsc}/saas/billing/payfast/itn/?$`), methods: ['POST', 'OPTIONS'] },
-     { url: new RegExp(`^${apiEsc}/saas/webhooks/whatsapp/?$`), methods: ['GET', 'POST', 'OPTIONS'] },
-     { url: new RegExp(`^${apiEsc}/saas/webhooks/meta-ads/?$`), methods: ['GET', 'POST', 'OPTIONS'] },
-     
-     { url: new RegExp(`^${apiEsc}/public/partnership-pricing/?$`), methods: ['GET', 'OPTIONS'] },
-     { url: new RegExp(`^${apiEsc}/public/partnership-quote/[^/]+/?$`), methods: ['GET', 'PATCH', 'OPTIONS'] },
-     { url: new RegExp(`^${apiEsc}/public/partnership-quote/[^/]+/submit/?$`), methods: ['POST', 'OPTIONS'] },
-     
-     // Keep your existing string paths
-     `${api}/orders/update-order-payment`,
-     `${api}/customer/reset-password`,
-     `${api}/customer/reset-password/:token`,
-     `${api}/customer/verify`,
-     `${api}/customer/verify/:token`,
-     `${api}/users/login`,
-     `${api}/users/register`,
-     `${api}/customer/login`,
-     `${api}/customer/register`,
-     `${api}/customer/registration`,
-     `${api}/client/login`,
-     `${api}/client/register`,
-     { url: new RegExp(`^${apiEsc}/team/reset-password(/.*)?$`), methods: ['POST', 'OPTIONS'] },
-     { url: new RegExp(`^${apiEsc}/team/accept-invite(/.*)?$`), methods: ['GET', 'POST', 'OPTIONS'] },
-     `${api}/discountcode/verify-discount-code`,
-    ]
-  })
-}
+      // Static uploads
+      { url: /\/public\/uploads(.*)/, methods: ['GET', 'OPTIONS'] },
+      { url: /^\/uploads(\/.*)?$/, methods: ['GET', 'HEAD', 'OPTIONS'] },
+
+      // Auth / registration / password flows
+      `${api}/users/login`,
+      `${api}/users/register`,
+      `${api}/customer/login`,
+      `${api}/customer/register`,
+      `${api}/customer/registration`,
+      `${api}/customer/reset-password`,
+      { url: new RegExp(`^${apiEsc}/customer/reset-password(/.*)?$`), methods: ['POST', 'GET', 'OPTIONS'] },
+      { url: new RegExp(`^${apiEsc}/customer/verify(/.*)?$`), methods: ['GET', 'POST', 'OPTIONS'] },
+      `${api}/client/login`,
+      `${api}/client/register`,
+      { url: new RegExp(`^${apiEsc}/team/reset-password(/.*)?$`), methods: ['POST', 'OPTIONS'] },
+      { url: new RegExp(`^${apiEsc}/team/accept-invite(/.*)?$`), methods: ['GET', 'POST', 'OPTIONS'] },
+
+      // Public client storefront helpers (no secrets)
+      { url: new RegExp(`^${apiEsc}/client/[^/]+/whatsapp/?$`), methods: ['GET', 'OPTIONS'] },
+      // Unauthenticated GET /client/:id returns public fields only (handled in route)
+      { url: new RegExp(`^${apiEsc}/client/[^/]+/?$`), methods: ['GET', 'OPTIONS'] },
+
+      // Public email / newsletter
+      { url: /\/api\/v1\/emailsub\/(subscribe|unsubscribe)\/?$/, methods: ['POST', 'OPTIONS'] },
+      { url: new RegExp(`^${apiEsc}/email/subscribe/?$`), methods: ['POST', 'OPTIONS'] },
+      { url: new RegExp(`^${apiEsc}/email/unsubscribe/?$`), methods: ['POST', 'OPTIONS'] },
+      { url: new RegExp(`^${apiEsc}/email/contact/?$`), methods: ['POST', 'OPTIONS'] },
+      { url: /\/api\/v1\/email\/contact\/?$/, methods: ['POST', 'OPTIONS'] },
+      { url: new RegExp(`^${apiEsc}/email/newsletter/open\\.gif`), methods: ['GET', 'OPTIONS'] },
+      { url: new RegExp(`^${apiEsc}/email/newsletter/unsubscribe`), methods: ['GET', 'OPTIONS'] },
+
+      // Public campaigns / partnership
+      { url: new RegExp(`^${apiEsc}/campaigns/public(/.*)?$`), methods: ['GET', 'OPTIONS'] },
+      { url: new RegExp(`^${apiEsc}/votingcampaigns/public`), methods: ['GET', 'POST', 'OPTIONS'] },
+      { url: new RegExp(`^${apiEsc}/public/partnership-pricing/?$`), methods: ['GET', 'OPTIONS'] },
+      { url: new RegExp(`^${apiEsc}/public/partnership-quote/[^/]+/?$`), methods: ['GET', 'PATCH', 'OPTIONS'] },
+      { url: new RegExp(`^${apiEsc}/public/partnership-quote/[^/]+/submit/?$`), methods: ['POST', 'OPTIONS'] },
+
+      // Tracking ingest (no JWT; rate-limited separately)
+      { url: new RegExp(`^${apiEsc}/events(/.*)?$`), methods: ['POST', 'OPTIONS'] },
+      { url: new RegExp(`^${apiEsc}/events/health/?$`), methods: ['GET', 'OPTIONS'] },
+
+      // Payment / Meta webhooks
+      { url: new RegExp(`^${apiEsc}/payments/payfast/itn/?$`), methods: ['POST', 'OPTIONS'] },
+      { url: new RegExp(`^${apiEsc}/saas/billing/payfast/itn/?$`), methods: ['POST', 'OPTIONS'] },
+      { url: new RegExp(`^${apiEsc}/saas/webhooks/whatsapp/?$`), methods: ['GET', 'POST', 'OPTIONS'] },
+      { url: new RegExp(`^${apiEsc}/saas/webhooks/meta-ads/?$`), methods: ['GET', 'POST', 'OPTIONS'] },
+      `${api}/orders/update-order-payment`,
+      { url: new RegExp(`^${apiEsc}/bookings/[^/]+/payment-confirmation/?$`), methods: ['POST', 'OPTIONS'] },
+
+      // Storefront discount check
+      `${api}/discountcode/verify-discount-code`,
+    ],
+  });
+};
 
 async function isRevoked(req, token) {
   // Skip revocation check for password reset routes

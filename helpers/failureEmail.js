@@ -214,6 +214,14 @@ async function globalErrorHandler(err, req, res, next) {
 
     if (res.headersSent) return next(err);
 
+    // express-jwt auth failures — expected client errors, not incidents
+    if (err && (err.name === 'UnauthorizedError' || err.status === 401 || err.statusCode === 401)) {
+      return res.status(401).json({
+        success: false,
+        message: err.message || 'The user is not authorized',
+      });
+    }
+
     const resBody = typeof res.__getCapturedBody === 'function' ? res.__getCapturedBody() : undefined;
     const subject = `Uncaught Exception — ${req.method} ${req.originalUrl}`;
     const html = formatErrorHtml({ req, resBody, err });
