@@ -51,7 +51,18 @@ class BillingService {
     const client = await Client.findOne({ clientID: clientId }).select('tier').lean();
     const tier = client?.tier || 'bronze';
     const rule = await PricingService.getActiveRule(service, messageType, tier);
-    const creditsToDeduct = PricingService.computeCredits(rule, units);
+
+    let creditsToDeduct = PricingService.computeCredits(rule, units);
+    let volumeMeta = {};
+    if (service === 'whatsapp') {
+      const priced = await PricingService.computeWhatsAppCredits(clientId, messageType, units, rule);
+      creditsToDeduct = priced.credits;
+      volumeMeta = {
+        volumeApplied: priced.volumeApplied,
+        monthCountBefore: priced.monthCount,
+        unitRate: priced.unitRate,
+      };
+    }
 
     // Platform account: track usage for ops/reporting but do not require prepaid credits.
     if (clientId === 'Khana') {
@@ -73,6 +84,7 @@ class BillingService {
           clientTier: tier,
           platformExempt: true,
           listCredits: creditsToDeduct,
+          ...volumeMeta,
         },
       });
       return { account, transaction: txn, rule, deductedCredits: 0 };
@@ -100,7 +112,15 @@ class BillingService {
             method: 'internal',
             reference: sourceRef,
             status: 'success',
-            metadata: { ...metadata, service, messageType, units, pricingRuleId: String(rule._id), clientTier: tier },
+            metadata: {
+              ...metadata,
+              service,
+              messageType,
+              units,
+              pricingRuleId: String(rule._id),
+              clientTier: tier,
+              ...volumeMeta,
+            },
           },
         ],
         { session }

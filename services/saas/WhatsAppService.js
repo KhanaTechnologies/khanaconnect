@@ -343,10 +343,8 @@ class WhatsAppService {
   /** Ensure the billed client has enough SaaS credits for one WhatsApp unit. */
   static async assertCreditsAvailable(clientId, messageType = 'utility') {
     if (!clientId || clientId === 'Khana') return;
-    const client = await Client.findOne({ clientID: clientId }).select('tier').lean();
-    const tier = client?.tier || 'bronze';
-    const rule = await PricingService.getActiveRule('whatsapp', messageType, tier);
-    const need = PricingService.computeCredits(rule, 1);
+    const priced = await PricingService.computeWhatsAppCredits(clientId, messageType, 1);
+    const need = priced.credits;
     const account = await BillingService.ensureAccount(clientId);
     if (Number(account.credit_balance || 0) < need) {
       throw httpError(

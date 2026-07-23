@@ -9,6 +9,7 @@ const WhatsAppService = require('../services/saas/WhatsAppService');
 const WhatsAppInboxService = require('../services/saas/WhatsAppInboxService');
 const AdsService = require('../services/saas/AdsService');
 const BillingService = require('../services/saas/BillingService');
+const PricingService = require('../services/saas/PricingService');
 const PayFastCreditsService = require('../services/saas/PayFastCreditsService');
 const SaasWhatsAppAccount = require('../models/SaasWhatsAppAccount');
 const SaasWhatsAppWebhookEvent = require('../models/SaasWhatsAppWebhookEvent');
@@ -517,6 +518,22 @@ router.get('/billing', requireRoles('owner', 'manager', 'billing_admin', 'viewer
     .sort({ updated_at: -1 })
     .lean();
 
+  const volumeSchedule = PricingService.getWhatsAppVolumeSchedule();
+  let utilityCreditsPerMessage = utilityRule
+    ? Number(
+        (
+          Number(utilityRule.cost_per_unit || 0) *
+          (1 + Number(utilityRule.markup_percentage || 0) / 100)
+        ).toFixed(4)
+      )
+    : null;
+  try {
+    const priced = await PricingService.computeWhatsAppCredits(clientId, 'utility', 1, utilityRule);
+    utilityCreditsPerMessage = priced.unitRate;
+  } catch {
+    /* keep list price */
+  }
+
   res.json({
     ok: true,
     data: {
@@ -525,14 +542,9 @@ router.get('/billing', requireRoles('owner', 'manager', 'billing_admin', 'viewer
       whatsapp: {
         usage: whatsappUsage,
         recentDeductions: whatsappDeductions.slice(0, 10),
-        utilityCreditsPerMessage: utilityRule
-          ? Number(
-              (
-                Number(utilityRule.cost_per_unit || 0) *
-                (1 + Number(utilityRule.markup_percentage || 0) / 100)
-              ).toFixed(4)
-            )
-          : null,
+        utilityCreditsPerMessage,
+        utilityVolumeTiers: volumeSchedule.utility,
+        volumeSchedule: volumeSchedule.descriptions,
       },
     },
   });
@@ -821,6 +833,7 @@ router.get('/admin/whatsapp-usage', adminOnly, wrapRoute(async (req, res) => {
         createdAt: e.created_at,
       })),
       pricingRules,
+      volumeSchedule: PricingService.getWhatsAppVolumeSchedule(),
     },
   });
 }));

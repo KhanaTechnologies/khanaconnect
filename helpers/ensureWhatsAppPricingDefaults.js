@@ -1,77 +1,44 @@
 const SaasPricingRule = require('../models/SaasPricingRule');
+const { FLAT_RATES, VOLUME_TIERS, describeVolumeTiers } = require('./whatsappVolumePricing');
 
 /**
  * WhatsApp credit pricing (1 credit ≈ R1 unless CREDITS_PER_ZAR overrides top-ups).
  *
- * Meta bills the WABA in USD. Defaults use observed / SA-ish Meta rates × USD→ZAR × markup
- * so Khana covers Meta when sending on the platform number, plus platform margin.
- *
- * Env overrides:
- *   WHATSAPP_USD_ZAR_RATE     default 18.5
- *   WHATSAPP_PRICE_MARKUP     default 3 (multiplier on Meta ZAR cost)
- *   WHATSAPP_META_USD_UTILITY / _AUTH / _MARKETING  (optional USD per message)
+ * v3: Client-facing rates — utility/auth R1 with monthly volume discounts;
+ * marketing flat R2.25; service R0.20 platform fee.
  */
-const PRICING_SEED_VERSION = 2;
-
-function usdZarRate() {
-  const n = Number(process.env.WHATSAPP_USD_ZAR_RATE || 18.5);
-  return Number.isFinite(n) && n > 0 ? n : 18.5;
-}
-
-function priceMarkup() {
-  const n = Number(process.env.WHATSAPP_PRICE_MARKUP || 3);
-  return Number.isFinite(n) && n > 0 ? n : 3;
-}
-
-function metaUsd(envKey, fallback) {
-  const n = Number(process.env[envKey]);
-  return Number.isFinite(n) && n >= 0 ? n : fallback;
-}
-
-function creditsFromMetaUsd(usdPerMessage) {
-  const zar = Number(usdPerMessage) * usdZarRate();
-  const withMarkup = zar * priceMarkup();
-  // Round up to nearest 0.05 credit so we never under-cover Meta FX drift.
-  return Math.ceil(withMarkup * 20) / 20;
-}
+const PRICING_SEED_VERSION = 3;
 
 function buildDefaultWhatsAppRules() {
-  // User Meta estimate: $0.03 utility for 3 msgs ≈ $0.01 each.
-  // Marketing / auth use published SA-ish USD ballparks; tune via env if Meta changes rates.
-  const utilityUsd = metaUsd('WHATSAPP_META_USD_UTILITY', 0.01);
-  const authUsd = metaUsd('WHATSAPP_META_USD_AUTH', 0.01);
-  const marketingUsd = metaUsd('WHATSAPP_META_USD_MARKETING', 0.04);
-  const rate = usdZarRate();
-  const markup = priceMarkup();
+  const utilityTiers = describeVolumeTiers('utility').join('; ');
+  const authTiers = describeVolumeTiers('auth').join('; ');
 
   return [
     {
       message_type: 'utility',
-      cost_per_unit: creditsFromMetaUsd(utilityUsd),
+      cost_per_unit: VOLUME_TIERS.utility[0].cost,
       markup_percentage: 0,
       notes:
-        `v${PRICING_SEED_VERSION}: Meta ~$${utilityUsd}/msg × R${rate}/$ × ${markup}x markup (orders, bookings, status). Covers USD Meta bill when using Khana WABA.`,
+        `v${PRICING_SEED_VERSION}: Client rate starts at ${VOLUME_TIERS.utility[0].cost} credit/msg (orders, bookings, status). Volume: ${utilityTiers}.`,
     },
     {
       message_type: 'auth',
-      cost_per_unit: creditsFromMetaUsd(authUsd),
+      cost_per_unit: VOLUME_TIERS.auth[0].cost,
       markup_percentage: 0,
       notes:
-        `v${PRICING_SEED_VERSION}: Meta ~$${authUsd}/msg × R${rate}/$ × ${markup}x markup (OTP / verification).`,
+        `v${PRICING_SEED_VERSION}: Client rate starts at ${VOLUME_TIERS.auth[0].cost} credit/msg (OTP / verification). Volume: ${authTiers}.`,
     },
     {
       message_type: 'marketing',
-      cost_per_unit: creditsFromMetaUsd(marketingUsd),
+      cost_per_unit: FLAT_RATES.marketing,
       markup_percentage: 0,
-      notes:
-        `v${PRICING_SEED_VERSION}: Meta ~$${marketingUsd}/msg × R${rate}/$ × ${markup}x markup (promotional templates).`,
+      notes: `v${PRICING_SEED_VERSION}: Flat ${FLAT_RATES.marketing} credits/msg (promotional templates).`,
     },
     {
       message_type: 'service',
-      // Meta service messages are typically free; small platform fee only.
-      cost_per_unit: 0.2,
+      cost_per_unit: FLAT_RATES.service,
       markup_percentage: 0,
-      notes: `v${PRICING_SEED_VERSION}: Platform fee only (Meta service messages usually $0).`,
+      notes: `v${PRICING_SEED_VERSION}: Platform fee only ${FLAT_RATES.service} credits (Meta service messages usually $0).`,
     },
   ];
 }
@@ -129,7 +96,7 @@ async function ensureWhatsAppPricingDefaults() {
   if (created > 0 || updated > 0) {
     console.log(
       `[whatsapp] Pricing defaults v${PRICING_SEED_VERSION}: created=${created} updated=${updated} ` +
-        `(USD/ZAR=${usdZarRate()} markup=${priceMarkup()}x utility=${rules[0].cost_per_unit} credits)`
+        `(utility=${rules[0].cost_per_unit} → volume tiers; marketing=${rules[2].cost_per_unit})`
     );
   }
 }
