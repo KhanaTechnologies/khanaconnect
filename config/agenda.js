@@ -7,6 +7,7 @@ const JOB_NAMES = {
   EVENT_SINGLE: 'event-processing:single',
   SAAS_USAGE: 'saas-usage-billing',
   B2B_WAREHOUSE_LOW_STOCK: 'b2b-warehouse:low-stock-check',
+  WHATSAPP_AUTO_REPLY: 'whatsapp-inbox:auto-reply',
 };
 
 let agendaInstance = null;
@@ -103,6 +104,7 @@ function registerJobHandlers(agenda) {
     markSaasUsageBillingFailed,
   } = require('../jobs/handlers/processSaasUsageBilling');
   const { processB2bWarehouseLowStock } = require('../jobs/handlers/processB2bWarehouseLowStock');
+  const { processWhatsAppAutoReply } = require('../jobs/handlers/processWhatsAppAutoReply');
 
   agenda.define(
     JOB_NAMES.EVENT_BATCH,
@@ -196,6 +198,12 @@ function registerJobHandlers(agenda) {
     JOB_NAMES.B2B_WAREHOUSE_LOW_STOCK,
     { concurrency: 1, lockLifetime: 15 * 60 * 1000 },
     async () => processB2bWarehouseLowStock()
+  );
+
+  agenda.define(
+    JOB_NAMES.WHATSAPP_AUTO_REPLY,
+    { concurrency: 3, lockLifetime: 5 * 60 * 1000 },
+    async (job) => processWhatsAppAutoReply(job.attrs.data || {})
   );
 
   agenda.on('start', (job) => {

@@ -244,7 +244,7 @@ class WhatsAppInboxService {
 
       try {
         // Do not mix contact_name in both $set and $setOnInsert — Mongo rejects that conflict.
-        await SaasWhatsAppMessage.updateOne(
+        const upsert = await SaasWhatsAppMessage.updateOne(
           { wamid },
           {
             $setOnInsert: {
@@ -270,7 +270,21 @@ class WhatsAppInboxService {
             { $set: { contact_name: contactName } }
           );
         }
-        ingested += 1;
+        if (upsert.upsertedCount > 0 || upsert.upsertedId) {
+          ingested += 1;
+          try {
+            const WhatsAppAutoResponderService = require('./WhatsAppAutoResponderService');
+            await WhatsAppAutoResponderService.maybeScheduleForInbound({
+              clientId: threadClientId,
+              contactWaId: from,
+              wamid,
+              body,
+              type,
+            });
+          } catch (autoErr) {
+            console.warn('[whatsapp inbox] auto-reply schedule skipped:', autoErr.message);
+          }
+        }
       } catch (e) {
         if (e?.code !== 11000) {
           console.error('[whatsapp inbox] ingest inbound failed:', e.message);
