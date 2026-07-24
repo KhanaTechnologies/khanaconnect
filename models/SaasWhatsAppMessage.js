@@ -32,6 +32,9 @@ const saasWhatsAppMessageSchema = new mongoose.Schema(
     timestamp: { type: Date, required: true, index: true },
     raw: { type: mongoose.Schema.Types.Mixed, default: null },
     read_at: { type: Date, default: null },
+    /** Soft-delete from Khana inbox only (Meta Cloud API cannot delete chat messages). */
+    deleted_at: { type: Date, default: null, index: true },
+    deleted_by: { type: String, default: '', trim: true },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );

@@ -134,6 +134,8 @@ function serializeInboxMessage(m) {
   };
 }
 
+const NOT_DELETED = { deleted_at: null };
+
 class WhatsAppInboxService {
   static async resolveClientIdForPhoneNumberId(phoneNumberId) {
     const id = String(phoneNumberId || '').trim();
@@ -388,12 +390,13 @@ class WhatsAppInboxService {
   static async listThreads(clientId, { limit = 40, q = '' } = {}) {
     const lim = Math.min(Math.max(Number(limit) || 40, 1), 100);
     const query = String(q || '').trim();
-    const match = { client_id: clientId };
+    const match = { client_id: clientId, ...NOT_DELETED };
 
     if (query) {
       const rx = new RegExp(escapeRegex(query), 'i');
       const contactIds = await SaasWhatsAppMessage.distinct('contact_wa_id', {
         client_id: clientId,
+        deleted_at: null,
         $or: [{ contact_wa_id: rx }, { contact_name: rx }, { body: rx }],
       });
       match.contact_wa_id = { $in: contactIds.length ? contactIds : ['__none__'] };
@@ -434,11 +437,13 @@ class WhatsAppInboxService {
           contact_wa_id: row.contact_wa_id,
           direction: 'inbound',
           read_at: null,
+          deleted_at: null,
         });
         const lastInbound = await SaasWhatsAppMessage.findOne({
           client_id: clientId,
           contact_wa_id: row.contact_wa_id,
           direction: 'inbound',
+          deleted_at: null,
         })
           .sort({ timestamp: -1 })
           .select('timestamp')
@@ -449,6 +454,7 @@ class WhatsAppInboxService {
           client_id: clientId,
           contact_wa_id: row.contact_wa_id,
           contact_name: { $exists: true, $nin: [null, ''] },
+          deleted_at: null,
         })
           .sort({ timestamp: -1 })
           .select('contact_name')
@@ -495,11 +501,13 @@ class WhatsAppInboxService {
       client_id: clientId,
       direction: 'inbound',
       read_at: null,
+      deleted_at: null,
     });
     const latest = await SaasWhatsAppMessage.findOne({
       client_id: clientId,
       direction: 'inbound',
       read_at: null,
+      deleted_at: null,
     })
       .sort({ timestamp: -1 })
       .select('contact_wa_id contact_name body timestamp')
@@ -526,13 +534,14 @@ class WhatsAppInboxService {
     const messages = await SaasWhatsAppMessage.find({
       client_id: clientId,
       contact_wa_id: contact,
+      deleted_at: null,
     })
       .sort({ timestamp: 1 })
       .limit(lim)
       .lean();
 
     await SaasWhatsAppMessage.updateMany(
-      { client_id: clientId, contact_wa_id: contact, direction: 'inbound', read_at: null },
+      { client_id: clientId, contact_wa_id: contact, direction: 'inbound', read_at: null, deleted_at: null },
       { $set: { read_at: new Date() } }
     );
 
@@ -571,7 +580,7 @@ class WhatsAppInboxService {
     const id = String(wamid || '').trim();
     if (!id) throw httpError('Message id is required', 400);
 
-    const message = await SaasWhatsAppMessage.findOne({ wamid: id, client_id: clientId }).lean();
+    const message = await SaasWhatsAppMessage.findOne({ wamid: id, client_id: clientId, deleted_at: null }).lean();
     if (!message) throw httpError('Message not found', 404);
 
     const mediaId = String(message.media_id || extractMediaIdFromRaw(message.raw) || '').trim();
@@ -638,6 +647,32 @@ class WhatsAppInboxService {
         message.type === 'document'
           ? String(message.raw?.document?.filename || `whatsapp-${mediaId}`)
           : `whatsapp-${message.type}-${mediaId}`,
+    };
+  }
+
+  /**
+   * Soft-delete a message from the Khana inbox only.
+   * Meta Cloud API cannot remove messages from the customer's WhatsApp chat.
+   */
+  static async deleteMessage(clientId, wamid, { deletedBy = '' } = {}) {
+    const id = String(wamid || '').trim();
+    if (!id) throw httpError('Message id is required', 400);
+
+    const message = await SaasWhatsAppMessage.findOne({
+      wamid: id,
+      client_id: clientId,
+      deleted_at: null,
+    });
+    if (!message) throw httpError('Message not found', 404);
+
+    message.deleted_at = new Date();
+    message.deleted_by = String(deletedBy || '').slice(0, 120);
+    await message.save();
+
+    return {
+      wamid: message.wamid,
+      contact_wa_id: message.contact_wa_id,
+      deleted_at: message.deleted_at,
     };
   }
 
