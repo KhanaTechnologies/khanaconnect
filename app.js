@@ -62,17 +62,32 @@ const ALLOWED_ORIGINS = [
 
 // Rate limiting configuration
 const _apiPathPrefix = (process.env.API_URL || '/api/v1').replace(/\/$/, '');
-function skipEmailMailboxReads(req) {
+
+/** Dashboard UIs poll these read endpoints; don't burn the global IP quota on them. */
+function isDashboardPollGet(req) {
+  if (req.method !== 'GET') return false;
   const p = typeof req.path === 'string' ? req.path : '';
+  const full = typeof req.originalUrl === 'string' ? req.originalUrl.split('?')[0] : p;
   return (
-    req.method === 'GET' &&
-    (p === `${_apiPathPrefix}/email` || p.startsWith(`${_apiPathPrefix}/email/`))
+    p === `${_apiPathPrefix}/email` ||
+    p.startsWith(`${_apiPathPrefix}/email/`) ||
+    p === '/email' ||
+    p.startsWith('/email/') ||
+    full.includes('/saas/whatsapp/inbox') ||
+    p.includes('/saas/whatsapp/inbox') ||
+    p.startsWith('/whatsapp/inbox') ||
+    full.includes('/whatsapp/inbox')
   );
+}
+
+function skipEmailMailboxReads(req) {
+  return isDashboardPollGet(req);
 }
 
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  // Dashboard + WhatsApp inbox poll often; 100 was blocking legitimate replies.
+  max: 600,
   message: { error: 'Too many requests from this IP, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
@@ -89,15 +104,12 @@ const authLimiter = rateLimit({
 
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 200,
+  max: 800,
   message: { error: 'Too many API requests, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
-  // Mailbox UI issues parallel GETs (list + thread + stats). Exempt read-only /email routes from this global cap.
-  skip: (req) =>
-    req.method === 'GET' &&
-    typeof req.path === 'string' &&
-    (req.path === '/email' || req.path.startsWith('/email/')),
+  // Mailbox + WhatsApp inbox issue frequent parallel GETs — exempt those reads from this cap.
+  skip: isDashboardPollGet,
 });
 
 // Tracking endpoint specific rate limiter
