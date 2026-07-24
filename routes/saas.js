@@ -346,6 +346,19 @@ router.put('/whatsapp/inbox/threads/:contactWaId/assign', requireRoles('owner', 
   res.json({ ok: true, data });
 }));
 
+router.post(
+  '/whatsapp/inbox/contacts/:contactWaId/customer',
+  adminOnly,
+  wrapRoute(async (req, res) => {
+    const data = await WhatsAppInboxService.createCustomerFromContact(
+      req.tenant.clientId,
+      req.params.contactWaId,
+      req.body || {}
+    );
+    res.status(201).json({ ok: true, data });
+  })
+);
+
 router.get('/whatsapp/inbox/threads/:contactWaId', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
   const limit = Number(req.query.limit) || 100;
   const thread = await WhatsAppInboxService.getThread(req.tenant.clientId, req.params.contactWaId, { limit });

@@ -1,5 +1,7 @@
 const axios = require('axios');
 const FormData = require('form-data');
+const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 const SaasWhatsAppMessage = require('../../models/SaasWhatsAppMessage');
 const SaasWhatsAppAccount = require('../../models/SaasWhatsAppAccount');
 const SaasWhatsAppWebhookEvent = require('../../models/SaasWhatsAppWebhookEvent');
@@ -442,6 +444,17 @@ class WhatsAppInboxService {
           .select('timestamp')
           .lean();
 
+        // Prefer a non-empty WhatsApp profile name (outbound rows often store blank contact_name).
+        const named = await SaasWhatsAppMessage.findOne({
+          client_id: clientId,
+          contact_wa_id: row.contact_wa_id,
+          contact_name: { $exists: true, $nin: [null, ''] },
+        })
+          .sort({ timestamp: -1 })
+          .select('contact_name')
+          .lean();
+        const waName = String(named?.contact_name || row.contact_name || '').trim();
+
         const windowOpenUntil = lastInbound?.timestamp
           ? new Date(new Date(lastInbound.timestamp).getTime() + SESSION_HOURS * 60 * 60 * 1000)
           : null;
@@ -451,7 +464,8 @@ class WhatsAppInboxService {
 
         return {
           contact_wa_id: row.contact_wa_id,
-          contact_name: customer?.name || row.contact_name || '',
+          // Always the WhatsApp profile / set name — never overwrite with CRM customer name.
+          contact_name: waName,
           phone_number_id: row.phone_number_id,
           last_body: row.last_body || '',
           last_direction: row.last_direction,
@@ -528,12 +542,13 @@ class WhatsAppInboxService {
       : null;
     const canReplyFreeform = !!(windowOpenUntil && windowOpenUntil > new Date());
     const customer = await this.resolveCustomerForContact(clientId, contact);
-    const waName = messages.find((m) => m.contact_name)?.contact_name || '';
+    const namedMsg = [...messages].reverse().find((m) => String(m.contact_name || '').trim());
+    const waName = String(namedMsg?.contact_name || '').trim();
     const meta = await SaasWhatsAppThread.findOne({ client_id: clientId, contact_wa_id: contact }).lean();
 
     return {
       contact_wa_id: contact,
-      contact_name: customer?.name || waName || '',
+      contact_name: waName,
       can_reply_freeform: canReplyFreeform,
       window_open_until: windowOpenUntil,
       customer,
@@ -933,6 +948,69 @@ class WhatsAppInboxService {
     const res = await SaasWhatsAppCannedReply.deleteOne({ _id: id, client_id: clientId });
     if (!res.deletedCount) throw httpError('Canned reply not found', 404);
     return { ok: true };
+  }
+
+  /**
+   * Create a CRM customer from a WhatsApp conversation number (platform admin).
+   * Uses WhatsApp profile name as a default until admin edits customer details.
+   */
+  static async createCustomerFromContact(clientId, contactWaId, body = {}) {
+    const contact = normalizePhoneE164(contactWaId) || String(contactWaId || '').replace(/\D/g, '');
+    if (!contact) throw httpError('Invalid contact WhatsApp number', 400);
+
+    const existing = await this.resolveCustomerForContact(clientId, contact);
+    if (existing) {
+      throw httpError('This WhatsApp number is already linked to a customer', 409, {
+        customer: existing,
+      });
+    }
+
+    let first = String(body.first_name || body.firstName || '').trim();
+    let last = String(body.last_name || body.lastName || '').trim();
+    const waName = String(body.contact_name || body.contactName || '').trim();
+
+    if (!first && !last && waName) {
+      const parts = waName.split(/\s+/).filter(Boolean);
+      first = parts[0] || '';
+      last = parts.slice(1).join(' ');
+    }
+    if (!first) first = 'WhatsApp';
+    if (!last) last = 'Customer';
+
+    let email = String(body.email || body.emailAddress || '').trim().toLowerCase();
+    if (!email) {
+      email = `wa.${contact}@customers.local`;
+    } else {
+      // Ensure email is unique for this tenant (emails are encrypted — scan matches).
+      const peers = await Customer.find({ clientID: clientId }).select('emailAddress').limit(5000);
+      for (const p of peers) {
+        if (String(p.emailAddress || '').toLowerCase() === email) {
+          throw httpError('A customer with this email already exists', 409);
+        }
+      }
+    }
+
+    const phoneStored = contact.startsWith('+') ? contact : `+${contact}`;
+    const passwordHash = bcrypt.hashSync(crypto.randomBytes(24).toString('hex'), 10);
+
+    const customer = new Customer({
+      clientID: clientId,
+      customerFirstName: first.slice(0, 80),
+      customerLastName: last.slice(0, 80),
+      emailAddress: email,
+      phoneNumber: phoneStored,
+      passwordHash,
+      isVerified: true,
+      customerSince: new Date(),
+      lastActivity: new Date(),
+    });
+    await customer.save();
+
+    return {
+      customer: customerProfileFromDoc(customer),
+      contact_wa_id: contact,
+      contact_name: waName,
+    };
   }
 
   static async getContactContext(clientId, contactWaId) {
