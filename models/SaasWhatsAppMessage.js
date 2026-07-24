@@ -20,6 +20,8 @@ const saasWhatsAppMessageSchema = new mongoose.Schema(
     },
     body: { type: String, default: '' },
     template_name: { type: String, default: '' },
+    /** Meta Cloud API media id (audio/image/video/document) when present */
+    media_id: { type: String, default: '', trim: true, index: true },
     status: {
       type: String,
       enum: ['received', 'pending', 'sent', 'delivered', 'read', 'failed'],

@@ -352,6 +352,17 @@ router.get('/whatsapp/inbox/threads/:contactWaId', requireRoles('owner', 'manage
   res.json({ ok: true, data: thread });
 }));
 
+router.get('/whatsapp/inbox/messages/:wamid/media', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const media = await WhatsAppInboxService.downloadMessageMedia(req.tenant.clientId, req.params.wamid);
+  res.setHeader('Content-Type', media.mimeType);
+  res.setHeader('Content-Length', media.buffer.length);
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  if (media.filename) {
+    res.setHeader('Content-Disposition', `inline; filename="${String(media.filename).replace(/"/g, '')}"`);
+  }
+  res.send(media.buffer);
+}));
+
 router.post('/whatsapp/inbox/reply', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
   const to = req.body?.to || req.body?.contact_wa_id || req.body?.contactWaId;
   const text = req.body?.text || req.body?.message || req.body?.body;

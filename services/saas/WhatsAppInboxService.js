@@ -88,7 +88,10 @@ function extractInboundBody(msg) {
     return { type: 'interactive', body: String(title) };
   }
   if (type === 'image') return { type, body: String(msg.image?.caption || '[Image]') };
-  if (type === 'audio') return { type, body: '[Audio]' };
+  if (type === 'audio') {
+    const voice = msg.audio?.voice === true;
+    return { type, body: voice ? '[Voice note]' : '[Audio]' };
+  }
   if (type === 'video') return { type, body: String(msg.video?.caption || '[Video]') };
   if (type === 'document') return { type, body: String(msg.document?.filename || msg.document?.caption || '[Document]') };
   if (type === 'sticker') return { type, body: '[Sticker]' };
@@ -99,6 +102,34 @@ function extractInboundBody(msg) {
   }
   if (type === 'reaction') return { type, body: String(msg.reaction?.emoji || '[Reaction]') };
   return { type: 'unknown', body: `[${type}]` };
+}
+
+function extractMediaIdFromRaw(msg) {
+  if (!msg || typeof msg !== 'object') return '';
+  const type = String(msg.type || '');
+  const node = type && msg[type] && typeof msg[type] === 'object' ? msg[type] : null;
+  return String(node?.id || '').trim();
+}
+
+function serializeInboxMessage(m) {
+  const mediaId = String(m.media_id || extractMediaIdFromRaw(m.raw) || '').trim();
+  const type = String(m.type || 'text');
+  const mediaTypes = new Set(['image', 'audio', 'video', 'document', 'sticker']);
+  return {
+    _id: m._id,
+    wamid: m.wamid,
+    direction: m.direction,
+    type,
+    body: m.body || '',
+    template_name: m.template_name || '',
+    status: m.status,
+    error: m.error || '',
+    timestamp: m.timestamp,
+    contact_name: m.contact_name || '',
+    read_at: m.read_at || null,
+    media_id: mediaId,
+    has_media: !!(mediaId && mediaTypes.has(type)),
+  };
 }
 
 class WhatsAppInboxService {
@@ -202,6 +233,7 @@ class WhatsAppInboxService {
       }
 
       const { type, body } = extractInboundBody(msg);
+      const mediaId = extractMediaIdFromRaw(msg);
       const tsSec = Number(msg.timestamp);
       const timestamp = Number.isFinite(tsSec) && tsSec > 0 ? new Date(tsSec * 1000) : new Date();
       const contactName = contactNameByWaId[from] || '';
@@ -220,6 +252,7 @@ class WhatsAppInboxService {
               wamid,
               type,
               body,
+              media_id: mediaId,
               status: 'received',
               timestamp,
               raw: msg,
@@ -315,6 +348,7 @@ class WhatsAppInboxService {
     templateName = '',
     status = 'sent',
     raw = null,
+    mediaId = '',
   }) {
     const contact = normalizePhoneE164(to);
     const id = String(wamid || '').trim();
@@ -334,6 +368,7 @@ class WhatsAppInboxService {
             type,
             body: String(body || '').slice(0, 4000),
             template_name: String(templateName || ''),
+            media_id: String(mediaId || '').trim(),
             status,
             timestamp: new Date(),
             raw,
@@ -509,7 +544,85 @@ class WhatsAppInboxService {
             assigned_at: meta.assigned_at,
           }
         : null,
-      messages,
+      messages: messages.map(serializeInboxMessage),
+    };
+  }
+
+  /**
+   * Proxy Meta Cloud API media for inbox playback (audio / image / video / docs).
+   * Media IDs typically expire ~30 days after receipt.
+   */
+  static async downloadMessageMedia(clientId, wamid) {
+    const id = String(wamid || '').trim();
+    if (!id) throw httpError('Message id is required', 400);
+
+    const message = await SaasWhatsAppMessage.findOne({ wamid: id, client_id: clientId }).lean();
+    if (!message) throw httpError('Message not found', 404);
+
+    const mediaId = String(message.media_id || extractMediaIdFromRaw(message.raw) || '').trim();
+    if (!mediaId) throw httpError('This message has no downloadable media', 404);
+
+    let account = null;
+    if (message.phone_number_id) {
+      account = await SaasWhatsAppAccount.findOne({
+        phone_number_id: message.phone_number_id,
+        status: 'active',
+      }).sort({ updated_at: -1 });
+    }
+    if (!account) {
+      account = await this.resolveSendAccount(clientId);
+    }
+    const token = decrypt(account.access_token_encrypted);
+
+    let meta;
+    try {
+      const metaRes = await axios.get(`${WA_API_BASE}/${mediaId}`, {
+        timeout: 20000,
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      meta = metaRes.data;
+    } catch (err) {
+      const data = err?.response?.data;
+      throw httpError(
+        data?.error?.message || 'Could not resolve media from Meta (it may have expired)',
+        err?.response?.status || 502,
+        { meta: data?.error || data || null }
+      );
+    }
+
+    const downloadUrl = String(meta?.url || '').trim();
+    if (!downloadUrl) throw httpError('Meta did not return a media download URL', 502);
+
+    let fileRes;
+    try {
+      fileRes = await axios.get(downloadUrl, {
+        timeout: 60000,
+        responseType: 'arraybuffer',
+        headers: { Authorization: `Bearer ${token}` },
+        maxContentLength: 25 * 1024 * 1024,
+      });
+    } catch (err) {
+      const data = err?.response?.data;
+      throw httpError(
+        data?.error?.message || 'Failed to download media from Meta',
+        err?.response?.status || 502,
+        { meta: data?.error || data || null }
+      );
+    }
+
+    const mimeType =
+      String(meta?.mime_type || fileRes.headers?.['content-type'] || 'application/octet-stream').split(';')[0].trim() ||
+      'application/octet-stream';
+
+    return {
+      buffer: Buffer.from(fileRes.data),
+      mimeType,
+      mediaId,
+      messageType: message.type,
+      filename:
+        message.type === 'document'
+          ? String(message.raw?.document?.filename || `whatsapp-${mediaId}`)
+          : `whatsapp-${message.type}-${mediaId}`,
     };
   }
 
@@ -704,6 +817,7 @@ class WhatsAppInboxService {
       body: preview,
       status: 'sent',
       raw: response.data,
+      mediaId,
     });
 
     return { message: doc, meta: response.data, window_open_until: windowOpenUntil, media_id: mediaId };
