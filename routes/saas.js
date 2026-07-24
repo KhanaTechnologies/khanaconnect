@@ -348,7 +348,7 @@ router.put('/whatsapp/inbox/threads/:contactWaId/assign', requireRoles('owner', 
 
 router.post(
   '/whatsapp/inbox/contacts/:contactWaId/customer',
-  adminOnly,
+  requireRoles('owner', 'manager', 'operator'),
   wrapRoute(async (req, res) => {
     const data = await WhatsAppInboxService.createCustomerFromContact(
       req.tenant.clientId,

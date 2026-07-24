@@ -951,8 +951,8 @@ class WhatsAppInboxService {
   }
 
   /**
-   * Create a CRM customer from a WhatsApp conversation number (platform admin).
-   * Uses WhatsApp profile name as a default until admin edits customer details.
+   * Create a CRM customer from a WhatsApp conversation number.
+   * Owners/managers/operators can save contacts into their customer list.
    */
   static async createCustomerFromContact(clientId, contactWaId, body = {}) {
     const contact = normalizePhoneE164(contactWaId) || String(contactWaId || '').replace(/\D/g, '');
