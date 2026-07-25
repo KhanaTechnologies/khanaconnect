@@ -69,11 +69,22 @@ function escapeRegex(s) {
   return String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+const DEMO_SITE_URL = process.env.PUBLIC_DEMO_URL || 'https://khanatechnologies.co.za/demo';
+
 const DEFAULT_CANNED = [
   { title: 'Thanks', body: 'Thank you for your message — we will get back to you shortly.', shortcut: 'thanks', sort_order: 1 },
   { title: 'Order received', body: 'We have received your order and will update you once it is being prepared.', shortcut: 'order', sort_order: 2 },
   { title: 'Booking confirmed', body: 'Your booking is confirmed. Please reply if you need to reschedule.', shortcut: 'booking', sort_order: 3 },
   { title: 'More info', body: 'Could you please share a bit more detail so we can help you better?', shortcut: 'info', sort_order: 4 },
+  {
+    title: 'Live demo tour',
+    body:
+      'We have a live interactive demo you can explore on your own — owner dashboard, website storefront, customer account, and more.\n\n' +
+      `Take the tour here: ${DEMO_SITE_URL}\n\n` +
+      'No login needed. When you’re ready, reply and we can book a short call.',
+    shortcut: 'demo',
+    sort_order: 5,
+  },
 ];
 
 function extractInboundBody(msg) {
@@ -1132,6 +1143,13 @@ class WhatsAppInboxService {
         DEFAULT_CANNED.map((r) => ({ ...r, client_id: clientId }))
       );
       rows = await SaasWhatsAppCannedReply.find({ client_id: clientId }).sort({ sort_order: 1, title: 1 }).lean();
+    } else {
+      // Ensure newer defaults (e.g. live demo) exist for accounts that already had canned replies.
+      const demoDefault = DEFAULT_CANNED.find((r) => r.shortcut === 'demo');
+      if (demoDefault && !rows.some((r) => String(r.shortcut || '') === 'demo')) {
+        await SaasWhatsAppCannedReply.create({ ...demoDefault, client_id: clientId });
+        rows = await SaasWhatsAppCannedReply.find({ client_id: clientId }).sort({ sort_order: 1, title: 1 }).lean();
+      }
     }
     return rows.map((r) => ({
       id: String(r._id),
