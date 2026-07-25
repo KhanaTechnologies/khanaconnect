@@ -717,6 +717,37 @@ class WhatsAppInboxService {
     };
   }
 
+  /**
+   * Soft-delete every message in a conversation (inbox-only).
+   * Does not remove anything from the customer's WhatsApp phone.
+   */
+  static async deleteThread(clientId, contactWaId, { deletedBy = '' } = {}) {
+    const contact = normalizePhoneE164(contactWaId) || String(contactWaId || '').replace(/\D/g, '');
+    if (!contact) throw httpError('Contact phone is required', 400);
+
+    const now = new Date();
+    const by = String(deletedBy || '').slice(0, 120);
+    const result = await SaasWhatsAppMessage.updateMany(
+      {
+        client_id: clientId,
+        contact_wa_id: contact,
+        deleted_at: null,
+      },
+      {
+        $set: {
+          deleted_at: now,
+          deleted_by: by,
+        },
+      }
+    );
+
+    return {
+      contact_wa_id: contact,
+      deleted_count: Number(result.modifiedCount || 0),
+      deleted_at: now,
+    };
+  }
+
   static async assertFreeformWindow(clientId, e164) {
     // Prefer same-tenant inbound; fall back to any inbound on this contact
     // (shared WABA may store the message under a reattributed client_id).

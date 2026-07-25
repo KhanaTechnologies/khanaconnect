@@ -18,19 +18,27 @@ const PLATFORM =
 
 
 
+const ROLE =
+
+  'We’re not a one-off website freelancer — we partner with your business to build and run the full system so customers, bookings/orders, and WhatsApp stay connected.';
+
+
+
 const CLOSE =
 
-  '\n\nReply with:\n' +
+  '\n\nTo see if we’re a fit, reply with:\n' +
 
   '1) Business name\n' +
 
   '2) What you do\n' +
 
-  '3) Are you interested in seeing how this could help? (yes/no)\n' +
+  '3) Are you interested in a short demo? (yes/no)\n' +
 
-  '4) How would you like us to help? (website / bookings / orders / WhatsApp / not sure)\n\n' +
+  '4) How would you like us to help? (website / bookings / orders / WhatsApp / not sure)\n' +
 
-  'If you’re interested, I’ll book you a short demo of the full system.';
+  '5) Do you want the full connected system, or only a simple page?\n\n' +
+
+  'If you’re looking for the full system and you’re interested, I’ll book the demo.';
 
 
 
@@ -62,7 +70,9 @@ const DEFAULT_RULES = [
 
       'We don’t do blank free trials because every business needs custom setup (domain, website, bookings/orders, WhatsApp, etc).\n\n' +
 
-      'What we can do is a quick live demo of the full system first. If it fits, we start setup properly.' +
+      ROLE +
+
+      '\n\nWhat we can do is a quick live demo of the full system first. If it fits, we start setup properly.' +
 
       CLOSE,
 
@@ -198,7 +208,9 @@ const DEFAULT_RULES = [
 
       'Yes — we build/set up the website as part of the partnership, then connect it to bookings or orders, customers, and WhatsApp/email.\n\n' +
 
-      'So you don’t get a pretty site that sits separate from how you actually run the business.\n\n' +
+      ROLE +
+
+      '\n\nSo you don’t get a pretty site that sits separate from how you actually run the business.\n\n' +
 
       'I can walk you through a live demo of the full system.' +
 
@@ -236,7 +248,9 @@ const DEFAULT_RULES = [
 
       'We don’t charge based on results, and we don’t guarantee more customers — that depends on your location, pricing, and marketing.\n\n' +
 
-      'What we give you is the system to run smoother: ' +
+      ROLE +
+
+      '\n\nWhat we give you is the system to run smoother: ' +
 
       PLATFORM +
 
@@ -276,7 +290,9 @@ const DEFAULT_RULES = [
 
       'Most partnerships start from about R450/month after go-live, plus a once-off setup fee depending on scope (website, bookings/orders, WhatsApp setup, etc). WhatsApp message credits are prepaid separately.\n\n' +
 
-      'I’ll give you an exact figure after a quick demo once I know your business.' +
+      ROLE +
+
+      '\n\nI’ll give you an exact figure after a quick demo once I know your business.' +
 
       CLOSE,
 
@@ -306,9 +322,11 @@ const DEFAULT_RULES = [
 
     reply:
 
-      'Happy to help.\n\n' +
+      'Happy to help — if you’re looking for a real operating system for the business, not just a quick brochure page.\n\n' +
 
-      'We set up the full stack for SA businesses: ' +
+      ROLE +
+
+      '\n\nWe set up the full stack for SA businesses: ' +
 
       PLATFORM +
 
@@ -334,13 +352,15 @@ const DEFAULT_RULES = [
 
       'Hi, thanks for messaging Khana Technologies.\n\n' +
 
-      'We help SA businesses with a ' +
+      ROLE +
+
+      '\n\nThat means a ' +
 
       PLATFORM +
 
       '.\n\n' +
 
-      'If you want to see how it works, I can do a short live demo.' +
+      'If that sounds like what you need, I can do a short live demo.' +
 
       CLOSE,
 
@@ -437,6 +457,8 @@ module.exports = {
   CLOSE,
 
   PLATFORM,
+
+  ROLE,
 
 };
 

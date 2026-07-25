@@ -403,6 +403,22 @@ router.delete('/whatsapp/inbox/messages/:wamid', requireRoles('owner', 'manager'
   res.json({ ok: true, data });
 }));
 
+router.delete(
+  '/whatsapp/inbox/threads/:contactWaId',
+  requireRoles('owner', 'manager', 'operator'),
+  wrapRoute(async (req, res) => {
+    const deletedBy =
+      req.tenant?.userId ||
+      req.teamSession?.member?.email ||
+      req.tenant?.role ||
+      '';
+    const data = await WhatsAppInboxService.deleteThread(req.tenant.clientId, req.params.contactWaId, {
+      deletedBy: String(deletedBy),
+    });
+    res.json({ ok: true, data });
+  })
+);
+
 router.post('/whatsapp/inbox/reply', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
   const to = req.body?.to || req.body?.contact_wa_id || req.body?.contactWaId;
   const text = req.body?.text || req.body?.message || req.body?.body;
