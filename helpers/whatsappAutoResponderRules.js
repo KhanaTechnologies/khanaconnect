@@ -1,7 +1,15 @@
 /**
  * Keyword rules for delayed WhatsApp auto-replies (lead inbox).
- * First matching rule wins. Keep replies short and ask one next question.
+ * First matching rule wins.
+ * Every reply ends with a direct close: ask for details + offer to set up today.
  */
+
+const CLOSE =
+  '\n\nReply with:\n' +
+  '• Business name\n' +
+  '• What you do (e.g. car wash, salon, shop)\n' +
+  '• Best email\n\n' +
+  'I’ll set up your free trial today and send the login.';
 
 const DEFAULT_RULES = [
   {
@@ -16,12 +24,9 @@ const DEFAULT_RULES = [
       'trial available',
     ],
     reply:
-      'Yes — we can set you up on a free trial 👍\n\n' +
-      'Before I create your account, please share:\n' +
-      '1) Do you already have a website?\n' +
-      '2) What type of business do you run?\n' +
-      '3) Would you like WhatsApp integrated, or is email enough for now?\n\n' +
-      'Once I have that, I’ll set up your trial and send login details.',
+      'Yes — free trial is available 👍\n\n' +
+      'I can switch it on for you today so you can test bookings/WhatsApp properly.' +
+      CLOSE,
   },
   {
     id: 'whatsapp_integration',
@@ -34,9 +39,9 @@ const DEFAULT_RULES = [
       'connect whatsapp',
     ],
     reply:
-      'Great question 👍\n\n' +
-      'We use Meta’s official WhatsApp Cloud API. That gives you a business WhatsApp inbox in our dashboard, automated order/booking messages, and the ability to reply to customers (including voice notes & media) — linked to their orders/bookings.\n\n' +
-      'It’s customisable for your business. What type of business do you run?',
+      'We use Meta’s official WhatsApp Cloud API — so you get a proper business inbox, confirmations, and customer replies in one dashboard (not an unofficial workaround).\n\n' +
+      'Easiest way to see it: I’ll set up your trial and show you on your number.' +
+      CLOSE,
   },
   {
     id: 'bookings_types',
@@ -48,9 +53,9 @@ const DEFAULT_RULES = [
       'appointments',
     ],
     reply:
-      'Our booking system is built for appointment-based businesses — salons, clinics, beauty, wellness, consultations, classes, car washes with time slots, and similar.\n\n' +
-      'You can manage online bookings, staff/services, confirmations, and reminders (including WhatsApp). Because it’s custom-built, we can tweak it to how *your* business works.\n\n' +
-      'What kind of business do you run?',
+      'It works for appointment businesses — salons, clinics, car washes with time slots, beauty, wellness, consultations, and similar. We can also customise it to how you actually operate.\n\n' +
+      'Want me to set up a trial with bookings for your business today?' +
+      CLOSE,
   },
   {
     id: 'pay_when_works',
@@ -65,10 +70,11 @@ const DEFAULT_RULES = [
       'guaranteed',
     ],
     reply:
-      'Good question 👍\n\n' +
-      'Payment isn’t based on “when you get more customers.” We don’t guarantee an uptick in sales or bookings — that depends on your location, pricing, marketing, and demand.\n\n' +
-      'What we provide is the system to run your business more smoothly: bookings/enquiries, customer details, WhatsApp or email updates, and a dashboard so you’re not juggling chats and notes.\n\n' +
-      'Happy to start with a short trial so you can see if it fits before you commit long-term. What type of business do you run?',
+      'Fair question 👍\n\n' +
+      'We don’t charge based on results, and we don’t guarantee more customers — that depends on your location, pricing, and marketing.\n\n' +
+      'What we give you is the system to run smoother: bookings, customer details, and WhatsApp/email updates in one place.\n\n' +
+      'Best next step is a free trial so you can judge it yourself — I can set that up today.' +
+      CLOSE,
   },
   {
     id: 'pricing',
@@ -83,9 +89,10 @@ const DEFAULT_RULES = [
       'charges',
     ],
     reply:
-      'Pricing depends on scope (website, bookings, WhatsApp, etc.). Most partnerships start from about R450/month after go-live, plus a once-off setup fee.\n\n' +
-      'WhatsApp messaging uses prepaid credits for the messages you send.\n\n' +
-      'If you tell me your business type and whether you need a website, bookings, and/or WhatsApp, I can recommend the right plan.',
+      'Most partnerships start from about R450/month after go-live, plus a once-off setup fee depending on scope. WhatsApp messages use prepaid credits.\n\n' +
+      'For many small businesses we also offer a WhatsApp Starter path (setup + monthly + credits).\n\n' +
+      'I’ll give you an exact quote once I know your business — and I can start your free trial today while we finalise.' +
+      CLOSE,
   },
   {
     id: 'help_business',
@@ -100,23 +107,20 @@ const DEFAULT_RULES = [
     ],
     reply:
       'Happy to help 👍\n\n' +
-      'We can set you up with bookings, customer management, and WhatsApp/email updates — but I need to understand how you operate first.\n\n' +
-      'Please share:\n' +
-      '1) Business name + location\n' +
-      '2) Do you already have a website?\n' +
-      '3) How do customers book/enquire now?\n' +
-      '4) Would you like WhatsApp integrated, or is email enough for now?',
+      'We set up bookings, customer management, and WhatsApp/email updates so your business is easier to run.\n\n' +
+      'Let’s start with a free trial for your business today.' +
+      CLOSE,
   },
   {
     id: 'greeting',
     keywords: ['hi', 'hello', 'hey', 'good morning', 'good afternoon', 'good evening', 'interested'],
-    // Only match short messages (handled in matcher)
     shortOnly: true,
     maxLength: 40,
     reply:
-      'Hi! Thanks for getting in touch with Khana Technologies 👍\n\n' +
-      'We help South African businesses with websites, bookings/orders, and WhatsApp customer messaging.\n\n' +
-      'What type of business do you run, and are you looking for a website, bookings, WhatsApp, or all three?',
+      'Hi! Thanks for messaging Khana Technologies 👍\n\n' +
+      'We help SA businesses with websites, bookings/orders, and WhatsApp messaging.\n\n' +
+      'If you want to try it, I can set up your free trial today.' +
+      CLOSE,
   },
 ];
 
@@ -148,4 +152,5 @@ module.exports = {
   DEFAULT_RULES,
   matchAutoReplyRule,
   normalizeText,
+  CLOSE,
 };
