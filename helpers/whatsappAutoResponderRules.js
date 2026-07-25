@@ -5,11 +5,11 @@
  */
 
 const CLOSE =
-  '\n\nIf you want to see it, reply with:\n' +
+  '\n\nReply with:\n' +
   '1) Business name\n' +
   '2) What you do\n' +
-  '3) A time that suits you today or tomorrow\n\n' +
-  'I’ll send a short live demo link / WhatsApp walkthrough.';
+  '3) Do you already have a website? (yes/no)\n\n' +
+  'Then I’ll book you a short demo.';
 
 const DEFAULT_RULES = [
   {
@@ -39,7 +39,7 @@ const DEFAULT_RULES = [
       'connect whatsapp',
     ],
     reply:
-      'We use Meta’s official WhatsApp Cloud API — business inbox, confirmations, and customer replies in one dashboard.\n\n' +
+      'We use Meta’s official WhatsApp Cloud API, so you get a proper business inbox, confirmations, and customer replies in one dashboard.\n\n' +
       'Easiest is a short live demo so I can show you on screen how it works for a business like yours.' +
       CLOSE,
   },
@@ -53,7 +53,7 @@ const DEFAULT_RULES = [
       'appointments',
     ],
     reply:
-      'It works for appointment businesses — salons, clinics, car washes with time slots, beauty, wellness, consultations, and similar. We customise it to how you operate.\n\n' +
+      'It works for appointment businesses like salons, clinics, car washes with time slots, beauty, wellness, consultations, and similar. We customise it to how you operate.\n\n' +
       'I can show you a live bookings demo in about 10–15 minutes.' +
       CLOSE,
   },
@@ -71,7 +71,7 @@ const DEFAULT_RULES = [
     ],
     reply:
       'Fair question.\n\n' +
-      'We don’t charge based on results, and we don’t guarantee more customers — that depends on your location, pricing, and marketing.\n\n' +
+      'We don’t charge based on results, and we don’t guarantee more customers, that depends on your location, pricing, and marketing.\n\n' +
       'What we give you is the system to run smoother: bookings, customer details, and WhatsApp/email updates in one place.\n\n' +
       'Best next step is a live demo so you can judge it yourself before any setup.' +
       CLOSE,
