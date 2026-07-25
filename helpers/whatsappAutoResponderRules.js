@@ -1,15 +1,15 @@
 /**
  * Keyword rules for delayed WhatsApp auto-replies (lead inbox).
  * First matching rule wins.
- * Every reply ends with a direct close: ask for details + offer to set up today.
+ * Every reply ends with a direct close: book a live demo (not a free custom trial).
  */
 
 const CLOSE =
-  '\n\nReply with:\n' +
-  '• Business name\n' +
-  '• What you do (e.g. car wash, salon, shop)\n' +
-  '• Best email\n\n' +
-  'I’ll set up your free trial today and send the login.';
+  '\n\nIf you want to see it, reply with:\n' +
+  '1) Business name\n' +
+  '2) What you do\n' +
+  '3) A time that suits you today or tomorrow\n\n' +
+  'I’ll send a short live demo link / WhatsApp walkthrough.';
 
 const DEFAULT_RULES = [
   {
@@ -24,8 +24,8 @@ const DEFAULT_RULES = [
       'trial available',
     ],
     reply:
-      'Yes — free trial is available 👍\n\n' +
-      'I can switch it on for you today so you can test bookings/WhatsApp properly.' +
+      'We don’t do blank free trials because every business needs custom setup (domain, bookings, WhatsApp, etc).\n\n' +
+      'What we can do is a quick live demo so you can see the real system first. If it fits, we start setup properly.' +
       CLOSE,
   },
   {
@@ -39,8 +39,8 @@ const DEFAULT_RULES = [
       'connect whatsapp',
     ],
     reply:
-      'We use Meta’s official WhatsApp Cloud API — so you get a proper business inbox, confirmations, and customer replies in one dashboard (not an unofficial workaround).\n\n' +
-      'Easiest way to see it: I’ll set up your trial and show you on your number.' +
+      'We use Meta’s official WhatsApp Cloud API — business inbox, confirmations, and customer replies in one dashboard.\n\n' +
+      'Easiest is a short live demo so I can show you on screen how it works for a business like yours.' +
       CLOSE,
   },
   {
@@ -53,8 +53,8 @@ const DEFAULT_RULES = [
       'appointments',
     ],
     reply:
-      'It works for appointment businesses — salons, clinics, car washes with time slots, beauty, wellness, consultations, and similar. We can also customise it to how you actually operate.\n\n' +
-      'Want me to set up a trial with bookings for your business today?' +
+      'It works for appointment businesses — salons, clinics, car washes with time slots, beauty, wellness, consultations, and similar. We customise it to how you operate.\n\n' +
+      'I can show you a live bookings demo in about 10–15 minutes.' +
       CLOSE,
   },
   {
@@ -70,10 +70,10 @@ const DEFAULT_RULES = [
       'guaranteed',
     ],
     reply:
-      'Fair question 👍\n\n' +
+      'Fair question.\n\n' +
       'We don’t charge based on results, and we don’t guarantee more customers — that depends on your location, pricing, and marketing.\n\n' +
       'What we give you is the system to run smoother: bookings, customer details, and WhatsApp/email updates in one place.\n\n' +
-      'Best next step is a free trial so you can judge it yourself — I can set that up today.' +
+      'Best next step is a live demo so you can judge it yourself before any setup.' +
       CLOSE,
   },
   {
@@ -90,8 +90,7 @@ const DEFAULT_RULES = [
     ],
     reply:
       'Most partnerships start from about R450/month after go-live, plus a once-off setup fee depending on scope. WhatsApp messages use prepaid credits.\n\n' +
-      'For many small businesses we also offer a WhatsApp Starter path (setup + monthly + credits).\n\n' +
-      'I’ll give you an exact quote once I know your business — and I can start your free trial today while we finalise.' +
+      'I’ll give you an exact figure after a quick demo once I know your business.' +
       CLOSE,
   },
   {
@@ -106,9 +105,9 @@ const DEFAULT_RULES = [
       'i have a business',
     ],
     reply:
-      'Happy to help 👍\n\n' +
+      'Happy to help.\n\n' +
       'We set up bookings, customer management, and WhatsApp/email updates so your business is easier to run.\n\n' +
-      'Let’s start with a free trial for your business today.' +
+      'Let’s start with a short live demo for your type of business.' +
       CLOSE,
   },
   {
@@ -117,9 +116,9 @@ const DEFAULT_RULES = [
     shortOnly: true,
     maxLength: 40,
     reply:
-      'Hi! Thanks for messaging Khana Technologies 👍\n\n' +
+      'Hi, thanks for messaging Khana Technologies.\n\n' +
       'We help SA businesses with websites, bookings/orders, and WhatsApp messaging.\n\n' +
-      'If you want to try it, I can set up your free trial today.' +
+      'If you want to see how it works, I can do a short live demo.' +
       CLOSE,
   },
 ];
