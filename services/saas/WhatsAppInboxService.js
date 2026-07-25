@@ -136,6 +136,9 @@ function serializeInboxMessage(m) {
 
 const NOT_DELETED = { deleted_at: null };
 
+/** Only reattribute shared-number inbound to another client for recent outbound (ms). */
+const REATTRIBUTE_OUTBOUND_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
 class WhatsAppInboxService {
   static async resolveClientIdForPhoneNumberId(phoneNumberId) {
     const id = String(phoneNumberId || '').trim();
@@ -145,6 +148,21 @@ class WhatsAppInboxService {
       .select('client_id')
       .lean();
     return account?.client_id || 'Khana';
+  }
+
+  /**
+   * Shared WABA: prefer phone-owner client. Reattribute to another client only when
+   * they messaged this contact within the last 7 days (real template/session reply).
+   */
+  static resolveThreadClientId(ownerClientId, recentOut) {
+    const owner = String(ownerClientId || '').trim() || 'Khana';
+    if (!recentOut?.client_id) return owner;
+    const outClient = String(recentOut.client_id || '').trim();
+    if (!outClient || outClient === owner) return owner;
+    const outAt = recentOut.timestamp ? new Date(recentOut.timestamp).getTime() : 0;
+    if (!Number.isFinite(outAt) || outAt <= 0) return owner;
+    if (Date.now() - outAt > REATTRIBUTE_OUTBOUND_MAX_AGE_MS) return owner;
+    return outClient;
   }
 
   /**
@@ -221,17 +239,18 @@ class WhatsAppInboxService {
       const from = normalizePhoneE164(msg.from || '') || String(msg.from || '').replace(/\D/g, '');
       if (!wamid || !from) continue;
 
-      // Shared Khana number: attribute reply to the client who last messaged this contact.
+      // Shared WABA: prefer phone owner; reattribute only for recent non-owner outbound.
       let threadClientId = clientId;
       try {
         const recentOut = await SaasWhatsAppMessage.findOne({
           contact_wa_id: from,
           direction: 'outbound',
+          deleted_at: null,
         })
           .sort({ timestamp: -1 })
-          .select('client_id')
+          .select('client_id timestamp')
           .lean();
-        if (recentOut?.client_id) threadClientId = recentOut.client_id;
+        threadClientId = this.resolveThreadClientId(clientId, recentOut);
       } catch {
         /* keep phone-number mapping */
       }
@@ -274,13 +293,21 @@ class WhatsAppInboxService {
           ingested += 1;
           try {
             const WhatsAppAutoResponderService = require('./WhatsAppAutoResponderService');
-            await WhatsAppAutoResponderService.maybeScheduleForInbound({
-              clientId: threadClientId,
-              contactWaId: from,
-              wamid,
-              body,
-              type,
-            });
+            // Prefer WABA owner (phone mapping) so shared-number reattribution
+            // does not skip Khana ad leads when the last outbound was another client.
+            const scheduleClientId = WhatsAppAutoResponderService.resolveScheduleClientId(
+              clientId,
+              threadClientId
+            );
+            if (scheduleClientId) {
+              await WhatsAppAutoResponderService.maybeScheduleForInbound({
+                clientId: scheduleClientId,
+                contactWaId: from,
+                wamid,
+                body,
+                type,
+              });
+            }
           } catch (autoErr) {
             console.warn('[whatsapp inbox] auto-reply schedule skipped:', autoErr.message);
           }
@@ -691,13 +718,26 @@ class WhatsAppInboxService {
   }
 
   static async assertFreeformWindow(clientId, e164) {
-    const lastInbound = await SaasWhatsAppMessage.findOne({
+    // Prefer same-tenant inbound; fall back to any inbound on this contact
+    // (shared WABA may store the message under a reattributed client_id).
+    let lastInbound = await SaasWhatsAppMessage.findOne({
       client_id: clientId,
       contact_wa_id: e164,
       direction: 'inbound',
+      deleted_at: null,
     })
       .sort({ timestamp: -1 })
       .lean();
+
+    if (!lastInbound) {
+      lastInbound = await SaasWhatsAppMessage.findOne({
+        contact_wa_id: e164,
+        direction: 'inbound',
+        deleted_at: null,
+      })
+        .sort({ timestamp: -1 })
+        .lean();
+    }
 
     if (!lastInbound) {
       throw httpError(
@@ -733,13 +773,16 @@ class WhatsAppInboxService {
     return sendAccount;
   }
 
-  static async sendTextReply({ clientId, to, text }) {
+  static async sendTextReply({ clientId, to, text, autoReplyMeta = null }) {
     const body = String(text || '').trim();
     if (!body) throw httpError('Message text is required', 400);
     if (body.length > 4096) throw httpError('Message too long (max 4096 characters)', 400);
 
     const e164 = normalizePhoneE164(to);
     if (!e164) throw httpError('Invalid recipient phone number', 400);
+
+    const WhatsAppService = require('./WhatsAppService');
+    await WhatsAppService.assertCreditsAvailable(clientId, 'utility');
 
     const windowOpenUntil = await this.assertFreeformWindow(clientId, e164);
     const sendAccount = await this.resolveSendAccount(clientId);
@@ -768,6 +811,14 @@ class WhatsAppInboxService {
     }
 
     const wamid = response.data?.messages?.[0]?.id || `wa-out-${Date.now()}`;
+    const raw = autoReplyMeta
+      ? {
+          ...(response.data && typeof response.data === 'object' ? response.data : {}),
+          auto_reply: true,
+          auto_reply_rule: String(autoReplyMeta.ruleId || ''),
+          trigger_wamid: String(autoReplyMeta.triggerWamid || ''),
+        }
+      : response.data;
     const doc = await this.recordOutbound({
       clientId,
       phoneNumberId: sendAccount.phone_number_id,
@@ -776,7 +827,19 @@ class WhatsAppInboxService {
       type: 'text',
       body,
       status: 'sent',
-      raw: response.data,
+      raw,
+    });
+
+    await WhatsAppService.recordWhatsAppUsage({
+      clientId,
+      messageType: 'utility',
+      sourceRef: wamid,
+      metadata: {
+        to: e164,
+        channel: 'inbox',
+        kind: 'text',
+        auto_reply: !!autoReplyMeta,
+      },
     });
 
     return {
@@ -801,6 +864,9 @@ class WhatsAppInboxService {
     } else if (!mime) {
       throw httpError('Unsupported file type', 400);
     }
+
+    const WhatsAppService = require('./WhatsAppService');
+    await WhatsAppService.assertCreditsAvailable(clientId, 'utility');
 
     const windowOpenUntil = await this.assertFreeformWindow(clientId, e164);
     const sendAccount = await this.resolveSendAccount(clientId);
@@ -884,7 +950,81 @@ class WhatsAppInboxService {
       mediaId,
     });
 
+    await WhatsAppService.recordWhatsAppUsage({
+      clientId,
+      messageType: 'utility',
+      sourceRef: wamid,
+      metadata: {
+        to: e164,
+        channel: 'inbox',
+        kind: 'media',
+        media_type: msgType,
+      },
+    });
+
     return { message: doc, meta: response.data, window_open_until: windowOpenUntil, media_id: mediaId };
+  }
+
+  static inboxTemplateAllowlist() {
+    return ['hello_world', 'order_confirmation', 'booking_confirmation'];
+  }
+
+  /**
+   * Re-open a closed 24h window by sending an approved template to this contact.
+   */
+  static async sendInboxTemplate({ clientId, contactWaId, templateName = 'hello_world', companyName = '' }) {
+    const e164 = normalizePhoneE164(contactWaId);
+    if (!e164) throw httpError('Invalid recipient phone number', 400);
+
+    const name = String(templateName || 'hello_world').trim();
+    const allowed = this.inboxTemplateAllowlist();
+    if (!allowed.includes(name)) {
+      throw httpError(
+        `Template not allowed from inbox. Use one of: ${allowed.join(', ')}`,
+        400
+      );
+    }
+
+    const WhatsAppService = require('./WhatsAppService');
+    const Client = require('../../models/client');
+    let brand = String(companyName || '').trim();
+    if (!brand) {
+      const client = await Client.findOne({ clientID: clientId }).select('companyName').lean();
+      brand = client?.companyName || clientId;
+    }
+
+    let data;
+    if (name === 'order_confirmation') {
+      data = await WhatsAppService.notifyOrderConfirmation({
+        clientId,
+        to: e164,
+        companyName: brand,
+        orderRef: 'TEST-001',
+        total: '—',
+      });
+    } else if (name === 'booking_confirmation') {
+      data = await WhatsAppService.notifyBookingConfirmation({
+        clientId,
+        to: e164,
+        companyName: brand,
+        bookingRef: 'TEST-001',
+        when: '—',
+      });
+    } else {
+      data = await WhatsAppService.sendTemplateMessage({
+        clientId,
+        to: e164,
+        templateName: 'hello_world',
+        messageType: 'utility',
+        components: [],
+      });
+    }
+
+    return {
+      contact_wa_id: e164,
+      template_name: name,
+      meta: data,
+    };
   }
 
   static async listAssignees(clientId) {

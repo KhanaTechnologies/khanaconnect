@@ -365,6 +365,21 @@ router.get('/whatsapp/inbox/threads/:contactWaId', requireRoles('owner', 'manage
   res.json({ ok: true, data: thread });
 }));
 
+router.post(
+  '/whatsapp/inbox/threads/:contactWaId/template',
+  requireRoles('owner', 'manager', 'operator'),
+  idempotencyGuard('saas.whatsapp.inbox.template'),
+  wrapRoute(async (req, res) => {
+    const templateName = req.body?.templateName || req.body?.template_name || 'hello_world';
+    const data = await WhatsAppInboxService.sendInboxTemplate({
+      clientId: req.tenant.clientId,
+      contactWaId: req.params.contactWaId,
+      templateName,
+    });
+    res.status(202).json({ ok: true, data });
+  })
+);
+
 router.get('/whatsapp/inbox/messages/:wamid/media', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
   const media = await WhatsAppInboxService.downloadMessageMedia(req.tenant.clientId, req.params.wamid);
   res.setHeader('Content-Type', media.mimeType);

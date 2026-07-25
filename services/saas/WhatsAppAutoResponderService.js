@@ -34,7 +34,23 @@ function cooldownMs() {
   return Number.isFinite(n) && n >= 0 ? n : DEFAULT_COOLDOWN_MS;
 }
 
+/** Types whose extracted body can meaningfully match keyword rules. */
+function isMatchableInboundType(type) {
+  const t = String(type || 'text').toLowerCase();
+  return t === 'text' || t === 'interactive' || t === 'button';
+}
+
 class WhatsAppAutoResponderService {
+  /**
+   * Prefer the WABA phone-owner client when it is allowlisted (Khana ads),
+   * otherwise fall back to the thread client from reattribution.
+   */
+  static resolveScheduleClientId(ownerClientId, threadClientId) {
+    if (isEnabledForClient(ownerClientId)) return String(ownerClientId || '').trim();
+    if (isEnabledForClient(threadClientId)) return String(threadClientId || '').trim();
+    return null;
+  }
+
   /**
    * After a new inbound message is saved, schedule a delayed auto-reply if it matches a rule.
    */
@@ -47,7 +63,7 @@ class WhatsAppAutoResponderService {
   }) {
     try {
       if (!isEnabledForClient(clientId)) return { scheduled: false, reason: 'disabled' };
-      if (String(type || 'text') !== 'text') return { scheduled: false, reason: 'not_text' };
+      if (!isMatchableInboundType(type)) return { scheduled: false, reason: 'not_text' };
 
       const match = matchAutoReplyRule(body);
       if (!match) return { scheduled: false, reason: 'no_match' };
@@ -55,10 +71,10 @@ class WhatsAppAutoResponderService {
       const contact = String(contactWaId || '').replace(/\D/g, '');
       if (!contact || !wamid) return { scheduled: false, reason: 'invalid' };
 
-      // One auto-reply per contact within cooldown (avoid spamming).
+      // One auto-reply per contact within cooldown (avoid spamming). Shared WABA:
+      // look up by contact only so a reattributed thread still counts.
       const since = new Date(Date.now() - cooldownMs());
       const recentAuto = await SaasWhatsAppMessage.findOne({
-        client_id: clientId,
         contact_wa_id: contact,
         direction: 'outbound',
         deleted_at: null,
@@ -115,19 +131,20 @@ class WhatsAppAutoResponderService {
       return { sent: false, reason: 'disabled' };
     }
 
+    // Trigger may be stored under a reattributed client_id — match by wamid only.
     const trigger = triggerWamid
-      ? await SaasWhatsAppMessage.findOne({
-          wamid: triggerWamid,
-          client_id: clientId,
-          deleted_at: null,
-        }).lean()
+      ? await SaasWhatsAppMessage.findOne({ wamid: triggerWamid }).lean()
       : null;
 
-    const triggerAt = trigger?.timestamp ? new Date(trigger.timestamp) : new Date(0);
+    if (!trigger || trigger.deleted_at) {
+      return { sent: false, reason: 'trigger_missing' };
+    }
 
-    // Human (or any non-auto) outbound after the trigger → cancel auto-reply.
+    const triggerAt = trigger.timestamp ? new Date(trigger.timestamp) : new Date(0);
+
+    // Human (or any non-auto) outbound after the trigger → cancel.
+    // Scope by contact across clients (shared number / reattribution).
     const outsAfter = await SaasWhatsAppMessage.find({
-      client_id: clientId,
       contact_wa_id: contactWaId,
       direction: 'outbound',
       deleted_at: null,
@@ -146,24 +163,8 @@ class WhatsAppAutoResponderService {
       clientId,
       to: contactWaId,
       text: replyText,
+      autoReplyMeta: { ruleId, triggerWamid },
     });
-
-    // Tag the outbound row as auto-reply for cooldown / skip logic.
-    if (result?.message?.wamid) {
-      await SaasWhatsAppMessage.updateOne(
-        { wamid: result.message.wamid },
-        {
-          $set: {
-            raw: {
-              ...(result.meta || {}),
-              auto_reply: true,
-              auto_reply_rule: ruleId,
-              trigger_wamid: triggerWamid,
-            },
-          },
-        }
-      );
-    }
 
     console.log(
       `[whatsapp auto-reply] sent rule=${ruleId || 'unknown'} contact=${contactWaId} client=${clientId}`

@@ -354,6 +354,39 @@ class WhatsAppService {
     }
   }
 
+  /** Queue usage + billing for one WhatsApp unit (templates and inbox freeform). */
+  static async recordWhatsAppUsage({
+    clientId,
+    messageType = 'utility',
+    sourceRef,
+    metadata = {},
+  }) {
+    const billingClientId = String(clientId || '').trim();
+    if (!billingClientId) return;
+    try {
+      await SaasUsageEvent.create({
+        client_id: billingClientId,
+        service: 'whatsapp',
+        message_type: messageType,
+        units: 1,
+        source_ref: String(sourceRef || ''),
+        status: 'queued',
+        metadata: metadata && typeof metadata === 'object' ? metadata : {},
+      });
+
+      await usageBillingQueue.add('bill-whatsapp-message', {
+        clientId: billingClientId,
+        service: 'whatsapp',
+        messageType,
+        units: 1,
+        sourceRef: String(sourceRef || ''),
+        metadata: metadata && typeof metadata === 'object' ? metadata : {},
+      });
+    } catch (usageErr) {
+      console.warn('[whatsapp] usage/billing record failed:', usageErr.message);
+    }
+  }
+
   static async sendTemplateMessage({
     clientId,
     to,
@@ -423,28 +456,12 @@ class WhatsAppService {
       console.warn('[whatsapp] inbox outbound record failed:', inboxErr.message);
     }
 
-    try {
-      await SaasUsageEvent.create({
-        client_id: billingClientId,
-        service: 'whatsapp',
-        message_type: messageType,
-        units: 1,
-        source_ref: messageId,
-        status: 'queued',
-        metadata: { to: e164, templateName, resolvedClientId },
-      });
-
-      await usageBillingQueue.add('bill-whatsapp-message', {
-        clientId: billingClientId,
-        service: 'whatsapp',
-        messageType,
-        units: 1,
-        sourceRef: messageId,
-        metadata: { to: e164, templateName },
-      });
-    } catch (usageErr) {
-      console.warn('[whatsapp] usage/billing record failed:', usageErr.message);
-    }
+    await this.recordWhatsAppUsage({
+      clientId: billingClientId,
+      messageType,
+      sourceRef: messageId,
+      metadata: { to: e164, templateName, resolvedClientId, channel: 'template' },
+    });
 
     return response.data;
   }
