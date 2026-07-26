@@ -1,6 +1,5 @@
 const mongoose = require('mongoose');
 const { Order } = require('../models/order');
-const Product = require('../models/product');
 const Client = require('../models/client');
 const Customer = require('../models/customer');
 const { sendOrderConfirmationEmail } = require('../utils/email');
@@ -8,6 +7,8 @@ const { updateCustomerOrderHistory } = require('./orderCustomerHistory');
 const { mergeRevenueSettings } = require('./revenueDefaults');
 const { sendPostPurchaseEmail } = require('./revenueLifecycleEmails');
 const { resolveSmtpHost } = require('./mailHost');
+
+const { deductLineStock } = require('./productInventory');
 
 /**
  * Mark order paid, adjust stock, update customer history, send confirmation email.
@@ -28,11 +29,31 @@ async function fulfillGatewayPayment(orderId, totalPrice) {
   }
   await order.save();
 
-  for (const orderItem of order.orderItems) {
-    const product = await Product.findById(orderItem.product);
-    if (!product) continue;
-    product.countInStock -= orderItem.quantity;
-    await product.save();
+  // Stock rules:
+  // - stockDeducted === true → already reserved (new create path or prior fulfill)
+  // - stockDeducted == null → legacy order; stock was already deducted on create — mark true, do not deduct again
+  // - stockDeducted === false → unpaid hold without reservation (rare); deduct now
+  if (order.stockDeducted === false) {
+    for (const orderItem of order.orderItems) {
+      try {
+        await deductLineStock({
+          clientId: order.clientID,
+          productId: orderItem.product,
+          quantity: orderItem.quantity,
+          variant: orderItem.variant || '',
+          orderId: String(order._id),
+          reason: 'payfast_fulfill',
+          allowOversell: true,
+        });
+      } catch (stockErr) {
+        console.error('[fulfill] stock deduct failed:', stockErr.message);
+      }
+    }
+    order.stockDeducted = true;
+    await order.save();
+  } else if (order.stockDeducted == null) {
+    order.stockDeducted = true;
+    await order.save();
   }
 
   await updateCustomerOrderHistory(order.customer._id, order, order.orderItems);

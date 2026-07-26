@@ -12,8 +12,9 @@ const orderItemSchema = mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Product'
     },
-    variant: {type:String}, // ✅ Store dynamic variants
-    variantPrice: {type:Number} // ✅ Store dynamic variants
+    variant: {type:String},
+    variantPrice: {type:Number},
+    fulfilledQty: { type: Number, default: 0, min: 0 },
 })
 
 orderItemSchema.virtual('id').get(function (){return this._id.toHexString();});

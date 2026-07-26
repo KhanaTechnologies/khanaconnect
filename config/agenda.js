@@ -8,6 +8,8 @@ const JOB_NAMES = {
   SAAS_USAGE: 'saas-usage-billing',
   B2B_WAREHOUSE_LOW_STOCK: 'b2b-warehouse:low-stock-check',
   WHATSAPP_AUTO_REPLY: 'whatsapp-inbox:auto-reply',
+  WHATSAPP_BROADCAST: 'whatsapp-inbox:broadcast-send',
+  PRODUCT_SALES_EXPIRE: 'products:expire-sales',
 };
 
 let agendaInstance = null;
@@ -105,6 +107,8 @@ function registerJobHandlers(agenda) {
   } = require('../jobs/handlers/processSaasUsageBilling');
   const { processB2bWarehouseLowStock } = require('../jobs/handlers/processB2bWarehouseLowStock');
   const { processWhatsAppAutoReply } = require('../jobs/handlers/processWhatsAppAutoReply');
+  const { processWhatsAppBroadcast } = require('../jobs/handlers/processWhatsAppBroadcast');
+  const { expireEndedProductSales } = require('../helpers/expireProductSales');
 
   agenda.define(
     JOB_NAMES.EVENT_BATCH,
@@ -206,6 +210,21 @@ function registerJobHandlers(agenda) {
     async (job) => processWhatsAppAutoReply(job.attrs.data || {})
   );
 
+  agenda.define(
+    JOB_NAMES.WHATSAPP_BROADCAST,
+    {
+      concurrency: Number(process.env.WHATSAPP_BROADCAST_CONCURRENCY || 1),
+      lockLifetime: 5 * 60 * 1000,
+    },
+    async (job) => processWhatsAppBroadcast(job.attrs.data || {})
+  );
+
+  agenda.define(
+    JOB_NAMES.PRODUCT_SALES_EXPIRE,
+    { concurrency: 1, lockLifetime: 10 * 60 * 1000 },
+    async () => expireEndedProductSales()
+  );
+
   agenda.on('start', (job) => {
     if (job.attrs.name === JOB_NAMES.OUTBOUND_EMAIL) {
       console.log(`📤 Outbound email job ${job.attrs._id} started`);
@@ -269,6 +288,10 @@ async function startJobScheduler() {
   const lowStockInterval = process.env.B2B_WAREHOUSE_ALERT_INTERVAL || '6 hours';
   await agendaInstance.every(lowStockInterval, JOB_NAMES.B2B_WAREHOUSE_LOW_STOCK, {});
   console.log(`📦 B2B warehouse low-stock job scheduled every ${lowStockInterval}`);
+
+  const salesExpireInterval = process.env.PRODUCT_SALES_EXPIRE_INTERVAL || '1 hour';
+  await agendaInstance.every(salesExpireInterval, JOB_NAMES.PRODUCT_SALES_EXPIRE, {});
+  console.log(`🏷️ Product sales expire job scheduled every ${salesExpireInterval}`);
 
   console.log('✅ MongoDB job scheduler (Agenda) started');
   return agendaInstance;

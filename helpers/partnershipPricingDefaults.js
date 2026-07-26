@@ -1,6 +1,6 @@
 const { DEFAULT_PLAN_BUILDER, mergePlanBuilderConfig } = require('./planBuilderPricing');
 
-const PRICING_CONFIG_VERSION = 12;
+const PRICING_CONFIG_VERSION = 14;
 
 /** Default partnership pricing for the SA market. */
 const DEFAULT_PARTNERSHIP_PRICING = {
@@ -238,6 +238,12 @@ const DEFAULT_PARTNERSHIP_PRICING = {
       answer:
         'Custom development is quoted once-off for setup plus a monthly partnership fee (typically from R450/mo as your platform base while the custom module is included). Optional private standalone API is quoted separately. Scope must be reasonable for us to build and support.',
       sortOrder: 5,
+    },
+    {
+      question: 'Is Khana just a website builder?',
+      answer:
+        'No. We partner with your business to set up and run a connected system — website, bookings or orders, customers, and WhatsApp/email — not a one-off brochure page that sits separate from how you operate. If you only need a simple static page with no ongoing system, we may not be the right fit.',
+      sortOrder: 6,
     },
   ],
   planBuilder: {

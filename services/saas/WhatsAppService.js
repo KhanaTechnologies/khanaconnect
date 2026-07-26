@@ -625,6 +625,82 @@ class WhatsAppService {
       return String(booking.date || '—');
     }
   }
+
+  /**
+   * Pull message templates from Meta for the tenant WABA and upsert locally.
+   */
+  static async syncMessageTemplates(clientId) {
+    const SaasWhatsAppTemplate = require('../../models/SaasWhatsAppTemplate');
+    const { account, resolvedClientId } = await this.getClientAccount(clientId);
+    const wabaId = String(account.waba_id || '').trim();
+    if (!wabaId) throw httpError('WhatsApp account is missing waba_id', 400);
+
+    const token = decrypt(account.access_token_encrypted);
+    const syncedAt = new Date();
+    let fetched = 0;
+    let after = null;
+    const upserted = [];
+
+    do {
+      const params = {
+        fields: 'name,status,language,category,components',
+        limit: 100,
+      };
+      if (after) params.after = after;
+
+      let response;
+      try {
+        response = await axios.get(`${WA_API_BASE}/${wabaId}/message_templates`, {
+          timeout: 30000,
+          headers: { Authorization: `Bearer ${token}` },
+          params,
+        });
+      } catch (err) {
+        throw formatMetaSendError(err);
+      }
+
+      const rows = Array.isArray(response.data?.data) ? response.data.data : [];
+      for (const row of rows) {
+        const name = String(row.name || '').trim();
+        const language = String(row.language || 'en').trim() || 'en';
+        if (!name) continue;
+        fetched += 1;
+        const doc = await SaasWhatsAppTemplate.findOneAndUpdate(
+          { client_id: clientId, name, language },
+          {
+            $set: {
+              waba_id: wabaId,
+              status: String(row.status || '').trim(),
+              category: String(row.category || '').trim(),
+              components: row.components || [],
+              synced_at: syncedAt,
+            },
+          },
+          { upsert: true, new: true }
+        );
+        upserted.push({
+          id: String(doc._id),
+          name: doc.name,
+          language: doc.language,
+          status: doc.status,
+          category: doc.category,
+        });
+      }
+
+      after = response.data?.paging?.cursors?.after || null;
+      if (!response.data?.paging?.next) after = null;
+    } while (after);
+
+    return {
+      client_id: clientId,
+      resolved_client_id: resolvedClientId,
+      waba_id: wabaId,
+      fetched,
+      upserted: upserted.length,
+      templates: upserted,
+      synced_at: syncedAt,
+    };
+  }
 }
 
 module.exports = WhatsAppService;

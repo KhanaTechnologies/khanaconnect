@@ -1,5 +1,10 @@
 const SaasWhatsAppMessage = require('../../models/SaasWhatsAppMessage');
-const { matchAutoReplyRule } = require('../../helpers/whatsappAutoResponderRules');
+const SaasWhatsAppAutoRule = require('../../models/SaasWhatsAppAutoRule');
+const {
+  matchAutoReplyRule,
+  keywordMatches,
+  normalizeText,
+} = require('../../helpers/whatsappAutoResponderRules');
 const WhatsAppInboxService = require('./WhatsAppInboxService');
 
 const DEFAULT_DELAY_MS = 5 * 60 * 1000;
@@ -17,8 +22,7 @@ function allowedClientIds() {
     .filter(Boolean);
 }
 
-function isEnabledForClient(clientId) {
-  if (!autoReplyEnabled()) return false;
+function isEnvAllowlisted(clientId) {
   const allowed = allowedClientIds();
   if (allowed.includes('*')) return true;
   return allowed.includes(String(clientId || '').trim());
@@ -29,7 +33,7 @@ function delayMs() {
   return Number.isFinite(n) && n >= 0 ? n : DEFAULT_DELAY_MS;
 }
 
-function cooldownMs() {
+function defaultCooldownMs() {
   const n = Number(process.env.WHATSAPP_AUTO_REPLY_COOLDOWN_MS);
   return Number.isFinite(n) && n >= 0 ? n : DEFAULT_COOLDOWN_MS;
 }
@@ -40,14 +44,84 @@ function isMatchableInboundType(type) {
   return t === 'text' || t === 'interactive' || t === 'button';
 }
 
+function matchTenantAutoRule(body, rules) {
+  const text = normalizeText(body);
+  if (!text) return null;
+
+  for (const rule of rules) {
+    const mode = String(rule.match_mode || 'any').toLowerCase();
+    const keywords = Array.isArray(rule.keywords) ? rule.keywords : [];
+    if (!keywords.length) continue;
+
+    if (mode === 'short_greeting') {
+      if (text.length > 40) continue;
+      const hit = keywords.some((kw) => keywordMatches(text, kw));
+      if (hit) {
+        return {
+          id: String(rule.id || rule._id),
+          reply: rule.reply,
+          cooldown_ms: rule.cooldown_ms,
+        };
+      }
+      continue;
+    }
+
+    if (mode === 'all') {
+      if (keywords.every((kw) => keywordMatches(text, kw))) {
+        return {
+          id: String(rule.id || rule._id),
+          reply: rule.reply,
+          cooldown_ms: rule.cooldown_ms,
+        };
+      }
+      continue;
+    }
+
+    // any
+    if (keywords.some((kw) => keywordMatches(text, kw))) {
+      return {
+        id: String(rule.id || rule._id),
+        reply: rule.reply,
+        cooldown_ms: rule.cooldown_ms,
+      };
+    }
+  }
+  return null;
+}
+
 class WhatsAppAutoResponderService {
+  static async loadEnabledTenantRules(clientId) {
+    const rows = await SaasWhatsAppAutoRule.find({
+      client_id: clientId,
+      enabled: true,
+    })
+      .sort({ sort_order: 1, created_at: 1 })
+      .lean();
+    return rows.map((r) => ({
+      id: String(r._id),
+      keywords: r.keywords || [],
+      reply: r.reply,
+      match_mode: r.match_mode || 'any',
+      cooldown_ms: r.cooldown_ms,
+    }));
+  }
+
+  static async isActiveForClient(clientId) {
+    if (!autoReplyEnabled()) return false;
+    const id = String(clientId || '').trim();
+    if (!id) return false;
+    const tenantRules = await this.loadEnabledTenantRules(id);
+    if (tenantRules.length) return true;
+    return isEnvAllowlisted(id);
+  }
+
   /**
-   * Prefer the WABA phone-owner client when it is allowlisted (Khana ads),
+   * Prefer the WABA phone-owner client when it has auto-reply active,
    * otherwise fall back to the thread client from reattribution.
    */
-  static resolveScheduleClientId(ownerClientId, threadClientId) {
-    if (isEnabledForClient(ownerClientId)) return String(ownerClientId || '').trim();
-    if (isEnabledForClient(threadClientId)) return String(threadClientId || '').trim();
+  static async resolveScheduleClientId(ownerClientId, threadClientId) {
+    if (await this.isActiveForClient(ownerClientId)) return String(ownerClientId || '').trim();
+    if (await this.isActiveForClient(threadClientId)) return String(threadClientId || '').trim();
     return null;
   }
 
@@ -62,18 +136,29 @@ class WhatsAppAutoResponderService {
     type = 'text',
   }) {
     try {
-      if (!isEnabledForClient(clientId)) return { scheduled: false, reason: 'disabled' };
+      if (!(await this.isActiveForClient(clientId))) return { scheduled: false, reason: 'disabled' };
       if (!isMatchableInboundType(type)) return { scheduled: false, reason: 'not_text' };
 
-      const match = matchAutoReplyRule(body);
+      const tenantRules = await this.loadEnabledTenantRules(clientId);
+      let match = null;
+      if (tenantRules.length) {
+        match = matchTenantAutoRule(body, tenantRules);
+      } else if (isEnvAllowlisted(clientId)) {
+        match = matchAutoReplyRule(body);
+      }
       if (!match) return { scheduled: false, reason: 'no_match' };
 
       const contact = String(contactWaId || '').replace(/\D/g, '');
       if (!contact || !wamid) return { scheduled: false, reason: 'invalid' };
 
+      const cooldown =
+        Number.isFinite(Number(match.cooldown_ms)) && Number(match.cooldown_ms) >= 0
+          ? Number(match.cooldown_ms)
+          : defaultCooldownMs();
+
       // One auto-reply per contact within cooldown (avoid spamming). Shared WABA:
       // look up by contact only so a reattributed thread still counts.
-      const since = new Date(Date.now() - cooldownMs());
+      const since = new Date(Date.now() - cooldown);
       const recentAuto = await SaasWhatsAppMessage.findOne({
         contact_wa_id: contact,
         direction: 'outbound',
@@ -127,7 +212,7 @@ class WhatsAppAutoResponderService {
     if (!clientId || !contactWaId || !replyText) {
       return { sent: false, reason: 'invalid_payload' };
     }
-    if (!isEnabledForClient(clientId)) {
+    if (!(await this.isActiveForClient(clientId))) {
       return { sent: false, reason: 'disabled' };
     }
 

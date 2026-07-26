@@ -21,8 +21,63 @@ const wishlistNotifyService = require('../services/wishlistNotifyService');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const { createDashboardAuth } = require('../helpers/dashboardAuth');
 const { recordTeamActivityFromRequest } = require('../helpers/teamActivity');
+const { normalizeOrderStatus, generateOrderNumber } = require('../helpers/orderStatus');
+const { deductLineStock, restockLineStock } = require('../helpers/productInventory');
+const OrderReturn = require('../models/OrderReturn');
 
 const authenticateToken = createDashboardAuth('orders');
+
+async function restockOrderItems(order, reason = 'order_restock') {
+  if (!order || order.stockRestocked) return { restocked: false, reason: 'already' };
+  // false = never deducted (new unpaid hold). null/undefined = legacy (was deducted on create).
+  if (order.stockDeducted === false) return { restocked: false, reason: 'not_deducted' };
+  const items = order.orderItems || [];
+  for (const item of items) {
+    const productId = item.product?._id || item.product;
+    if (!productId) continue;
+    await restockLineStock({
+      clientId: order.clientID,
+      productId,
+      quantity: item.quantity,
+      variant: item.variant || '',
+      orderId: String(order._id),
+      reason,
+    });
+  }
+  order.stockRestocked = true;
+  order.stockDeducted = false;
+  await order.save();
+  return { restocked: true };
+}
+
+async function deductOrderItems(order, reason = 'order_deduct') {
+  if (!order) return { deducted: false, reason: 'missing' };
+  // true = already deducted; null/undefined = legacy already deducted at create — do not deduct again
+  if (order.stockDeducted === true || order.stockDeducted == null) {
+    if (order.stockDeducted == null) {
+      order.stockDeducted = true;
+      await order.save();
+    }
+    return { deducted: false, reason: order.stockDeducted === true ? 'already' : 'legacy_marked' };
+  }
+  const items = order.orderItems || [];
+  for (const item of items) {
+    const productId = item.product?._id || item.product;
+    if (!productId) continue;
+    await deductLineStock({
+      clientId: order.clientID,
+      productId,
+      quantity: item.quantity,
+      variant: item.variant || '',
+      orderId: String(order._id),
+      reason,
+      allowOversell: true,
+    });
+  }
+  order.stockDeducted = true;
+  await order.save();
+  return { deducted: true };
+}
 
 // -------------------- HELPER FUNCTIONS -------------------- //
 
@@ -51,7 +106,7 @@ function calculateNextReminder(reminderType, customHours = null) {
 
 // Get all orders
 router.get('/', authenticateToken, wrapRoute(async (req, res) => {
-    const filter = { clientID: req.clientId };
+    const filter = { clientID: req.clientId, deletedAt: null };
     if (req.query.orderType === 'retail' || req.query.orderType === 'b2b') {
         filter.orderType = req.query.orderType;
     }
@@ -60,7 +115,7 @@ router.get('/', authenticateToken, wrapRoute(async (req, res) => {
         .populate('customer', 'customerFirstName customerLastName emailAddress phoneNumber')
         .populate({
             path: 'orderItems',
-            populate: { path: 'product', select: 'productName price images category' }
+            populate: { path: 'product', select: 'productName price images category sku' }
         })
         .sort({ dateOrdered: -1 });
 
@@ -70,28 +125,38 @@ router.get('/', authenticateToken, wrapRoute(async (req, res) => {
 
 // Get order by ID
 router.get('/:id', authenticateToken, wrapRoute(async (req, res) => {
-    const order = await Order.findOne({ _id: req.params.id, clientID: req.clientId })
+    const order = await Order.findOne({ _id: req.params.id, clientID: req.clientId, deletedAt: null })
         .populate('customer', 'customerFirstName customerLastName emailAddress phoneNumber')
         .populate({
             path: 'orderItems',
-            populate: { path: 'product', select: 'productName price images category' }
+            populate: { path: 'product', select: 'productName price images category sku' }
         });
 
     if (!order) return res.status(404).json({ success: false, error: 'Order not found' });
     res.json(order);
 }));
 
-// Delete an order by ID
+// Hard-delete (legacy behaviour) with restock when stock was reserved.
 router.delete('/:id', authenticateToken, wrapRoute(async (req, res) => {
-    const deletedOrder = await Order.findOneAndDelete({ _id: req.params.id, clientID: req.clientId });
-    if (!deletedOrder) return res.status(404).json({ success: false, error: 'Order not found or does not belong to client' });
-    
-    // Also remove from customer's order history
+    const order = await Order.findOne({ _id: req.params.id, clientID: req.clientId, deletedAt: null }).populate('orderItems');
+    if (!order) return res.status(404).json({ success: false, error: 'Order not found or does not belong to client' });
+
+    if (order.stockDeducted !== false && !order.stockRestocked) {
+      try {
+        await restockOrderItems(order, 'order_delete_restock');
+      } catch (e) {
+        console.warn('[orders] restock on delete failed:', e.message);
+      }
+    }
+
+    await Order.findOneAndDelete({ _id: req.params.id, clientID: req.clientId });
+    await OrderItem.deleteMany({ _id: { $in: (order.orderItems || []).map((i) => i._id || i) } }).catch(() => {});
+
     await Customer.updateOne(
         { 'orderHistory.orderId': req.params.id },
         { $pull: { orderHistory: { orderId: req.params.id } } }
     );
-    
+
     res.json({ success: true, message: 'Order deleted successfully' });
     recordTeamActivityFromRequest(req, {
       category: 'orders',
@@ -114,6 +179,10 @@ router.post('/', authenticateToken, [
 
     const { address, postalCode, phone, customer, deliveryType, deliveryPrice, discountCode } = req.body;
     const orderItems = req.body.orderItems;
+    const city = String(req.body.city || '').trim();
+    const province = String(req.body.province || '').trim();
+    const country = String(req.body.country || 'ZA').trim() || 'ZA';
+    const markPaid = req.body.paid === true || req.body.paid === 'true';
 
     // Validate customer exists and belongs to client
     const customerDoc = await Customer.findOne({ _id: customer, clientID: req.clientId });
@@ -177,26 +246,40 @@ router.post('/', authenticateToken, [
 
     const order = new Order({
         orderItems: orderItemsIds,
-        address, postalCode, phone,
-        status: 'Pending',
-        totalPrice, discountAmount, checkoutCode: discountCode,
-        customer, deliveryPrice, deliveryType, clientID: req.clientId,
-        finalPrice, orderNotes: req.body.orderNotes
+        address,
+        city,
+        province,
+        country,
+        postalCode,
+        phone,
+        status: 'pending',
+        orderNumber: generateOrderNumber(),
+        invoiceNumber: '',
+        totalPrice,
+        discountAmount,
+        checkoutCode: discountCode,
+        customer,
+        deliveryPrice,
+        deliveryType,
+        clientID: req.clientId,
+        finalPrice,
+        orderNotes: req.body.orderNotes,
+        paid: !!markPaid,
+        // Match legacy: reserve stock on create for all orders (including unpaid PayFast).
+        // stockDeducted starts false then flips true after deduct below.
+        stockDeducted: false,
     });
 
     await order.save();
-
-    // Deduct stock count
-    for (const product_ of orderItems) {
-        const product = await Product.findById(product_.product);
-        if (!product) continue;
-        const prevSnapshot = product.toObject({ depopulate: true });
-        product.countInStock -= product_.quantity;
-        await product.save();
-        wishlistNotifyService
-            .handleProductUpdate(prevSnapshot, product.toObject({ depopulate: true }))
-            .catch((err) => console.error('wishlist notify (order stock):', err.message));
+    if (!order.invoiceNumber) {
+      order.invoiceNumber = `INV-${order.orderNumber}`;
+      await order.save();
     }
+
+    // Always deduct on create (same as pre-gap-close behaviour) so inventory stays reserved.
+    // PayFast fulfill uses stockDeducted guard and will not double-deduct.
+    const populated = await Order.findById(order._id).populate('orderItems');
+    await deductOrderItems(populated, 'order_create');
 
     // Update customer order history and analytics (in background)
     updateCustomerOrderHistory(customer, order, orderItems).catch(error => {
@@ -214,7 +297,7 @@ router.post('/', authenticateToken, [
                 client.businessEmailPassword,
                 deliveryPrice,
                 req.clientId,
-                order._id,
+                order.orderNumber || order._id,
                 client.emailSignature || '',
                 clientEmailBrandingPayload(client),
                 req.clientId
@@ -227,7 +310,7 @@ router.post('/', authenticateToken, [
             clientId: req.clientId,
             to: customerDoc.phoneNumber,
             companyName: client.companyName,
-            orderRef: String(order._id),
+            orderRef: String(order.orderNumber || order._id),
             total:
                 order.finalPrice != null
                     ? `R${Number(order.finalPrice).toFixed(2)}`
@@ -239,28 +322,38 @@ router.post('/', authenticateToken, [
     recordTeamActivityFromRequest(req, {
       category: 'orders',
       action: 'order.created',
-      summary: `Order ${order._id} created`,
-      metadata: { orderId: String(order._id) },
+      summary: `Order ${order.orderNumber || order._id} created`,
+      metadata: { orderId: String(order._id), orderNumber: order.orderNumber },
     });
 }));
 
 // Update an order
 router.put('/:id', authenticateToken, wrapRoute(async (req, res) => {
+    const existing = await Order.findOne({ _id: req.params.id, clientID: req.clientId, deletedAt: null }).populate('orderItems');
+    if (!existing) return res.status(404).json({ error: 'Order not found or does not belong to client' });
+
     let setStatus = req.body.orderTrackingLink && req.body.orderTrackingCode
         ? 'shipped'
-        : req.body.status || '';
+        : req.body.status || existing.status;
+    setStatus = normalizeOrderStatus(setStatus, existing.status || 'pending');
 
-    const order = await Order.findOneAndUpdate(
-        { _id: req.params.id, clientID: req.clientId },
-        {
-            status: setStatus,
-            orderTrackingLink: req.body.orderTrackingLink || '',
-            orderTrackingCode: req.body.orderTrackingCode || ''
-        },
-        { new: true }
-    ).populate('customer').populate('orderItems');
+    const prevStatus = normalizeOrderStatus(existing.status, 'pending');
 
-    if (!order) return res.status(404).json({ error: 'Order not found or does not belong to client' });
+    existing.status = setStatus;
+    if (req.body.orderTrackingLink !== undefined) existing.orderTrackingLink = req.body.orderTrackingLink || '';
+    if (req.body.orderTrackingCode !== undefined) existing.orderTrackingCode = req.body.orderTrackingCode || '';
+    if (req.body.city !== undefined) existing.city = String(req.body.city || '');
+    if (req.body.province !== undefined) existing.province = String(req.body.province || '');
+    if (req.body.country !== undefined) existing.country = String(req.body.country || 'ZA');
+    if (req.body.address !== undefined) existing.address = String(req.body.address || existing.address);
+    await existing.save();
+
+    // Cancel → restock once
+    if (setStatus === 'cancelled' && prevStatus !== 'cancelled') {
+      await restockOrderItems(existing, 'order_cancel_restock');
+    }
+
+    const order = await Order.findById(existing._id).populate('customer').populate('orderItems');
 
     // Update customer order history status
     if (setStatus) {
@@ -277,7 +370,7 @@ router.put('/:id', authenticateToken, wrapRoute(async (req, res) => {
                 order.customer.emailAddress,
                 `${order.customer.customerFirstName} ${order.customer.customerLastName}`,
                 setStatus,
-                req.params.id,
+                order.orderNumber || req.params.id,
                 client.return_url,
                 client.businessEmail,
                 client.businessEmailPassword,
@@ -301,7 +394,7 @@ router.put('/:id', authenticateToken, wrapRoute(async (req, res) => {
             clientId: req.clientId,
             to: phone,
             companyName: client.companyName,
-            orderRef: String(order._id),
+            orderRef: String(order.orderNumber || order._id),
             status: setStatus || order.status || 'updated',
         }).catch(() => {});
     }
@@ -310,9 +403,191 @@ router.put('/:id', authenticateToken, wrapRoute(async (req, res) => {
     recordTeamActivityFromRequest(req, {
       category: 'orders',
       action: 'order.updated',
-      summary: `Order ${order._id} updated (${setStatus || 'status change'})`,
+      summary: `Order ${order.orderNumber || order._id} updated (${setStatus || 'status change'})`,
       metadata: { orderId: String(order._id), status: setStatus },
     });
+}));
+
+// Manual refund (merchant marks refunded; gateway refund is out-of-band until PayFast API)
+router.post('/:id/refund', authenticateToken, wrapRoute(async (req, res) => {
+  const order = await Order.findOne({ _id: req.params.id, clientID: req.clientId, deletedAt: null }).populate('orderItems').populate('customer');
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (order.refunded) return res.status(400).json({ error: 'Order already refunded' });
+
+  if (order.stockDeducted !== false && !order.stockRestocked) {
+    await restockOrderItems(order, 'order_refund_restock');
+  }
+
+  order.refunded = true;
+  order.refundedAt = new Date();
+  order.status = 'refunded';
+  await order.save();
+
+  const client = await Client.findOne({ clientID: req.clientId });
+  if (client && order.customer) {
+    WhatsAppService.safeNotifyOrderStatus({
+      clientId: req.clientId,
+      to: order.customer.phoneNumber || order.phone,
+      companyName: client.companyName,
+      orderRef: String(order.orderNumber || order._id),
+      status: 'refunded',
+    }).catch(() => {});
+  }
+
+  res.json({
+    ok: true,
+    order,
+    note: 'Marked refunded in Khana. Process the payment refund in PayFast/your gateway separately until API refunds are enabled.',
+  });
+}));
+
+// Partial fulfill line items
+router.post('/:id/fulfill', authenticateToken, wrapRoute(async (req, res) => {
+  const order = await Order.findOne({ _id: req.params.id, clientID: req.clientId, deletedAt: null }).populate('orderItems');
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+
+  const lines = Array.isArray(req.body?.items) ? req.body.items : [];
+  if (!lines.length) return res.status(400).json({ error: 'items array required [{ orderItemId, qty }]' });
+
+  for (const line of lines) {
+    const item = order.orderItems.find((oi) => String(oi._id) === String(line.orderItemId || line.id));
+    if (!item) continue;
+    const add = Math.max(0, Number(line.qty || line.quantity) || 0);
+    const next = Math.min(Number(item.quantity) || 0, (Number(item.fulfilledQty) || 0) + add);
+    item.fulfilledQty = next;
+    await item.save();
+  }
+
+  const refreshed = await Order.findById(order._id).populate('orderItems');
+  const allDone = (refreshed.orderItems || []).every(
+    (oi) => Number(oi.fulfilledQty || 0) >= Number(oi.quantity || 0)
+  );
+  const anyDone = (refreshed.orderItems || []).some((oi) => Number(oi.fulfilledQty || 0) > 0);
+  if (allDone) refreshed.status = 'shipped';
+  else if (anyDone) refreshed.status = 'processed';
+  await refreshed.save();
+
+  res.json(refreshed);
+}));
+
+// Returns RMA
+router.post('/:id/returns', authenticateToken, wrapRoute(async (req, res) => {
+  const order = await Order.findOne({ _id: req.params.id, clientID: req.clientId, deletedAt: null }).populate('orderItems');
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+
+  const orderItemId = req.body.orderItemId || req.body.orderItem;
+  const qty = Math.max(1, Number(req.body.quantity) || 1);
+  const item = order.orderItems.find((oi) => String(oi._id) === String(orderItemId));
+  if (!item) return res.status(400).json({ error: 'orderItemId not on this order' });
+
+  const ret = await OrderReturn.create({
+    clientID: req.clientId,
+    order: order._id,
+    orderItem: item._id,
+    product: item.product,
+    quantity: Math.min(qty, Number(item.quantity) || qty),
+    reason: String(req.body.reason || '').trim(),
+    status: req.body.approve === true || req.body.status === 'approved' ? 'approved' : 'requested',
+  });
+
+  if (ret.status === 'approved' && !ret.restocked) {
+    await restockLineStock({
+      clientId: req.clientId,
+      productId: item.product,
+      quantity: ret.quantity,
+      variant: item.variant || '',
+      orderId: String(order._id),
+      reason: 'order_return_restock',
+    });
+    ret.restocked = true;
+    await ret.save();
+  }
+
+  res.status(201).json(ret);
+}));
+
+router.post('/:id/returns/:returnId/approve', authenticateToken, wrapRoute(async (req, res) => {
+  const ret = await OrderReturn.findOne({ _id: req.params.returnId, clientID: req.clientId, order: req.params.id });
+  if (!ret) return res.status(404).json({ error: 'Return not found' });
+  if (ret.status === 'approved' && ret.restocked) return res.json(ret);
+
+  const item = await OrderItem.findById(ret.orderItem);
+  ret.status = 'approved';
+  if (item && !ret.restocked) {
+    await restockLineStock({
+      clientId: req.clientId,
+      productId: item.product,
+      quantity: ret.quantity,
+      variant: item.variant || '',
+      orderId: String(ret.order),
+      reason: 'order_return_restock',
+    });
+    ret.restocked = true;
+  }
+  await ret.save();
+  res.json(ret);
+}));
+
+router.get('/:id/invoice', authenticateToken, wrapRoute(async (req, res) => {
+  const order = await Order.findOne({ _id: req.params.id, clientID: req.clientId, deletedAt: null })
+    .populate('customer')
+    .populate({ path: 'orderItems', populate: { path: 'product', select: 'productName price sku' } });
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+
+  const client = await Client.findOne({ clientID: req.clientId });
+  const vatRate = Number(client?.vatRate ?? client?.settings?.vatRate ?? 15);
+  const lines = (order.orderItems || []).map((oi) => {
+    const unit = oi.variantPrice != null ? Number(oi.variantPrice) : Number(oi.product?.price || 0);
+    const lineExVat = unit * Number(oi.quantity || 0);
+    return {
+      name: oi.product?.productName || 'Item',
+      sku: oi.product?.sku || '',
+      qty: oi.quantity,
+      unit,
+      lineExVat,
+      vat: lineExVat * (vatRate / (100 + vatRate)),
+      lineIncVat: lineExVat,
+    };
+  });
+  const subtotalInc = Number(order.finalPrice != null ? order.finalPrice : order.totalPrice) || 0;
+  const vatAmount = subtotalInc * (vatRate / (100 + vatRate));
+  const exVat = subtotalInc - vatAmount;
+
+  res.json({
+    invoiceNumber: order.invoiceNumber || `INV-${order.orderNumber || order._id}`,
+    creditNote: !!order.refunded,
+    orderNumber: order.orderNumber || String(order._id),
+    date: order.dateOrdered,
+    status: order.status,
+    customer: order.customer
+      ? {
+          name: `${order.customer.customerFirstName || ''} ${order.customer.customerLastName || ''}`.trim(),
+          email: order.customer.emailAddress,
+          phone: order.customer.phoneNumber || order.phone,
+        }
+      : null,
+    address: {
+      line1: order.address,
+      city: order.city || '',
+      province: order.province || '',
+      country: order.country || 'ZA',
+      postalCode: order.postalCode,
+    },
+    supplier: {
+      name: client?.companyName || req.clientId,
+      vatNumber: client?.vatNumber || client?.companyVAT || '',
+      email: client?.businessEmail || '',
+    },
+    vatRate,
+    lines,
+    totals: {
+      exVat: Math.round(exVat * 100) / 100,
+      vat: Math.round(vatAmount * 100) / 100,
+      incVat: Math.round(subtotalInc * 100) / 100,
+      delivery: order.deliveryPrice || 0,
+      discount: order.discountAmount || 0,
+    },
+  });
 }));
 router.post('/update-order-payment', wrapRoute(async (req, res) => {
     if (!orderPaymentWebhookOk(req)) {

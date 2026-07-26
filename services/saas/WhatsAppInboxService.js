@@ -7,6 +7,10 @@ const SaasWhatsAppAccount = require('../../models/SaasWhatsAppAccount');
 const SaasWhatsAppWebhookEvent = require('../../models/SaasWhatsAppWebhookEvent');
 const SaasWhatsAppCannedReply = require('../../models/SaasWhatsAppCannedReply');
 const SaasWhatsAppThread = require('../../models/SaasWhatsAppThread');
+const SaasWhatsAppThreadNote = require('../../models/SaasWhatsAppThreadNote');
+const SaasWhatsAppTemplate = require('../../models/SaasWhatsAppTemplate');
+const SaasWhatsAppAutoRule = require('../../models/SaasWhatsAppAutoRule');
+const SaasWhatsAppBroadcast = require('../../models/SaasWhatsAppBroadcast');
 const Customer = require('../../models/customer');
 const { Order } = require('../../models/order');
 const Booking = require('../../models/booking');
@@ -67,6 +71,53 @@ function customerProfileFromDoc(c) {
 
 function escapeRegex(s) {
   return String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeLabel(raw) {
+  return String(raw || '')
+    .trim()
+    .toLowerCase()
+    .slice(0, 40);
+}
+
+function serializeThreadMeta(meta) {
+  if (!meta) {
+    return {
+      stage: 'open',
+      labels: [],
+      marketing_opt_out: false,
+      assignment: null,
+    };
+  }
+  return {
+    stage: meta.stage || 'open',
+    labels: Array.isArray(meta.labels) ? meta.labels : [],
+    marketing_opt_out: !!meta.marketing_opt_out,
+    assignment: meta.assigned_member_id
+      ? {
+          member_id: meta.assigned_member_id,
+          name: meta.assigned_name || '',
+          assigned_at: meta.assigned_at,
+        }
+      : null,
+  };
+}
+
+function isMarketingOptOutText(body) {
+  const t = String(body || '')
+    .toLowerCase()
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return false;
+  return (
+    t === 'stop' ||
+    t === 'unsubscribe' ||
+    t === 'opt out' ||
+    t === 'optout' ||
+    t.startsWith('stop ') ||
+    t.startsWith('unsubscribe')
+  );
 }
 
 const DEMO_SITE_URL = process.env.PUBLIC_DEMO_URL || 'https://khanatechnologies.co.za/demo';
@@ -302,11 +353,22 @@ class WhatsAppInboxService {
         }
         if (upsert.upsertedCount > 0 || upsert.upsertedId) {
           ingested += 1;
+          if (isMarketingOptOutText(body)) {
+            try {
+              await SaasWhatsAppThread.findOneAndUpdate(
+                { client_id: threadClientId, contact_wa_id: from },
+                { $set: { marketing_opt_out: true } },
+                { upsert: true }
+              );
+            } catch (optErr) {
+              console.warn('[whatsapp inbox] opt-out update failed:', optErr.message);
+            }
+          }
           try {
             const WhatsAppAutoResponderService = require('./WhatsAppAutoResponderService');
             // Prefer WABA owner (phone mapping) so shared-number reattribution
             // does not skip Khana ad leads when the last outbound was another client.
-            const scheduleClientId = WhatsAppAutoResponderService.resolveScheduleClientId(
+            const scheduleClientId = await WhatsAppAutoResponderService.resolveScheduleClientId(
               clientId,
               threadClientId
             );
@@ -439,10 +501,15 @@ class WhatsAppInboxService {
     }
   }
 
-  static async listThreads(clientId, { limit = 40, q = '' } = {}) {
+  static async listThreads(
+    clientId,
+    { limit = 40, q = '', stage = '', label = '', assignee = '', assigneeMemberId = '', unreadOnly = false } = {}
+  ) {
     const lim = Math.min(Math.max(Number(limit) || 40, 1), 100);
     const query = String(q || '').trim();
     const match = { client_id: clientId, ...NOT_DELETED };
+
+    let allowedContacts = null;
 
     if (query) {
       const rx = new RegExp(escapeRegex(query), 'i');
@@ -451,7 +518,113 @@ class WhatsAppInboxService {
         deleted_at: null,
         $or: [{ contact_wa_id: rx }, { contact_name: rx }, { body: rx }],
       });
-      match.contact_wa_id = { $in: contactIds.length ? contactIds : ['__none__'] };
+      allowedContacts = new Set(contactIds.length ? contactIds : ['__none__']);
+    }
+
+    const stageFilter = String(stage || '').trim().toLowerCase();
+    const labelFilter = normalizeLabel(label);
+    const assigneeFilter = String(assignee || '').trim().toLowerCase();
+    const memberForMe = String(assigneeMemberId || '').trim();
+
+    const needsMetaFilter = !!(stageFilter || labelFilter || assigneeFilter);
+    if (needsMetaFilter) {
+      let metaContacts = null;
+
+      if (assigneeFilter === 'unassigned') {
+        const allContacts = await SaasWhatsAppMessage.distinct('contact_wa_id', {
+          client_id: clientId,
+          deleted_at: null,
+        });
+        const assigned = await SaasWhatsAppThread.find({
+          client_id: clientId,
+          assigned_member_id: { $nin: ['', null] },
+        })
+          .select('contact_wa_id')
+          .lean();
+        const assignedSet = new Set(assigned.map((r) => r.contact_wa_id));
+        metaContacts = allContacts.filter((id) => !assignedSet.has(id));
+      } else if (assigneeFilter === 'me' && memberForMe) {
+        const rows = await SaasWhatsAppThread.find({
+          client_id: clientId,
+          assigned_member_id: memberForMe,
+        })
+          .select('contact_wa_id')
+          .lean();
+        metaContacts = rows.map((r) => r.contact_wa_id);
+      } else if (assigneeFilter && assigneeFilter !== 'me') {
+        const rows = await SaasWhatsAppThread.find({
+          client_id: clientId,
+          assigned_member_id: String(assignee || '').trim(),
+        })
+          .select('contact_wa_id')
+          .lean();
+        metaContacts = rows.map((r) => r.contact_wa_id);
+      }
+
+      if (labelFilter) {
+        const rows = await SaasWhatsAppThread.find({
+          client_id: clientId,
+          labels: labelFilter,
+        })
+          .select('contact_wa_id')
+          .lean();
+        const labelSet = new Set(rows.map((r) => r.contact_wa_id));
+        metaContacts = metaContacts
+          ? metaContacts.filter((id) => labelSet.has(id))
+          : [...labelSet];
+      }
+
+      if (stageFilter === 'open') {
+        const allContacts = await SaasWhatsAppMessage.distinct('contact_wa_id', {
+          client_id: clientId,
+          deleted_at: null,
+        });
+        const nonOpen = await SaasWhatsAppThread.find({
+          client_id: clientId,
+          stage: { $in: ['waiting', 'closed'] },
+        })
+          .select('contact_wa_id')
+          .lean();
+        const nonOpenSet = new Set(nonOpen.map((r) => r.contact_wa_id));
+        const openContacts = allContacts.filter((id) => !nonOpenSet.has(id));
+        const openSet = new Set(openContacts);
+        metaContacts = metaContacts
+          ? metaContacts.filter((id) => openSet.has(id))
+          : openContacts;
+      } else if (stageFilter === 'waiting' || stageFilter === 'closed') {
+        const rows = await SaasWhatsAppThread.find({
+          client_id: clientId,
+          stage: stageFilter,
+        })
+          .select('contact_wa_id')
+          .lean();
+        const stageSet = new Set(rows.map((r) => r.contact_wa_id));
+        metaContacts = metaContacts
+          ? metaContacts.filter((id) => stageSet.has(id))
+          : [...stageSet];
+      }
+
+      const metaSet = new Set(metaContacts && metaContacts.length ? metaContacts : ['__none__']);
+      allowedContacts = allowedContacts
+        ? new Set([...allowedContacts].filter((id) => metaSet.has(id)))
+        : metaSet;
+    }
+
+    if (unreadOnly) {
+      const unreadContacts = await SaasWhatsAppMessage.distinct('contact_wa_id', {
+        client_id: clientId,
+        direction: 'inbound',
+        read_at: null,
+        deleted_at: null,
+      });
+      const unreadSet = new Set(unreadContacts.length ? unreadContacts : ['__none__']);
+      allowedContacts = allowedContacts
+        ? new Set([...allowedContacts].filter((id) => unreadSet.has(id)))
+        : unreadSet;
+    }
+
+    if (allowedContacts) {
+      match.contact_wa_id = { $in: [...allowedContacts] };
     }
 
     const rows = await SaasWhatsAppMessage.aggregate([
@@ -519,6 +692,7 @@ class WhatsAppInboxService {
         const canReplyFreeform = !!(windowOpenUntil && windowOpenUntil > new Date());
         const customer = this.lookupCustomerInIndex(customerIndex, row.contact_wa_id);
         const meta = metaByContact[row.contact_wa_id];
+        const serialized = serializeThreadMeta(meta);
 
         return {
           contact_wa_id: row.contact_wa_id,
@@ -534,13 +708,10 @@ class WhatsAppInboxService {
           can_reply_freeform: canReplyFreeform,
           window_open_until: windowOpenUntil,
           customer,
-          assignment: meta?.assigned_member_id
-            ? {
-                member_id: meta.assigned_member_id,
-                name: meta.assigned_name || '',
-                assigned_at: meta.assigned_at,
-              }
-            : null,
+          assignment: serialized.assignment,
+          stage: serialized.stage,
+          labels: serialized.labels,
+          marketing_opt_out: serialized.marketing_opt_out,
         };
       })
     );
@@ -606,6 +777,7 @@ class WhatsAppInboxService {
     const namedMsg = [...messages].reverse().find((m) => String(m.contact_name || '').trim());
     const waName = String(namedMsg?.contact_name || '').trim();
     const meta = await SaasWhatsAppThread.findOne({ client_id: clientId, contact_wa_id: contact }).lean();
+    const serialized = serializeThreadMeta(meta);
 
     return {
       contact_wa_id: contact,
@@ -613,13 +785,10 @@ class WhatsAppInboxService {
       can_reply_freeform: canReplyFreeform,
       window_open_until: windowOpenUntil,
       customer,
-      assignment: meta?.assigned_member_id
-        ? {
-            member_id: meta.assigned_member_id,
-            name: meta.assigned_name || '',
-            assigned_at: meta.assigned_at,
-          }
-        : null,
+      assignment: serialized.assignment,
+      stage: serialized.stage,
+      labels: serialized.labels,
+      marketing_opt_out: serialized.marketing_opt_out,
       messages: messages.map(serializeInboxMessage),
     };
   }
@@ -1011,18 +1180,39 @@ class WhatsAppInboxService {
     return ['hello_world', 'order_confirmation', 'booking_confirmation'];
   }
 
+  static async isTemplateAllowedForInbox(clientId, templateName) {
+    const name = String(templateName || '').trim();
+    if (!name) return false;
+    if (this.inboxTemplateAllowlist().includes(name)) return true;
+    const approved = await SaasWhatsAppTemplate.findOne({
+      client_id: clientId,
+      name,
+      status: { $regex: /^APPROVED$/i },
+    })
+      .select('_id')
+      .lean();
+    return !!approved;
+  }
+
   /**
    * Re-open a closed 24h window by sending an approved template to this contact.
    */
-  static async sendInboxTemplate({ clientId, contactWaId, templateName = 'hello_world', companyName = '' }) {
+  static async sendInboxTemplate({
+    clientId,
+    contactWaId,
+    templateName = 'hello_world',
+    language = '',
+    components = [],
+    companyName = '',
+  }) {
     const e164 = normalizePhoneE164(contactWaId);
     if (!e164) throw httpError('Invalid recipient phone number', 400);
 
     const name = String(templateName || 'hello_world').trim();
-    const allowed = this.inboxTemplateAllowlist();
-    if (!allowed.includes(name)) {
+    const allowed = await this.isTemplateAllowedForInbox(clientId, name);
+    if (!allowed) {
       throw httpError(
-        `Template not allowed from inbox. Use one of: ${allowed.join(', ')}`,
+        `Template not allowed from inbox. Sync approved templates or use: ${this.inboxTemplateAllowlist().join(', ')}`,
         400
       );
     }
@@ -1053,12 +1243,24 @@ class WhatsAppInboxService {
         when: '—',
       });
     } else {
+      let lang = String(language || '').trim();
+      if (!lang) {
+        const row = await SaasWhatsAppTemplate.findOne({
+          client_id: clientId,
+          name,
+          status: { $regex: /^APPROVED$/i },
+        })
+          .select('language')
+          .lean();
+        lang = row?.language || process.env.WHATSAPP_TEMPLATE_LANG || 'en';
+      }
       data = await WhatsAppService.sendTemplateMessage({
         clientId,
         to: e164,
-        templateName: 'hello_world',
+        templateName: name,
+        languageCode: lang,
         messageType: 'utility',
-        components: [],
+        components: Array.isArray(components) ? components : [],
       });
     }
 
@@ -1328,6 +1530,63 @@ class WhatsAppInboxService {
     };
   }
 
+  static async updateCustomer(clientId, customerId, body = {}) {
+    const customer = await Customer.findOne({ _id: customerId, clientID: clientId });
+    if (!customer) throw httpError('Customer not found', 404);
+
+    const firstRaw = body.first_name ?? body.firstName;
+    const lastRaw = body.last_name ?? body.lastName;
+    const emailRaw = body.email ?? body.emailAddress;
+    const phoneRaw = body.phone ?? body.phoneNumber;
+    const addressRaw = body.address;
+    const cityRaw = body.city;
+
+    if (firstRaw !== undefined) {
+      const first = String(firstRaw || '').trim();
+      if (!first) throw httpError('First name is required', 400);
+      customer.customerFirstName = first.slice(0, 80);
+    }
+    if (lastRaw !== undefined) {
+      customer.customerLastName = String(lastRaw || '').trim().slice(0, 80);
+    }
+
+    if (emailRaw !== undefined) {
+      const email = String(emailRaw || '').trim().toLowerCase();
+      if (!email) throw httpError('Email is required', 400);
+      const peers = await Customer.find({
+        clientID: clientId,
+        _id: { $ne: customer._id },
+      })
+        .select('emailAddress')
+        .limit(5000);
+      for (const p of peers) {
+        if (String(p.emailAddress || '').toLowerCase() === email) {
+          throw httpError('A customer with this email already exists', 409);
+        }
+      }
+      customer.emailAddress = email;
+    }
+
+    if (phoneRaw !== undefined) {
+      const digits = String(phoneRaw || '').replace(/\D/g, '');
+      if (!digits) throw httpError('Phone number is required', 400);
+      const e164 = normalizePhoneE164(phoneRaw) || digits;
+      customer.phoneNumber = e164.startsWith('+') ? e164 : `+${e164}`;
+    }
+
+    if (addressRaw !== undefined) {
+      customer.address = String(addressRaw || '').trim().slice(0, 200);
+    }
+    if (cityRaw !== undefined) {
+      customer.city = String(cityRaw || '').trim().slice(0, 80);
+    }
+
+    customer.lastActivity = new Date();
+    await customer.save();
+
+    return this.getCustomerSummary(clientId, customerId);
+  }
+
   static async getCustomerSummary(clientId, customerId) {
     const customerDoc = await Customer.findOne({ _id: customerId, clientID: clientId }).select(
       'customerFirstName customerLastName emailAddress phoneNumber totalOrders totalSpent customerSince lastActivity address city'
@@ -1366,6 +1625,448 @@ class WhatsAppInboxService {
       };
     }
     return context;
+  }
+
+  static async updateThreadMeta(clientId, contactWaId, body = {}) {
+    const contact = normalizePhoneE164(contactWaId) || String(contactWaId || '').replace(/\D/g, '');
+    if (!contact) throw httpError('Invalid contact WhatsApp number', 400);
+
+    const $set = {};
+    const stageRaw = body.stage;
+    if (stageRaw !== undefined) {
+      const stage = String(stageRaw || '').trim().toLowerCase();
+      if (!['open', 'waiting', 'closed'].includes(stage)) {
+        throw httpError('stage must be open, waiting, or closed', 400);
+      }
+      $set.stage = stage;
+    }
+
+    if (body.marketing_opt_out !== undefined || body.marketingOptOut !== undefined) {
+      $set.marketing_opt_out = !!(body.marketing_opt_out ?? body.marketingOptOut);
+    }
+
+    let labels = null;
+    if (Array.isArray(body.labels)) {
+      labels = [...new Set(body.labels.map(normalizeLabel).filter(Boolean))].slice(0, 20);
+      $set.labels = labels;
+    }
+
+    const addLabels = body.add_labels || body.addLabels;
+    const removeLabels = body.remove_labels || body.removeLabels;
+
+    let doc = await SaasWhatsAppThread.findOne({ client_id: clientId, contact_wa_id: contact });
+    if (!doc) {
+      doc = new SaasWhatsAppThread({
+        client_id: clientId,
+        contact_wa_id: contact,
+        stage: 'open',
+        labels: [],
+      });
+    }
+
+    if (Object.keys($set).length) {
+      Object.assign(doc, $set);
+    }
+
+    if (Array.isArray(addLabels) && addLabels.length) {
+      const current = new Set(doc.labels || []);
+      for (const l of addLabels.map(normalizeLabel).filter(Boolean)) {
+        current.add(l);
+      }
+      doc.labels = [...current].slice(0, 20);
+    }
+    if (Array.isArray(removeLabels) && removeLabels.length) {
+      const remove = new Set(removeLabels.map(normalizeLabel).filter(Boolean));
+      doc.labels = (doc.labels || []).filter((l) => !remove.has(l));
+    }
+
+    await doc.save();
+    const serialized = serializeThreadMeta(doc.toObject ? doc.toObject() : doc);
+    return {
+      contact_wa_id: contact,
+      ...serialized,
+    };
+  }
+
+  static async listThreadNotes(clientId, contactWaId) {
+    const contact = normalizePhoneE164(contactWaId) || String(contactWaId || '').replace(/\D/g, '');
+    if (!contact) throw httpError('Invalid contact WhatsApp number', 400);
+    const notes = await SaasWhatsAppThreadNote.find({ client_id: clientId, contact_wa_id: contact })
+      .sort({ created_at: -1 })
+      .limit(100)
+      .lean();
+    return notes.map((n) => ({
+      id: String(n._id),
+      body: n.body,
+      author_member_id: n.author_member_id || '',
+      author_name: n.author_name || '',
+      created_at: n.created_at,
+    }));
+  }
+
+  static async createThreadNote(clientId, contactWaId, body = {}, author = {}) {
+    const contact = normalizePhoneE164(contactWaId) || String(contactWaId || '').replace(/\D/g, '');
+    if (!contact) throw httpError('Invalid contact WhatsApp number', 400);
+    const text = String(body.body || body.note || '').trim();
+    if (!text) throw httpError('Note body is required', 400);
+
+    const note = await SaasWhatsAppThreadNote.create({
+      client_id: clientId,
+      contact_wa_id: contact,
+      body: text.slice(0, 2000),
+      author_member_id: String(author.memberId || author.member_id || '').trim(),
+      author_name: String(author.name || author.author_name || '').trim().slice(0, 120),
+    });
+
+    return {
+      id: String(note._id),
+      body: note.body,
+      author_member_id: note.author_member_id,
+      author_name: note.author_name,
+      created_at: note.created_at,
+    };
+  }
+
+  static async deleteThreadNote(clientId, contactWaId, noteId, actor = {}) {
+    const contact = normalizePhoneE164(contactWaId) || String(contactWaId || '').replace(/\D/g, '');
+    if (!contact) throw httpError('Invalid contact WhatsApp number', 400);
+    const note = await SaasWhatsAppThreadNote.findOne({
+      _id: noteId,
+      client_id: clientId,
+      contact_wa_id: contact,
+    });
+    if (!note) throw httpError('Note not found', 404);
+
+    const actorId = String(actor.memberId || actor.member_id || '').trim();
+    const role = String(actor.role || '').toLowerCase();
+    const isElevated = role === 'owner' || role === 'manager' || role === 'admin';
+    if (actorId && note.author_member_id && note.author_member_id !== actorId && !isElevated) {
+      throw httpError('You can only delete your own notes', 403);
+    }
+
+    await note.deleteOne();
+    return { deleted: true, id: String(noteId) };
+  }
+
+  static async syncMessageTemplates(clientId) {
+    const WhatsAppService = require('./WhatsAppService');
+    return WhatsAppService.syncMessageTemplates(clientId);
+  }
+
+  static async listMessageTemplates(clientId, { status = '' } = {}) {
+    const filter = { client_id: clientId };
+    const st = String(status || '').trim();
+    if (st) filter.status = { $regex: new RegExp(`^${escapeRegex(st)}$`, 'i') };
+    const rows = await SaasWhatsAppTemplate.find(filter).sort({ name: 1, language: 1 }).lean();
+    return rows.map((r) => ({
+      id: String(r._id),
+      name: r.name,
+      language: r.language,
+      status: r.status,
+      category: r.category || '',
+      components: r.components || [],
+      synced_at: r.synced_at,
+    }));
+  }
+
+  static async listAutoRules(clientId) {
+    const rows = await SaasWhatsAppAutoRule.find({ client_id: clientId })
+      .sort({ sort_order: 1, created_at: 1 })
+      .lean();
+    return rows.map((r) => ({
+      id: String(r._id),
+      enabled: !!r.enabled,
+      name: r.name,
+      keywords: r.keywords || [],
+      reply: r.reply,
+      match_mode: r.match_mode || 'any',
+      sort_order: r.sort_order || 0,
+      cooldown_ms: r.cooldown_ms,
+    }));
+  }
+
+  static async createAutoRule(clientId, body = {}) {
+    const count = await SaasWhatsAppAutoRule.countDocuments({ client_id: clientId });
+    if (count >= 30) throw httpError('Maximum 30 auto-reply rules per account', 400);
+
+    const name = String(body.name || '').trim().slice(0, 80);
+    const reply = String(body.reply || '').trim().slice(0, 1000);
+    if (!name) throw httpError('Rule name is required', 400);
+    if (!reply) throw httpError('Reply text is required', 400);
+
+    const keywords = Array.isArray(body.keywords)
+      ? body.keywords.map((k) => String(k || '').trim().toLowerCase()).filter(Boolean).slice(0, 40)
+      : String(body.keywords || '')
+          .split(',')
+          .map((k) => k.trim().toLowerCase())
+          .filter(Boolean)
+          .slice(0, 40);
+    if (!keywords.length) throw httpError('At least one keyword is required', 400);
+
+    const matchMode = String(body.match_mode || body.matchMode || 'any').trim().toLowerCase();
+    if (!['any', 'all', 'short_greeting'].includes(matchMode)) {
+      throw httpError('match_mode must be any, all, or short_greeting', 400);
+    }
+
+    const doc = await SaasWhatsAppAutoRule.create({
+      client_id: clientId,
+      enabled: body.enabled !== false,
+      name,
+      keywords,
+      reply,
+      match_mode: matchMode,
+      sort_order: Number(body.sort_order ?? body.sortOrder ?? count) || 0,
+      cooldown_ms:
+        body.cooldown_ms != null || body.cooldownMs != null
+          ? Number(body.cooldown_ms ?? body.cooldownMs)
+          : null,
+    });
+
+    return {
+      id: String(doc._id),
+      enabled: doc.enabled,
+      name: doc.name,
+      keywords: doc.keywords,
+      reply: doc.reply,
+      match_mode: doc.match_mode,
+      sort_order: doc.sort_order,
+      cooldown_ms: doc.cooldown_ms,
+    };
+  }
+
+  static async updateAutoRule(clientId, ruleId, body = {}) {
+    const doc = await SaasWhatsAppAutoRule.findOne({ _id: ruleId, client_id: clientId });
+    if (!doc) throw httpError('Auto-reply rule not found', 404);
+
+    if (body.name !== undefined) {
+      const name = String(body.name || '').trim().slice(0, 80);
+      if (!name) throw httpError('Rule name is required', 400);
+      doc.name = name;
+    }
+    if (body.reply !== undefined) {
+      const reply = String(body.reply || '').trim().slice(0, 1000);
+      if (!reply) throw httpError('Reply text is required', 400);
+      doc.reply = reply;
+    }
+    if (body.enabled !== undefined) doc.enabled = !!body.enabled;
+    if (body.keywords !== undefined) {
+      const keywords = Array.isArray(body.keywords)
+        ? body.keywords.map((k) => String(k || '').trim().toLowerCase()).filter(Boolean).slice(0, 40)
+        : String(body.keywords || '')
+            .split(',')
+            .map((k) => k.trim().toLowerCase())
+            .filter(Boolean)
+            .slice(0, 40);
+      if (!keywords.length) throw httpError('At least one keyword is required', 400);
+      doc.keywords = keywords;
+    }
+    if (body.match_mode !== undefined || body.matchMode !== undefined) {
+      const matchMode = String(body.match_mode || body.matchMode || 'any').trim().toLowerCase();
+      if (!['any', 'all', 'short_greeting'].includes(matchMode)) {
+        throw httpError('match_mode must be any, all, or short_greeting', 400);
+      }
+      doc.match_mode = matchMode;
+    }
+    if (body.sort_order !== undefined || body.sortOrder !== undefined) {
+      doc.sort_order = Number(body.sort_order ?? body.sortOrder) || 0;
+    }
+    if (body.cooldown_ms !== undefined || body.cooldownMs !== undefined) {
+      const n = body.cooldown_ms ?? body.cooldownMs;
+      doc.cooldown_ms = n == null || n === '' ? null : Number(n);
+    }
+
+    await doc.save();
+    return {
+      id: String(doc._id),
+      enabled: doc.enabled,
+      name: doc.name,
+      keywords: doc.keywords,
+      reply: doc.reply,
+      match_mode: doc.match_mode,
+      sort_order: doc.sort_order,
+      cooldown_ms: doc.cooldown_ms,
+    };
+  }
+
+  static async deleteAutoRule(clientId, ruleId) {
+    const result = await SaasWhatsAppAutoRule.deleteOne({ _id: ruleId, client_id: clientId });
+    if (!result.deletedCount) throw httpError('Auto-reply rule not found', 404);
+    return { deleted: true, id: String(ruleId) };
+  }
+
+  static serializeBroadcast(doc) {
+    const b = doc.toObject ? doc.toObject() : doc;
+    return {
+      id: String(b._id),
+      name: b.name || '',
+      template_name: b.template_name,
+      template_language: b.template_language || 'en',
+      status: b.status,
+      recipient_wa_ids: b.recipient_wa_ids || [],
+      next_index: b.next_index || 0,
+      stats: b.stats || { total: 0, sent: 0, failed: 0, skipped: 0 },
+      created_by: b.created_by || '',
+      error: b.error || '',
+      created_at: b.created_at,
+      updated_at: b.updated_at,
+    };
+  }
+
+  static async listBroadcasts(clientId) {
+    const rows = await SaasWhatsAppBroadcast.find({ client_id: clientId })
+      .sort({ created_at: -1 })
+      .limit(50)
+      .lean();
+    return rows.map((r) => this.serializeBroadcast(r));
+  }
+
+  static async getBroadcast(clientId, broadcastId) {
+    const doc = await SaasWhatsAppBroadcast.findOne({ _id: broadcastId, client_id: clientId }).lean();
+    if (!doc) throw httpError('Broadcast not found', 404);
+    return this.serializeBroadcast(doc);
+  }
+
+  static async createBroadcast(clientId, body = {}, actor = {}) {
+    const templateName = String(body.template_name || body.templateName || '').trim();
+    if (!templateName) throw httpError('template_name is required', 400);
+
+    const allowed = await this.isTemplateAllowedForInbox(clientId, templateName);
+    if (!allowed) {
+      throw httpError('Template must be an approved synced template or a built-in inbox template', 400);
+    }
+
+    let language = String(body.language || body.template_language || body.templateLanguage || '').trim();
+    if (!language) {
+      const row = await SaasWhatsAppTemplate.findOne({
+        client_id: clientId,
+        name: templateName,
+        status: { $regex: /^APPROVED$/i },
+      })
+        .select('language')
+        .lean();
+      language = row?.language || process.env.WHATSAPP_TEMPLATE_LANG || 'en';
+    }
+
+    const rawIds = Array.isArray(body.contact_wa_ids || body.contactWaIds || body.recipients)
+      ? body.contact_wa_ids || body.contactWaIds || body.recipients
+      : [];
+    const recipients = [
+      ...new Set(
+        rawIds
+          .map((id) => normalizePhoneE164(id) || String(id || '').replace(/\D/g, ''))
+          .filter(Boolean)
+      ),
+    ].slice(0, 200);
+    if (!recipients.length) throw httpError('Select at least one recipient', 400);
+
+    const name =
+      String(body.name || '').trim().slice(0, 120) ||
+      `Broadcast ${templateName} (${recipients.length})`;
+
+    const doc = await SaasWhatsAppBroadcast.create({
+      client_id: clientId,
+      name,
+      template_name: templateName,
+      template_language: language,
+      status: 'queued',
+      recipient_wa_ids: recipients,
+      next_index: 0,
+      stats: { total: recipients.length, sent: 0, failed: 0, skipped: 0 },
+      created_by: String(actor.memberId || actor.userId || actor.name || '').trim(),
+    });
+
+    const { isAgendaReady, getAgenda, JOB_NAMES } = require('../../config/agenda');
+    if (!isAgendaReady()) {
+      doc.status = 'failed';
+      doc.error = 'Job scheduler is not ready';
+      await doc.save();
+      throw httpError('Broadcast scheduler is not available right now', 503);
+    }
+
+    const job = getAgenda().create(JOB_NAMES.WHATSAPP_BROADCAST, {
+      broadcastId: String(doc._id),
+      clientId,
+    });
+    job.schedule(new Date());
+    await job.save();
+
+    return this.serializeBroadcast(doc);
+  }
+
+  /**
+   * Agenda: send one recipient, then schedule the next with a short stagger.
+   */
+  static async processBroadcastTick(data = {}) {
+    const broadcastId = String(data.broadcastId || '').trim();
+    const clientId = String(data.clientId || '').trim();
+    if (!broadcastId || !clientId) return { ok: false, reason: 'invalid' };
+
+    const doc = await SaasWhatsAppBroadcast.findOne({ _id: broadcastId, client_id: clientId });
+    if (!doc) return { ok: false, reason: 'not_found' };
+    if (doc.status === 'cancelled' || doc.status === 'completed' || doc.status === 'failed') {
+      return { ok: true, status: doc.status };
+    }
+
+    doc.status = 'running';
+    const index = Number(doc.next_index) || 0;
+    const recipients = doc.recipient_wa_ids || [];
+
+    if (index >= recipients.length) {
+      doc.status = 'completed';
+      await doc.save();
+      return { ok: true, status: 'completed' };
+    }
+
+    const to = recipients[index];
+    let outcome = 'sent';
+    try {
+      const meta = await SaasWhatsAppThread.findOne({
+        client_id: clientId,
+        contact_wa_id: to,
+      })
+        .select('marketing_opt_out')
+        .lean();
+      if (meta?.marketing_opt_out) {
+        outcome = 'skipped';
+        doc.stats.skipped = (doc.stats.skipped || 0) + 1;
+      } else {
+        await this.sendInboxTemplate({
+          clientId,
+          contactWaId: to,
+          templateName: doc.template_name,
+          language: doc.template_language,
+        });
+        doc.stats.sent = (doc.stats.sent || 0) + 1;
+      }
+    } catch (err) {
+      outcome = 'failed';
+      doc.stats.failed = (doc.stats.failed || 0) + 1;
+      console.warn(
+        `[whatsapp broadcast] ${broadcastId} recipient=${to} failed:`,
+        err.message
+      );
+    }
+
+    doc.next_index = index + 1;
+    if (doc.next_index >= recipients.length) {
+      doc.status = 'completed';
+    }
+    await doc.save();
+
+    if (doc.status === 'running') {
+      const { isAgendaReady, getAgenda, JOB_NAMES } = require('../../config/agenda');
+      if (isAgendaReady()) {
+        const stagger = Number(process.env.WHATSAPP_BROADCAST_STAGGER_MS) || 400;
+        const job = getAgenda().create(JOB_NAMES.WHATSAPP_BROADCAST, {
+          broadcastId,
+          clientId,
+        });
+        job.schedule(new Date(Date.now() + stagger));
+        await job.save();
+      }
+    }
+
+    return { ok: true, outcome, next_index: doc.next_index, status: doc.status };
   }
 }
 

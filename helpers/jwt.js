@@ -38,6 +38,8 @@ const authJwt = () => {
       { url: new RegExp(`^${apiEsc}/client/[^/]+/whatsapp/?$`), methods: ['GET', 'OPTIONS'] },
       // Unauthenticated GET /client/:id returns public fields only (handled in route)
       { url: new RegExp(`^${apiEsc}/client/[^/]+/?$`), methods: ['GET', 'OPTIONS'] },
+      // Customer booking manage links (token in body)
+      { url: new RegExp(`^${apiEsc}/bookings/manage/(cancel|reschedule)/?$`), methods: ['POST', 'OPTIONS'] },
 
       // Public email / newsletter
       { url: /\/api\/v1\/emailsub\/(subscribe|unsubscribe)\/?$/, methods: ['POST', 'OPTIONS'] },

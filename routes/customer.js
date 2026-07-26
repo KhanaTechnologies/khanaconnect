@@ -441,8 +441,12 @@ router.post('/:id/cart', validatePaidStorefrontToken, wrapRoute(async (req, res)
       return res.status(400).json({ error: 'Quantity must be at least 1' });
     }
     
-    // Verify product exists and belongs to client
-    const product = await Product.findOne({ _id: productId, clientID: req.clientID });
+    // Verify product exists, belongs to client, and is published (legacy docs without status count as published)
+    const product = await Product.findOne({
+      _id: productId,
+      clientID: req.clientID,
+      $or: [{ status: 'published' }, { status: { $exists: false } }, { status: null }],
+    });
     if (!product) {
       return res.status(404).json({ error: 'Product not found' });
     }

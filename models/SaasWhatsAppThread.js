@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 /**
- * Per-conversation metadata (assignment, etc.) for WhatsApp inbox threads.
+ * Per-conversation metadata (assignment, stage, labels, opt-out) for WhatsApp inbox threads.
  * Keyed by (client_id, contact_wa_id).
  */
 const saasWhatsAppThreadSchema = new mongoose.Schema(
@@ -11,10 +11,30 @@ const saasWhatsAppThreadSchema = new mongoose.Schema(
     assigned_member_id: { type: String, default: '', trim: true, index: true },
     assigned_name: { type: String, default: '', trim: true },
     assigned_at: { type: Date, default: null },
+    stage: {
+      type: String,
+      enum: ['open', 'waiting', 'closed'],
+      default: 'open',
+      index: true,
+    },
+    labels: {
+      type: [String],
+      default: [],
+      validate: {
+        validator(arr) {
+          return Array.isArray(arr) && arr.length <= 20;
+        },
+        message: 'At most 20 labels allowed',
+      },
+    },
+    marketing_opt_out: { type: Boolean, default: false },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );
 
 saasWhatsAppThreadSchema.index({ client_id: 1, contact_wa_id: 1 }, { unique: true });
+saasWhatsAppThreadSchema.index({ client_id: 1, stage: 1 });
+saasWhatsAppThreadSchema.index({ client_id: 1, labels: 1 });
+saasWhatsAppThreadSchema.index({ client_id: 1, marketing_opt_out: 1 });
 
 module.exports = mongoose.model('SaasWhatsAppThread', saasWhatsAppThreadSchema);

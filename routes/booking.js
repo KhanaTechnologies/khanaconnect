@@ -27,6 +27,14 @@ const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const { createDashboardAuth } = require('../helpers/dashboardAuth');
 const { recordTeamActivityFromRequest } = require('../helpers/teamActivity');
 const { autoAdvancePastBookings } = require('../helpers/bookingStatus');
+const {
+  assertNoConflicts,
+  resolveDayHours,
+  buffersForServices,
+  timeToMinutes,
+} = require('../helpers/bookingConflicts');
+const Service = require('../models/service');
+const crypto = require('crypto');
 
 const validateClient = createDashboardAuth('bookings');
 
@@ -207,6 +215,39 @@ router.post('/', validateClient, wrapRoute(async (req, res) => {
         });
     }
 
+    // Conflict check for service bookings (staff / resource).
+    // Soft by default so existing merchant double-book workflows keep working.
+    // Pass strictConflicts: true (body) to reject overlaps.
+    let conflictWarning = null;
+    if ((bookingType === 'service' || bookingType === 'mixed') && (assignedToId || resourceObjectId)) {
+      const buffers = await buffersForServices(clientId, servicesList);
+      try {
+        await assertNoConflicts({
+          clientId,
+          date: bookingDate,
+          time: bookingTime,
+          endTime,
+          durationMin: bookingDuration || buffers.duration,
+          assignedTo: assignedToId,
+          resourceId: resourceObjectId,
+          bufferBeforeMin: buffers.before,
+          bufferAfterMin: buffers.after,
+        });
+      } catch (conflictErr) {
+        if (req.body.strictConflicts === true || req.body.strictConflicts === 'true') {
+          return res.status(conflictErr.status || 409).json({
+            error: conflictErr.message,
+            conflicts: conflictErr.conflicts || [],
+          });
+        }
+        conflictWarning = {
+          message: conflictErr.message,
+          conflicts: conflictErr.conflicts || [],
+        };
+        console.warn(`[bookings] overlap allowed (soft) client=${clientId}: ${conflictErr.message}`);
+      }
+    }
+
     const accPayload =
         bookingType === 'accommodation' || bookingType === 'mixed'
             ? {
@@ -252,6 +293,7 @@ router.post('/', validateClient, wrapRoute(async (req, res) => {
     res.status(201).json({
         message: 'Booking created successfully',
         booking: populatedBooking,
+        ...(conflictWarning ? { conflictWarning } : {}),
         reminderSchedule: {
             type:
                 bookingType === 'accommodation'
@@ -738,25 +780,56 @@ router.post('/:id/payment-confirmation', wrapRoute(async (req, res) => {
 
 // GET: Check availability
 router.get('/availability/check', validateClient, wrapRoute(async (req, res) => {
-    const { date, duration, resourceId } = req.query;
+    const { date, duration, resourceId, assignedTo, services } = req.query;
     const clientId = req.clientId;
-    
+
     if (!date) {
         return res.status(400).json({ error: 'Date is required' });
     }
 
     const targetDate = new Date(date);
-    const existingBookings = await Booking.find({
-        clientID: clientId,
-        date: targetDate,
-        resourceId: resourceId || { $exists: false },
-        status: { $in: ['scheduled', 'confirmed'] }
+    const serviceNames = services
+      ? String(services).split(',').map((s) => s.trim()).filter(Boolean)
+      : [];
+    const buffers = await buffersForServices(clientId, serviceNames);
+    const bookingDuration = duration ? parseInt(duration, 10) : buffers.duration;
+
+    let resource = null;
+    if (resourceId) {
+      resource = await Resource.findOne({ _id: resourceId, clientID: clientId });
+    }
+    const hours = await resolveDayHours({
+      clientId,
+      date: targetDate,
+      assignedTo: assignedTo || null,
+      resource,
     });
 
-    // Generate available time slots
-    const availableSlots = generateTimeSlots(targetDate, existingBookings, duration);
-    
-    res.json({ availableSlots, date: targetDate.toISOString().split('T')[0] });
+    const existingBookings = await Booking.find({
+        clientID: clientId,
+        date: {
+          $gte: new Date(new Date(targetDate).setHours(0, 0, 0, 0)),
+          $lte: new Date(new Date(targetDate).setHours(23, 59, 59, 999)),
+        },
+        ...(resourceId ? { resourceId } : {}),
+        ...(assignedTo ? { assignedTo } : {}),
+        status: { $nin: ['cancelled', 'no-show'] },
+    });
+
+    const availableSlots = await generateTimeSlots(
+      targetDate,
+      existingBookings,
+      bookingDuration,
+      hours,
+      buffers
+    );
+
+    res.json({
+      availableSlots,
+      date: targetDate.toISOString().split('T')[0],
+      hours,
+      duration: bookingDuration,
+    });
 }));
 
 // POST: Add to waitlist
@@ -889,48 +962,54 @@ function calculateEndTime(startTime, duration) {
     return `${endDateTime.getHours().toString().padStart(2, '0')}:${endDateTime.getMinutes().toString().padStart(2, '0')}`;
 }
 
-// Utility function to generate time slots with support for 15-minute intervals
-function generateTimeSlots(date, existingBookings, duration = 60) {
+// Utility function to generate time slots using operating hours + buffers
+async function generateTimeSlots(date, existingBookings, duration = 60, hours = null, buffers = null) {
     const slots = [];
-    const startHour = 9; // 9 AM
-    const endHour = 17; // 5 PM
-    const intervalMinutes = 15; // Changed from 30 to 15 for more granular slots
-    
-    for (let hour = startHour; hour < endHour; hour++) {
-        for (let minute = 0; minute < 60; minute += intervalMinutes) {
-            const slotTime = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
-            const slotEnd = new Date(date);
-            slotEnd.setHours(hour, minute + parseInt(duration), 0, 0);
-            
-            // Check if slot goes beyond end hour
-            if (slotEnd.getHours() > endHour || (slotEnd.getHours() === endHour && slotEnd.getMinutes() > 0)) {
-                continue;
-            }
-            
-            const slotEndTime = `${slotEnd.getHours().toString().padStart(2, '0')}:${slotEnd.getMinutes().toString().padStart(2, '0')}`;
-            
-            // Check if slot conflicts with existing bookings
-            const isAvailable = !existingBookings.some(booking => {
-                return (slotTime >= booking.time && slotTime < booking.endTime) ||
-                       (slotEndTime > booking.time && slotEndTime <= booking.endTime) ||
-                       (slotTime <= booking.time && slotEndTime >= booking.endTime);
+    const before = Number(buffers?.before) || 0;
+    const after = Number(buffers?.after) || 0;
+    const dur = parseInt(duration, 10) || 60;
+
+    if (hours?.closed) return slots;
+
+    const startMin = timeToMinutes(hours?.start || '09:00');
+    const endMin = timeToMinutes(hours?.end || '17:00');
+    const intervalMinutes = 15;
+
+    for (let mins = startMin; mins + dur + after <= endMin; mins += intervalMinutes) {
+        const hour = Math.floor(mins / 60);
+        const minute = mins % 60;
+        const slotTime = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+        const slotEndMins = mins + dur;
+        const endH = Math.floor(slotEndMins / 60);
+        const endM = slotEndMins % 60;
+        const slotEndTime = `${endH.toString().padStart(2, '0')}:${endM.toString().padStart(2, '0')}`;
+
+        const paddedStart = mins - before;
+        const paddedEnd = slotEndMins + after;
+
+        const isAvailable = !existingBookings.some((booking) => {
+            if (!booking.time) return false;
+            const bStart = timeToMinutes(booking.time);
+            const bEnd = booking.endTime
+              ? timeToMinutes(booking.endTime)
+              : bStart + (Number(booking.duration) || 60);
+            return paddedStart < bEnd && bStart < paddedEnd;
+        });
+
+        if (isAvailable) {
+            slots.push({
+                time: slotTime,
+                endTime: slotEndTime,
+                duration: dur,
+                available: true
             });
-            
-            if (isAvailable) {
-                slots.push({
-                    time: slotTime,
-                    endTime: slotEndTime,
-                    duration: parseInt(duration),
-                    available: true
-                });
-            }
         }
     }
-    
+
     return slots;
 }
 
-// Utility function to process waitlist
+// Utility function to process waitlist — email + WhatsApp notify
 async function processWaitlist(cancelledBooking) {
     const waitlistEntries = await Waitlist.find({
         clientID: cancelledBooking.clientID,
@@ -942,14 +1021,52 @@ async function processWaitlist(cancelledBooking) {
         ]
     }).sort({ createdAt: 1 });
 
+    const client = await Client.findOne({ clientID: cancelledBooking.clientID });
+
     for (const entry of waitlistEntries) {
-        // Notify customer about availability
-        // You would implement actual notification logic here
-        console.log(`Notifying waitlist entry ${entry._id} about available slot`);
-        
+        try {
+          if (entry.customerPhone) {
+            await WhatsAppService.safeNotifyBookingReminder({
+              clientId: cancelledBooking.clientID,
+              to: entry.customerPhone,
+              companyName: client?.companyName || cancelledBooking.clientID,
+              when: `${cancelledBooking.date?.toISOString?.()?.slice(0, 10) || ''} ${cancelledBooking.time || ''}`.trim(),
+              bookingRef: 'waitlist',
+            });
+          }
+        } catch (waErr) {
+          console.warn('[waitlist] whatsapp notify failed:', waErr.message);
+        }
+
+        try {
+          if (client && clientCanSendMail(client) && entry.customerEmail) {
+            // Reuse confirmation helper shape with a synthetic booking for waitlist open-slot notice
+            await sendBookingConfirmationEmail(
+              {
+                customerName: entry.customerName,
+                customerEmail: entry.customerEmail,
+                customerPhone: entry.customerPhone,
+                services: entry.services,
+                date: cancelledBooking.date,
+                time: cancelledBooking.time,
+                endTime: cancelledBooking.endTime,
+                notes: 'A preferred waitlist slot opened — contact us to confirm.',
+                status: 'pending',
+              },
+              client.businessEmail,
+              client.businessEmailPassword,
+              client.clientName || client.companyName || cancelledBooking.clientID,
+              client.emailSignature || '',
+              clientEmailBrandingPayload(client)
+            );
+          }
+        } catch (emailErr) {
+          console.warn('[waitlist] email notify failed:', emailErr.message);
+        }
+
         entry.status = 'notified';
         await entry.save();
-        break; // Only notify the first matching entry
+        break;
     }
 }
 
@@ -1285,6 +1402,186 @@ router.get('/debug/all-bookings', validateClient, wrapRoute(async (req, res) => 
         bookings: debugBookings,
         total: allBookings.length
     });
+}));
+
+// Weekly recurrence (thin): create N weekly copies from a template body
+router.post('/recurring', validateClient, wrapRoute(async (req, res) => {
+  const weeks = Math.min(Math.max(Number(req.body.weeks) || 4, 1), 26);
+  const template = { ...req.body };
+  delete template.weeks;
+  const created = [];
+  const baseDate = new Date(template.date);
+  if (Number.isNaN(baseDate.getTime())) {
+    return res.status(400).json({ error: 'Valid date required' });
+  }
+
+  for (let i = 0; i < weeks; i += 1) {
+    const d = new Date(baseDate);
+    d.setDate(d.getDate() + i * 7);
+    req.body = {
+      ...template,
+      date: d.toISOString(),
+      recurring: { pattern: 'weekly', endDate: new Date(baseDate.getTime() + (weeks - 1) * 7 * 86400000) },
+    };
+    // Inline create for recurrence to avoid recursive router hop
+    const clientId = req.clientId;
+    const servicesList = Array.isArray(template.services)
+      ? template.services
+      : template.services
+        ? [template.services]
+        : [];
+    if (!template.customerName || !template.customerEmail || !template.customerPhone || !servicesList.length) {
+      return res.status(400).json({ error: 'customer + services required' });
+    }
+    const time = template.time;
+    const duration = parseInt(template.duration, 10) || 60;
+    const [h, m] = String(time).split(':').map(Number);
+    const endDt = new Date(d);
+    endDt.setHours(h, m + duration, 0, 0);
+    const endTime = `${String(endDt.getHours()).padStart(2, '0')}:${String(endDt.getMinutes()).padStart(2, '0')}`;
+    const assignedTo = template.assignedTo || null;
+    const buffers = await buffersForServices(clientId, servicesList);
+    try {
+      await assertNoConflicts({
+        clientId,
+        date: d,
+        time,
+        endTime,
+        durationMin: duration,
+        assignedTo,
+        bufferBeforeMin: buffers.before,
+        bufferAfterMin: buffers.after,
+      });
+    } catch (e) {
+      continue; // skip conflicting weeks
+    }
+    const doc = await Booking.create({
+      customerName: template.customerName,
+      customerEmail: String(template.customerEmail).toLowerCase().trim(),
+      customerPhone: template.customerPhone,
+      services: servicesList,
+      date: d,
+      time,
+      endTime,
+      duration,
+      assignedTo,
+      notes: template.notes || '',
+      clientID: clientId,
+      bookingType: 'service',
+      status: 'confirmed',
+      payment: { status: 'pending' },
+      recurring: {
+        pattern: 'weekly',
+        endDate: new Date(baseDate.getTime() + (weeks - 1) * 7 * 86400000),
+        parentBooking: created[0]?._id || undefined,
+      },
+    });
+    created.push(doc);
+  }
+
+  res.status(201).json({ created: created.length, bookings: created });
+}));
+
+// Customer manage token (cancel / reschedule link)
+router.post('/:id/manage-token', validateClient, wrapRoute(async (req, res) => {
+  const booking = await Booking.findOne({ _id: req.params.id, clientID: req.clientId });
+  if (!booking) return res.status(404).json({ error: 'Booking not found' });
+  const secret = process.env.BOOKING_MANAGE_SECRET || process.env.JWT_SECRET || 'booking-manage';
+  const token = jwt.sign(
+    { bookingId: String(booking._id), clientID: req.clientId, purpose: 'booking_manage' },
+    secret,
+    { expiresIn: '7d' }
+  );
+  const base = process.env.PUBLIC_APP_URL || process.env.FRONTEND_URL || '';
+  res.json({
+    token,
+    manageUrl: base ? `${base.replace(/\/$/, '')}/booking/manage?token=${encodeURIComponent(token)}` : token,
+    expiresIn: '7d',
+  });
+}));
+
+router.post('/manage/cancel', wrapRoute(async (req, res) => {
+  const token = req.body?.token || req.query?.token;
+  if (!token) return res.status(400).json({ error: 'token required' });
+  const secret = process.env.BOOKING_MANAGE_SECRET || process.env.JWT_SECRET || 'booking-manage';
+  let decoded;
+  try {
+    decoded = jwt.verify(token, secret);
+  } catch {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+  if (decoded.purpose !== 'booking_manage') return res.status(401).json({ error: 'Invalid token purpose' });
+  const booking = await Booking.findOne({ _id: decoded.bookingId, clientID: decoded.clientID });
+  if (!booking) return res.status(404).json({ error: 'Booking not found' });
+  if (booking.status === 'cancelled') return res.json({ message: 'Already cancelled', booking });
+  booking.status = 'cancelled';
+  await booking.save();
+  await processWaitlist(booking);
+  res.json({ message: 'Booking cancelled', booking });
+}));
+
+router.post('/manage/reschedule', wrapRoute(async (req, res) => {
+  const token = req.body?.token;
+  const { date, time, duration } = req.body || {};
+  if (!token || !date || !time) return res.status(400).json({ error: 'token, date, and time required' });
+  const secret = process.env.BOOKING_MANAGE_SECRET || process.env.JWT_SECRET || 'booking-manage';
+  let decoded;
+  try {
+    decoded = jwt.verify(token, secret);
+  } catch {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+  const booking = await Booking.findOne({ _id: decoded.bookingId, clientID: decoded.clientID });
+  if (!booking) return res.status(404).json({ error: 'Booking not found' });
+  const bookingDuration = parseInt(duration, 10) || booking.duration || 60;
+  const bookingDate = new Date(date);
+  const [h, m] = String(time).split(':').map(Number);
+  const endDt = new Date(bookingDate);
+  endDt.setHours(h, m + bookingDuration, 0, 0);
+  const endTime = `${String(endDt.getHours()).padStart(2, '0')}:${String(endDt.getMinutes()).padStart(2, '0')}`;
+  const buffers = await buffersForServices(decoded.clientID, booking.services || []);
+  try {
+    await assertNoConflicts({
+      clientId: decoded.clientID,
+      date: bookingDate,
+      time,
+      endTime,
+      durationMin: bookingDuration,
+      assignedTo: booking.assignedTo,
+      resourceId: booking.resourceId,
+      excludeBookingId: booking._id,
+      bufferBeforeMin: buffers.before,
+      bufferAfterMin: buffers.after,
+    });
+  } catch (e) {
+    return res.status(e.status || 409).json({ error: e.message });
+  }
+  booking.date = bookingDate;
+  booking.time = time;
+  booking.endTime = endTime;
+  booking.duration = bookingDuration;
+  await booking.save();
+  res.json({ message: 'Booking rescheduled', booking });
+}));
+
+// Deposit PayFast ITN already uses payment-confirmation; allow setting deposit amount
+router.post('/:id/deposit', validateClient, wrapRoute(async (req, res) => {
+  const booking = await Booking.findOne({ _id: req.params.id, clientID: req.clientId });
+  if (!booking) return res.status(404).json({ error: 'Booking not found' });
+  const amount = Number(req.body.depositAmount ?? req.body.amount);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return res.status(400).json({ error: 'depositAmount must be a positive number' });
+  }
+  booking.payment = booking.payment || {};
+  booking.payment.depositAmount = amount;
+  booking.payment.amount = amount;
+  booking.payment.status = 'pending';
+  booking.payment.currency = 'ZAR';
+  await booking.save();
+  res.json({
+    booking,
+    note: 'Complete payment via your PayFast checkout; webhook payment-confirmation will set deposit-paid.',
+  });
 }));
 
 module.exports = router;

@@ -88,6 +88,11 @@ class ReminderService {
 
                 console.log(`✉️ Sending reminder for booking ${booking._id}`);
 
+                // Channel: email + WhatsApp. SMS enum values are accepted on reminders but not sent (no SMS provider).
+                if (unsentReminder.type === 'sms') {
+                  console.log(`[reminders] SMS channel not configured — skipping SMS for booking ${booking._id}; email/WhatsApp still used when applicable`);
+                }
+
                 // Send appropriate email based on reminder type
                 const emailSig = client.emailSignature || '';
                 if (unsentReminder.reminderType === 'checkin') {

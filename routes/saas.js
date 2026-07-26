@@ -297,8 +297,142 @@ router.put('/whatsapp/notifications', requireRoles('owner', 'manager'), wrapRout
 router.get('/whatsapp/inbox/threads', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
   const limit = Number(req.query.limit) || 40;
   const q = String(req.query.q || req.query.search || '').trim();
-  const threads = await WhatsAppInboxService.listThreads(req.tenant.clientId, { limit, q });
+  const stage = String(req.query.stage || '').trim();
+  const label = String(req.query.label || '').trim();
+  const assignee = String(req.query.assignee || '').trim();
+  const unreadOnly =
+    req.query.unread === '1' ||
+    req.query.unread === 'true' ||
+    String(req.query.unread_only || '').toLowerCase() === 'true';
+  const assigneeMemberId =
+    String(req.tenant?.userId || req.teamSession?.member?._id || '').trim();
+  const threads = await WhatsAppInboxService.listThreads(req.tenant.clientId, {
+    limit,
+    q,
+    stage,
+    label,
+    assignee,
+    assigneeMemberId,
+    unreadOnly,
+  });
   res.json({ ok: true, data: { threads } });
+}));
+
+router.patch(
+  '/whatsapp/inbox/threads/:contactWaId',
+  requireRoles('owner', 'manager', 'operator'),
+  wrapRoute(async (req, res) => {
+    const data = await WhatsAppInboxService.updateThreadMeta(
+      req.tenant.clientId,
+      req.params.contactWaId,
+      req.body || {}
+    );
+    res.json({ ok: true, data });
+  })
+);
+
+router.get(
+  '/whatsapp/inbox/threads/:contactWaId/notes',
+  requireRoles('owner', 'manager', 'operator', 'viewer'),
+  wrapRoute(async (req, res) => {
+    const notes = await WhatsAppInboxService.listThreadNotes(
+      req.tenant.clientId,
+      req.params.contactWaId
+    );
+    res.json({ ok: true, data: { notes } });
+  })
+);
+
+router.post(
+  '/whatsapp/inbox/threads/:contactWaId/notes',
+  requireRoles('owner', 'manager', 'operator'),
+  wrapRoute(async (req, res) => {
+    const memberId = String(req.tenant?.userId || req.teamSession?.member?._id || '').trim();
+    const name = String(
+      req.teamSession?.member?.displayName ||
+        [req.teamSession?.member?.firstName, req.teamSession?.member?.lastName].filter(Boolean).join(' ') ||
+        req.tenant?.role ||
+        'Team'
+    ).trim();
+    const note = await WhatsAppInboxService.createThreadNote(
+      req.tenant.clientId,
+      req.params.contactWaId,
+      req.body || {},
+      { memberId, name }
+    );
+    res.status(201).json({ ok: true, data: note });
+  })
+);
+
+router.delete(
+  '/whatsapp/inbox/threads/:contactWaId/notes/:noteId',
+  requireRoles('owner', 'manager', 'operator'),
+  wrapRoute(async (req, res) => {
+    const data = await WhatsAppInboxService.deleteThreadNote(
+      req.tenant.clientId,
+      req.params.contactWaId,
+      req.params.noteId,
+      {
+        memberId: String(req.tenant?.userId || req.teamSession?.member?._id || '').trim(),
+        role: req.tenant?.role,
+      }
+    );
+    res.json({ ok: true, data });
+  })
+);
+
+router.get('/whatsapp/templates', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const status = String(req.query.status || '').trim();
+  const templates = await WhatsAppInboxService.listMessageTemplates(req.tenant.clientId, { status });
+  res.json({ ok: true, data: { templates } });
+}));
+
+router.post('/whatsapp/templates/sync', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
+  const data = await WhatsAppInboxService.syncMessageTemplates(req.tenant.clientId);
+  res.json({ ok: true, data });
+}));
+
+router.get('/whatsapp/inbox/auto-rules', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const rules = await WhatsAppInboxService.listAutoRules(req.tenant.clientId);
+  res.json({ ok: true, data: { rules } });
+}));
+
+router.post('/whatsapp/inbox/auto-rules', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
+  const rule = await WhatsAppInboxService.createAutoRule(req.tenant.clientId, req.body || {});
+  res.status(201).json({ ok: true, data: rule });
+}));
+
+router.patch('/whatsapp/inbox/auto-rules/:id', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
+  const rule = await WhatsAppInboxService.updateAutoRule(req.tenant.clientId, req.params.id, req.body || {});
+  res.json({ ok: true, data: rule });
+}));
+
+router.delete('/whatsapp/inbox/auto-rules/:id', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
+  const data = await WhatsAppInboxService.deleteAutoRule(req.tenant.clientId, req.params.id);
+  res.json({ ok: true, data });
+}));
+
+router.get('/whatsapp/inbox/broadcasts', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const broadcasts = await WhatsAppInboxService.listBroadcasts(req.tenant.clientId);
+  res.json({ ok: true, data: { broadcasts } });
+}));
+
+router.get('/whatsapp/inbox/broadcasts/:id', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const broadcast = await WhatsAppInboxService.getBroadcast(req.tenant.clientId, req.params.id);
+  res.json({ ok: true, data: broadcast });
+}));
+
+router.post('/whatsapp/inbox/broadcasts', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
+  const data = await WhatsAppInboxService.createBroadcast(
+    req.tenant.clientId,
+    req.body || {},
+    {
+      memberId: String(req.tenant?.userId || '').trim(),
+      userId: String(req.tenant?.userId || '').trim(),
+      role: req.tenant?.role,
+    }
+  );
+  res.status(202).json({ ok: true, data });
 }));
 
 router.get('/whatsapp/inbox/unread', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
@@ -330,6 +464,19 @@ router.get('/whatsapp/inbox/contact-context/:contactWaId', requireRoles('owner',
   const data = await WhatsAppInboxService.getContactContext(req.tenant.clientId, req.params.contactWaId);
   res.json({ ok: true, data });
 }));
+
+router.put(
+  '/whatsapp/inbox/customers/:customerId',
+  requireRoles('owner', 'manager', 'operator'),
+  wrapRoute(async (req, res) => {
+    const data = await WhatsAppInboxService.updateCustomer(
+      req.tenant.clientId,
+      req.params.customerId,
+      req.body || {}
+    );
+    res.json({ ok: true, data });
+  })
+);
 
 router.get('/whatsapp/inbox/customers/:customerId', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
   const data = await WhatsAppInboxService.getCustomerSummary(req.tenant.clientId, req.params.customerId);
@@ -371,10 +518,14 @@ router.post(
   idempotencyGuard('saas.whatsapp.inbox.template'),
   wrapRoute(async (req, res) => {
     const templateName = req.body?.templateName || req.body?.template_name || 'hello_world';
+    const language = req.body?.language || req.body?.template_language || '';
+    const components = req.body?.components;
     const data = await WhatsAppInboxService.sendInboxTemplate({
       clientId: req.tenant.clientId,
       contactWaId: req.params.contactWaId,
       templateName,
+      language,
+      components,
     });
     res.status(202).json({ ok: true, data });
   })

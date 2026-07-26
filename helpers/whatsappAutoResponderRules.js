@@ -24,7 +24,25 @@ const ROLE =
 
 
 
+const DEMO_URL =
+
+  process.env.PUBLIC_DEMO_URL || 'https://khanatechnologies.co.za/demo';
+
+
+
+const DEMO_CTA =
+
+  '\n\nYou can explore the live interactive demo yourself (no login): ' +
+
+  DEMO_URL +
+
+  '\nIt covers the owner dashboard, website, bookings/orders, and more.';
+
+
+
 const CLOSE =
+
+  DEMO_CTA +
 
   '\n\nTo see if we’re a fit, reply with:\n' +
 
@@ -32,13 +50,13 @@ const CLOSE =
 
   '2) What you do\n' +
 
-  '3) Are you interested in a short demo? (yes/no)\n' +
+  '3) Are you interested after looking at the demo? (yes/no)\n' +
 
   '4) How would you like us to help? (website / bookings / orders / WhatsApp / not sure)\n' +
 
   '5) Do you want the full connected system, or only a simple page?\n\n' +
 
-  'If you’re looking for the full system and you’re interested, I’ll book the demo.';
+  'If you’re looking for the full system and you’re interested, reply and we’ll take the next step.';
 
 
 
@@ -72,7 +90,7 @@ const DEFAULT_RULES = [
 
       ROLE +
 
-      '\n\nWhat we can do is a quick live demo of the full system first. If it fits, we start setup properly.' +
+      '\n\nExplore the live demo first. If it fits, we start setup properly.' +
 
       CLOSE,
 
@@ -108,7 +126,7 @@ const DEFAULT_RULES = [
 
       '. Booking/order confirmations and customer replies stay linked to the right customer.\n\n' +
 
-      'Easiest is a short live demo so I can show you how it fits a business like yours.' +
+      'Easiest is to explore the live demo yourself, then reply if you want us to tailor it to your business.' +
 
       CLOSE,
 
@@ -124,6 +142,10 @@ const DEFAULT_RULES = [
 
       'kind of bookings',
 
+      'what types of bookings',
+
+      'types of bookings',
+
       'what bookings',
 
       'booking system',
@@ -136,9 +158,11 @@ const DEFAULT_RULES = [
 
       'Bookings work for appointment businesses like salons, clinics, car washes with time slots, beauty, wellness, consultations, and similar. We customise slots and services to how you operate.\n\n' +
 
-      'That sits with your website, customer list, and WhatsApp/email updates — not bookings alone.\n\n' +
+      ROLE +
 
-      'I can show you a live demo of the full flow in about 10–15 minutes.' +
+      '\n\nThat sits with your website, customer list, and WhatsApp/email updates — not bookings alone.\n\n' +
+
+      'You can see bookings in the live demo yourself — open the tour and try the bookings flow.' +
 
       CLOSE,
 
@@ -178,7 +202,7 @@ const DEFAULT_RULES = [
 
       'Orders tie into customers, your site, and WhatsApp/email so the whole run of the business stays in one place.\n\n' +
 
-      'Best next step is a short live demo for your type of business.' +
+      'Best next step is to explore the live demo for your type of business.' +
 
       CLOSE,
 
@@ -212,7 +236,7 @@ const DEFAULT_RULES = [
 
       '\n\nSo you don’t get a pretty site that sits separate from how you actually run the business.\n\n' +
 
-      'I can walk you through a live demo of the full system.' +
+      'Explore the live demo of the full system, then reply if you want to go further.' +
 
       CLOSE,
 
@@ -256,7 +280,7 @@ const DEFAULT_RULES = [
 
       '.\n\n' +
 
-      'Best next step is a live demo so you can judge it yourself before any setup.' +
+      'Best next step is the live demo so you can judge it yourself before any setup.' +
 
       CLOSE,
 
@@ -292,7 +316,7 @@ const DEFAULT_RULES = [
 
       ROLE +
 
-      '\n\nI’ll give you an exact figure after a quick demo once I know your business.' +
+      '\n\nI’ll give you an exact figure after you’ve looked at the demo and I know your business.' +
 
       CLOSE,
 
@@ -332,7 +356,7 @@ const DEFAULT_RULES = [
 
       '.\n\n' +
 
-      'Let’s start with a short live demo for your type of business.' +
+      'Start with the live demo for your type of business, then reply with the details below.' +
 
       CLOSE,
 
@@ -360,7 +384,7 @@ const DEFAULT_RULES = [
 
       '.\n\n' +
 
-      'If that sounds like what you need, I can do a short live demo.' +
+      'If that sounds like what you need, explore the live demo and reply below.' +
 
       CLOSE,
 
@@ -452,6 +476,8 @@ module.exports = {
 
   matchAutoReplyRule,
 
+  keywordMatches,
+
   normalizeText,
 
   CLOSE,
@@ -459,6 +485,10 @@ module.exports = {
   PLATFORM,
 
   ROLE,
+
+  DEMO_URL,
+
+  DEMO_CTA,
 
 };
 
