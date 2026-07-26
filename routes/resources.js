@@ -18,17 +18,20 @@ router.get('/', validateClient, wrapRoute(async (req, res) => {
 
 // POST: Create a new resource
 router.post('/', validateClient, wrapRoute(async (req, res) => {
-    const { name, type, description, capacity, features, location, color, duration } = req.body;
+    const { name, type, description, capacity, features, location, color, duration, operatingHours, isActive, roomType } = req.body;
 
     const resource = new Resource({
         name,
-        type,
+        type: type || 'other',
+        roomType: type === 'room' ? (roomType || 'double') : undefined,
         description,
         capacity,
         features,
         location,
         color,
         duration,
+        operatingHours,
+        isActive: isActive === undefined ? true : !!isActive,
         clientID: req.clientId
     });
 
@@ -49,7 +52,7 @@ router.put('/:id', validateClient, wrapRoute(async (req, res) => {
         return res.status(404).json({ error: 'Resource not found or unauthorized' });
     }
 
-    const updatableFields = ['name', 'type', 'description', 'capacity', 'features', 'location', 'color', 'duration', 'isActive'];
+    const updatableFields = ['name', 'type', 'description', 'capacity', 'features', 'location', 'color', 'duration', 'isActive', 'operatingHours', 'roomType'];
     updatableFields.forEach(field => {
         if (req.body[field] !== undefined) {
             resource[field] = req.body[field];

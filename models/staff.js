@@ -30,6 +30,11 @@ const staffSchema = new mongoose.Schema({
     type: Boolean,
     default: true, // To track if staff member is active
   },
+  // Per-day hours used by booking availability (defaults applied in helper if missing)
+  operatingHours: {
+    type: Object,
+    default: undefined,
+  },
   clientID: {
     type: String,
     required: true, // Ensures every staff member is linked to a client
