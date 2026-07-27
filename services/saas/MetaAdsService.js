@@ -144,6 +144,25 @@ async function listAdAccounts(clientId) {
   };
 }
 
+async function resolveInstagramFromPage(pageId, pageToken) {
+  if (!pageId || !pageToken) {
+    return { instagramUserId: '', instagramUsername: '' };
+  }
+  try {
+    const page = await graphGet(`/${pageId}`, pageToken, {
+      fields: 'instagram_business_account{id,username}',
+    });
+    const ig = page?.instagram_business_account;
+    return {
+      instagramUserId: ig?.id ? String(ig.id) : '',
+      instagramUsername: ig?.username ? String(ig.username) : '',
+    };
+  } catch (err) {
+    console.warn('[meta ads] instagram_business_account resolve failed:', formatGraphError(err));
+    return { instagramUserId: '', instagramUsername: '' };
+  }
+}
+
 async function updateSelection(clientId, { pageId, adAccountId }) {
   const client = await loadClientWithMeta(clientId);
   const token = String(client.metaAds.accessToken);
@@ -159,6 +178,13 @@ async function updateSelection(clientId, { pageId, adAccountId }) {
     client.metaAds.pageId = String(page.id);
     client.metaAds.pageName = String(page.name || '');
     client.metaAds.pageAccessToken = page.access_token ? String(page.access_token) : '';
+
+    const pageToken = client.metaAds.pageAccessToken
+      ? String(client.metaAds.pageAccessToken)
+      : token;
+    const ig = await resolveInstagramFromPage(client.metaAds.pageId, pageToken);
+    client.metaAds.instagramUserId = ig.instagramUserId;
+    client.metaAds.instagramUsername = ig.instagramUsername;
   }
 
   if (adAccountId) {
@@ -200,6 +226,9 @@ async function updateSelection(clientId, { pageId, adAccountId }) {
     adAccountId: client.metaAds.adAccountId || '',
     adAccountName: client.metaAds.adAccountName || '',
     pixelConfigured: !!client.metaAds.pixelId,
+    instagramUserId: client.metaAds.instagramUserId || '',
+    instagramUsername: client.metaAds.instagramUsername || '',
+    instagramConnected: !!client.metaAds.instagramUserId,
   };
 }
 
@@ -244,6 +273,90 @@ function mapPagePosts(posts) {
     permalink: p.permalink_url || '',
     shares: Number(p.shares?.count) || 0,
   }));
+}
+
+async function listInstagramMedia(clientId, { limit = 20 } = {}) {
+  const client = await loadClientWithMeta(clientId);
+  const pageId = client.metaAds?.pageId;
+  if (!pageId) throw new Error('Select a Facebook Page first');
+
+  const pageToken = await ensurePageAccessToken(client, pageId);
+  let igUserId = client.metaAds.instagramUserId ? String(client.metaAds.instagramUserId) : '';
+  let igUsername = client.metaAds.instagramUsername ? String(client.metaAds.instagramUsername) : '';
+
+  if (!igUserId) {
+    const ig = await resolveInstagramFromPage(pageId, pageToken);
+    igUserId = ig.instagramUserId;
+    igUsername = ig.instagramUsername;
+    if (igUserId) {
+      client.metaAds.instagramUserId = igUserId;
+      client.metaAds.instagramUsername = igUsername;
+      client.markModified('metaAds');
+      await client.save();
+    }
+  }
+
+  if (!igUserId) {
+    return {
+      connected: false,
+      instagramUserId: '',
+      instagramUsername: '',
+      pageId: String(pageId),
+      pageName: client.metaAds.pageName || '',
+      media: [],
+      message:
+        'This Facebook Page has no linked Instagram professional account. In Meta, link Instagram to the Page, then reconnect Facebook in Khana.',
+      helpUrl: 'https://www.facebook.com/business/help/connect-instagram-to-page',
+    };
+  }
+
+  const cap = Math.min(Math.max(Number(limit) || 20, 1), 50);
+  try {
+    const res = await graphGet(`/${igUserId}/media`, pageToken, {
+      fields:
+        'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,boost_eligibility_info',
+      limit: cap,
+    });
+    const rows = Array.isArray(res?.data) ? res.data : [];
+    const media = rows.map((m) => {
+      const eligibility = m.boost_eligibility_info || {};
+      const eligibleRaw = eligibility.eligible;
+      const eligible =
+        eligibleRaw === undefined || eligibleRaw === null ? true : Boolean(eligibleRaw);
+      return {
+        id: String(m.id),
+        caption: String(m.caption || '').slice(0, 500),
+        mediaType: String(m.media_type || ''),
+        mediaUrl: m.media_url || '',
+        thumbnailUrl: m.thumbnail_url || m.media_url || '',
+        permalink: m.permalink || '',
+        timestamp: m.timestamp || null,
+        eligible,
+        ineligibilityReason: eligible
+          ? ''
+          : String(eligibility.reason_summary || eligibility.reason || 'Not eligible to boost'),
+      };
+    });
+
+    return {
+      connected: true,
+      instagramUserId: igUserId,
+      instagramUsername: igUsername,
+      pageId: String(pageId),
+      pageName: client.metaAds.pageName || '',
+      media,
+      message: '',
+      helpUrl: '',
+    };
+  } catch (err) {
+    const msg = formatGraphError(err);
+    const needsReconnect = /permission|(#10)|(#200)|instagram|OAuthException/i.test(msg);
+    throw new Error(
+      needsReconnect
+        ? `${msg} Reconnect Facebook after adding instagram_basic to the Login for Business configuration.`
+        : msg
+    );
+  }
 }
 
 async function listPagePosts(clientId, { limit = 20 } = {}) {
@@ -617,12 +730,16 @@ async function boostPost(
     country = 'ZA',
     status = 'PAUSED',
     targeting: targetingInput = {},
+    source = 'facebook',
   }
 ) {
   const client = await loadClientWithMeta(clientId);
   const token = String(client.metaAds.accessToken);
   const pageId = client.metaAds?.pageId;
   const adAccountId = normalizeAdAccountId(client.metaAds?.adAccountId);
+  const boostSource = String(source || 'facebook').toLowerCase() === 'instagram'
+    ? 'instagram'
+    : 'facebook';
 
   if (!pageId) throw new Error('Select a Facebook Page first');
   if (!adAccountId) throw new Error('Select an ad account first');
@@ -640,8 +757,33 @@ async function boostPost(
 
   const durationDays = Math.min(Math.max(Number(days) || 7, 1), 30);
   const adStatus = String(status).toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'PAUSED';
-  const objectStoryId = String(postId).includes('_') ? String(postId) : `${pageId}_${postId}`;
   const stamp = new Date().toISOString().slice(0, 10);
+
+  let objectStoryId = '';
+  let igMediaId = '';
+  let igUserId = client.metaAds.instagramUserId ? String(client.metaAds.instagramUserId) : '';
+
+  if (boostSource === 'instagram') {
+    igMediaId = String(postId);
+    if (!igUserId) {
+      const pageToken = await ensurePageAccessToken(client, pageId);
+      const ig = await resolveInstagramFromPage(pageId, pageToken);
+      igUserId = ig.instagramUserId;
+      if (igUserId) {
+        client.metaAds.instagramUserId = ig.instagramUserId;
+        client.metaAds.instagramUsername = ig.instagramUsername;
+        client.markModified('metaAds');
+        await client.save();
+      }
+    }
+    if (!igUserId) {
+      throw new Error(
+        'No Instagram account linked to this Facebook Page. Link Instagram Professional to the Page in Meta, then reconnect.'
+      );
+    }
+  } else {
+    objectStoryId = String(postId).includes('_') ? String(postId) : `${pageId}_${postId}`;
+  }
 
   const targeting = buildTargetingSpec({
     country,
@@ -652,10 +794,11 @@ async function boostPost(
   let campaignId;
   let adSetId;
   let adId;
+  const boostLabel = boostSource === 'instagram' ? igMediaId : objectStoryId;
 
   try {
     const campaign = await graphPost(`/act_${adAccountId}/campaigns`, token, {
-      name: `Khana Boost ${stamp}`,
+      name: `Khana Boost ${boostSource === 'instagram' ? 'IG ' : ''}${stamp}`,
       objective: 'OUTCOME_ENGAGEMENT',
       status: adStatus,
       special_ad_categories: JSON.stringify([]),
@@ -666,7 +809,7 @@ async function boostPost(
     const endTime = startTime + durationDays * 86400;
 
     const adSet = await graphPost(`/act_${adAccountId}/adsets`, token, {
-      name: `Boost ${objectStoryId}`,
+      name: `Boost ${boostLabel}`,
       campaign_id: campaignId,
       daily_budget: dailyBudgetCents,
       billing_event: 'IMPRESSIONS',
@@ -680,13 +823,23 @@ async function boostPost(
     });
     adSetId = adSet.id;
 
-    const creative = await graphPost(`/act_${adAccountId}/adcreatives`, token, {
-      name: `Creative ${objectStoryId}`,
-      object_story_id: objectStoryId,
-    });
+    let creative;
+    if (boostSource === 'instagram') {
+      creative = await graphPost(`/act_${adAccountId}/adcreatives`, token, {
+        name: `IG Creative ${igMediaId}`,
+        object_id: pageId,
+        instagram_user_id: igUserId,
+        source_instagram_media_id: igMediaId,
+      });
+    } else {
+      creative = await graphPost(`/act_${adAccountId}/adcreatives`, token, {
+        name: `Creative ${objectStoryId}`,
+        object_story_id: objectStoryId,
+      });
+    }
 
     const ad = await graphPost(`/act_${adAccountId}/ads`, token, {
-      name: `Boost ${objectStoryId}`,
+      name: `Boost ${boostLabel}`,
       adset_id: adSetId,
       creative: JSON.stringify({ creative_id: creative.id }),
       status: adStatus,
@@ -697,13 +850,14 @@ async function boostPost(
   }
 
   const campaignDoc = {
-    name: `Boost ${objectStoryId}`,
+    name: `Boost ${boostLabel}`,
     objective: 'OUTCOME_ENGAGEMENT',
     budget: dailyBudgetNum,
     status: adStatus === 'ACTIVE' ? 'active' : 'paused',
     meta_campaign_id: String(campaignId),
     campaign_type: 'boost',
-    boostPostId: objectStoryId,
+    boostPostId: boostLabel,
+    boostSource,
     meta_adset_id: String(adSetId),
     meta_ad_id: String(adId),
     targeting,
@@ -718,32 +872,50 @@ async function boostPost(
   const saved = updated?.metaAds?.campaigns?.[updated.metaAds.campaigns.length - 1];
 
   if (saved) {
-    await SaasUsageEvent.create({
-      client_id: clientId,
-      service: 'ads_service_fee',
-      message_type: 'boost',
-      units: 1,
-      source_ref: String(saved._id),
-      status: 'queued',
-      metadata: { metaCampaignSubdocId: String(saved._id), postId: objectStoryId },
-    });
+    try {
+      await SaasUsageEvent.create({
+        client_id: clientId,
+        service: 'ads_service_fee',
+        message_type: 'service',
+        units: 1,
+        source_ref: String(saved._id),
+        status: 'queued',
+        metadata: {
+          metaCampaignSubdocId: String(saved._id),
+          postId: boostLabel,
+          boostSource,
+        },
+      });
+    } catch (err) {
+      console.warn('[meta ads] usage event for boost failed:', err.message);
+    }
 
-    await usageBillingQueue.add('bill-ads-boost', {
-      clientId,
-      service: 'ads_service_fee',
-      messageType: 'boost',
-      units: 1,
-      sourceRef: String(saved._id),
-      metadata: { metaCampaignSubdocId: String(saved._id), postId: objectStoryId },
-    });
+    try {
+      await usageBillingQueue.add('bill-ads-boost', {
+        clientId,
+        service: 'ads_service_fee',
+        messageType: 'boost',
+        units: 1,
+        sourceRef: String(saved._id),
+        metadata: {
+          metaCampaignSubdocId: String(saved._id),
+          postId: boostLabel,
+          boostSource,
+        },
+      });
+    } catch (err) {
+      console.warn('[meta ads] boost billing enqueue failed:', err.message);
+    }
   }
 
   return {
     campaignId: String(campaignId),
     adSetId: String(adSetId),
     adId: String(adId),
-    objectStoryId,
     status: adStatus,
+    boostSource,
+    boostPostId: boostLabel,
+    objectStoryId: boostSource === 'facebook' ? objectStoryId : undefined,
     dailyBudget: dailyBudgetNum,
     durationDays,
     targeting,
@@ -771,10 +943,12 @@ module.exports = {
   listAdAccounts,
   updateSelection,
   listPagePosts,
+  listInstagramMedia,
   getInsights,
   boostPost,
   buildTargetingSpec,
   searchTargeting,
   listCustomAudiences,
   normalizeAdAccountId,
+  resolveInstagramFromPage,
 };

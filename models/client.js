@@ -41,6 +41,12 @@ const metaCampaignSchema = new Schema(
       default: 'standard',
     },
     boostPostId: { type: String, default: '' },
+    /** facebook | instagram — which organic surface the boost used. */
+    boostSource: {
+      type: String,
+      enum: ['', 'facebook', 'instagram'],
+      default: '',
+    },
     meta_adset_id: { type: String, default: '' },
     meta_ad_id: { type: String, default: '' },
     meta_creative_id: { type: String, default: '' },
@@ -194,6 +200,9 @@ const clientSchema = new Schema({
     pageId: { type: String, default: '' },
     pageName: { type: String, default: '' },
     pageAccessToken: encryptedString,
+    /** Instagram professional account linked to the selected Facebook Page. */
+    instagramUserId: { type: String, default: '' },
+    instagramUsername: { type: String, default: '' },
     adAccountName: { type: String, default: '' },
     tokenExpiresAt: { type: Date, default: null },
     /** Meta Commerce product catalog id (for dynamic product ads). */

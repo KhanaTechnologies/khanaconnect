@@ -208,6 +208,22 @@ async function completeOAuth({ code, state }) {
     client.metaAds.pageId = String(page.id);
     client.metaAds.pageName = String(page.name || '');
     client.metaAds.pageAccessToken = page.access_token ? String(page.access_token) : '';
+    try {
+      const MetaAdsService = require('./MetaAdsService');
+      const pageToken = client.metaAds.pageAccessToken
+        ? String(client.metaAds.pageAccessToken)
+        : accessToken;
+      const ig = await MetaAdsService.resolveInstagramFromPage(client.metaAds.pageId, pageToken);
+      client.metaAds.instagramUserId = ig.instagramUserId;
+      client.metaAds.instagramUsername = ig.instagramUsername;
+    } catch (err) {
+      console.warn('[meta oauth] instagram resolve failed:', err.message);
+      client.metaAds.instagramUserId = '';
+      client.metaAds.instagramUsername = '';
+    }
+  } else {
+    client.metaAds.instagramUserId = '';
+    client.metaAds.instagramUsername = '';
   }
 
   if (adAccountId) {
@@ -266,6 +282,9 @@ async function getConnectionStatus(clientId) {
     adAccountId: m.adAccountId || '',
     adAccountName: m.adAccountName || '',
     pixelConfigured: !!m.pixelId,
+    instagramConnected: !!m.instagramUserId,
+    instagramUserId: m.instagramUserId || '',
+    instagramUsername: m.instagramUsername || '',
     enabled: !!m.enabled,
     status: m.status || 'inactive',
     errorMessage: m.errorMessage || '',
@@ -288,6 +307,8 @@ async function disconnect(clientId) {
   client.metaAds.connectedUserName = '';
   client.metaAds.pageId = '';
   client.metaAds.pageName = '';
+  client.metaAds.instagramUserId = '';
+  client.metaAds.instagramUsername = '';
   client.metaAds.adAccountName = '';
   client.metaAds.connectionMethod = '';
   client.metaAds.tokenExpiresAt = null;

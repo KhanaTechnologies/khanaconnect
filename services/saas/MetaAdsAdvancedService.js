@@ -119,11 +119,30 @@ async function getSetupHub(clientId) {
   const pageId = client.metaAds.pageId || '';
   const businessId = client.metaAds.metaBusinessId || '';
 
+  if (pageId && !client.metaAds.instagramUserId) {
+    try {
+      const pageToken = client.metaAds.pageAccessToken
+        ? String(client.metaAds.pageAccessToken)
+        : token;
+      const { resolveInstagramFromPage } = require('./MetaAdsService');
+      const ig = await resolveInstagramFromPage(pageId, pageToken);
+      if (ig.instagramUserId) {
+        client.metaAds.instagramUserId = ig.instagramUserId;
+        client.metaAds.instagramUsername = ig.instagramUsername;
+        client.markModified('metaAds');
+        await client.save();
+      }
+    } catch (err) {
+      console.warn('[meta ads] setup hub IG resolve failed:', err.message);
+    }
+  }
+
   const checklist = {
     facebookConnected: true,
     pageSelected: !!pageId,
     adAccountSelected: !!adAccountId,
     pixelLinked: !!client.metaAds.pixelId,
+    instagramLinked: !!client.metaAds.instagramUserId,
     paymentReady: null,
     accountActive: null,
     whatsappReady: !!(client.whatsapp?.phoneE164 || client.whatsapp?.enabled),
@@ -168,6 +187,14 @@ async function getSetupHub(clientId) {
   const nextSteps = [];
   if (!checklist.pageSelected) nextSteps.push({ id: 'page', label: 'Select your Facebook Page', action: 'select_page' });
   if (!checklist.adAccountSelected) nextSteps.push({ id: 'ad_account', label: 'Select your ad account', action: 'select_ad_account' });
+  if (checklist.pageSelected && !checklist.instagramLinked) {
+    nextSteps.push({
+      id: 'instagram',
+      label: 'Link Instagram Professional to your Facebook Page (for IG boosts)',
+      action: 'open_link',
+      url: 'https://www.facebook.com/business/help/connect-instagram-to-page',
+    });
+  }
   if (checklist.adAccountSelected && checklist.paymentReady === false) {
     nextSteps.push({
       id: 'payment',
@@ -202,6 +229,8 @@ async function getSetupHub(clientId) {
     nextSteps,
     pageName: client.metaAds.pageName || '',
     adAccountName: client.metaAds.adAccountName || '',
+    instagramConnected: !!client.metaAds.instagramUserId,
+    instagramUsername: client.metaAds.instagramUsername || '',
     catalogId: client.metaAds.catalogId || '',
   };
 }
@@ -218,6 +247,7 @@ function mapLocalCampaign(c) {
     metaAdsetId: c.meta_adset_id || '',
     metaAdId: c.meta_ad_id || '',
     boostPostId: c.boostPostId || '',
+    boostSource: c.boostSource || '',
     source: 'local',
     createdAt: c.createdAt || null,
     updatedAt: c.updatedAt || null,

@@ -801,6 +801,12 @@ router.get('/meta/posts', requireRoles('owner', 'manager', 'operator', 'viewer')
   res.json({ ok: true, data });
 }));
 
+router.get('/meta/instagram/media', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const limit = req.query.limit;
+  const data = await MetaAdsService.listInstagramMedia(req.tenant.clientId, { limit });
+  res.json({ ok: true, data });
+}));
+
 router.get('/meta/insights', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
   const days = req.query.days;
   const data = await MetaAdsService.getInsights(req.tenant.clientId, { days });
@@ -815,6 +821,7 @@ router.post('/meta/boost', requireRoles('owner', 'manager'), wrapRoute(async (re
     country,
     status,
     targeting,
+    source,
   } = req.body || {};
   if (!postId || dailyBudget == null) {
     return res.status(400).json({ ok: false, message: 'post_id and daily_budget are required' });
@@ -825,6 +832,7 @@ router.post('/meta/boost', requireRoles('owner', 'manager'), wrapRoute(async (re
     days,
     country,
     status,
+    source,
     targeting: targeting && typeof targeting === 'object' ? targeting : {},
   });
   res.status(201).json({ ok: true, data });
