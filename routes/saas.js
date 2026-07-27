@@ -8,6 +8,9 @@ const { wrapRoute } = require('../helpers/failureEmail');
 const WhatsAppService = require('../services/saas/WhatsAppService');
 const WhatsAppInboxService = require('../services/saas/WhatsAppInboxService');
 const AdsService = require('../services/saas/AdsService');
+const MetaOAuthService = require('../services/saas/MetaOAuthService');
+const MetaAdsService = require('../services/saas/MetaAdsService');
+const MetaAdsAdvancedService = require('../services/saas/MetaAdsAdvancedService');
 const BillingService = require('../services/saas/BillingService');
 const PricingService = require('../services/saas/PricingService');
 const PayFastCreditsService = require('../services/saas/PayFastCreditsService');
@@ -102,6 +105,23 @@ router.post('/webhooks/meta-ads', verifyMetaWebhookSignature('META_APP_SECRET'),
 router.post('/billing/payfast/itn', wrapRoute(async (req, res) => {
   const result = await PayFastCreditsService.handleTopupItn(req.body || {});
   res.json({ ok: true, data: result });
+}));
+
+// Meta (Facebook) OAuth callback — public; secured via signed state JWT.
+router.get('/meta/oauth/callback', wrapRoute(async (req, res) => {
+  const { code, state, error, error_description: errorDescription } = req.query || {};
+  if (error) {
+    const msg = encodeURIComponent(String(errorDescription || error));
+    return res.redirect(MetaOAuthService.dashboardReturnUrl(`meta=error&message=${msg}`));
+  }
+  try {
+    await MetaOAuthService.completeOAuth({ code, state });
+    return res.redirect(MetaOAuthService.dashboardReturnUrl('meta=connected'));
+  } catch (err) {
+    console.error('[meta oauth] callback failed:', err.message);
+    const msg = encodeURIComponent(err.message || 'Facebook connection failed');
+    return res.redirect(MetaOAuthService.dashboardReturnUrl(`meta=error&message=${msg}`));
+  }
 }));
 
 router.use(tenantResolver);
@@ -725,6 +745,226 @@ router.post('/ads/campaigns', requireRoles('owner', 'manager'), idempotencyGuard
     accessToken: access_token,
   });
   res.status(201).json({ ok: true, data: campaign });
+}));
+
+router.get('/meta/oauth/start', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const url = MetaOAuthService.buildAuthorizeUrl(req.tenant.clientId);
+  res.json({ ok: true, data: { url } });
+}));
+
+router.get('/meta/oauth/status', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const data = await MetaOAuthService.getConnectionStatus(req.tenant.clientId);
+  res.json({ ok: true, data });
+}));
+
+router.post('/meta/oauth/disconnect', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const data = await MetaOAuthService.disconnect(req.tenant.clientId);
+  res.json({ ok: true, data });
+}));
+
+router.get('/meta/pages', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const data = await MetaAdsService.listPages(req.tenant.clientId);
+  res.json({ ok: true, data });
+}));
+
+router.get('/meta/ad-accounts', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const data = await MetaAdsService.listAdAccounts(req.tenant.clientId);
+  res.json({ ok: true, data });
+}));
+
+router.put('/meta/selection', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const { page_id: pageId, ad_account_id: adAccountId } = req.body || {};
+  if (!pageId && !adAccountId) {
+    return res.status(400).json({ ok: false, message: 'page_id or ad_account_id is required' });
+  }
+  const data = await MetaAdsService.updateSelection(req.tenant.clientId, { pageId, adAccountId });
+  res.json({ ok: true, data });
+}));
+
+router.get('/meta/posts', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const limit = req.query.limit;
+  const data = await MetaAdsService.listPagePosts(req.tenant.clientId, { limit });
+  res.json({ ok: true, data });
+}));
+
+router.get('/meta/insights', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const days = req.query.days;
+  const data = await MetaAdsService.getInsights(req.tenant.clientId, { days });
+  res.json({ ok: true, data });
+}));
+
+router.post('/meta/boost', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const {
+    post_id: postId,
+    daily_budget: dailyBudget,
+    days,
+    country,
+    status,
+    targeting,
+  } = req.body || {};
+  if (!postId || dailyBudget == null) {
+    return res.status(400).json({ ok: false, message: 'post_id and daily_budget are required' });
+  }
+  const data = await MetaAdsService.boostPost(req.tenant.clientId, {
+    postId,
+    dailyBudget,
+    days,
+    country,
+    status,
+    targeting: targeting && typeof targeting === 'object' ? targeting : {},
+  });
+  res.status(201).json({ ok: true, data });
+}));
+
+router.get('/meta/targeting/search', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const { q, type, limit } = req.query || {};
+  let locationTypes;
+  if (req.query.location_types) {
+    try {
+      locationTypes = JSON.parse(String(req.query.location_types));
+    } catch {
+      locationTypes = String(req.query.location_types).split(',').map((s) => s.trim()).filter(Boolean);
+    }
+  }
+  const data = await MetaAdsService.searchTargeting(req.tenant.clientId, {
+    q,
+    type,
+    limit,
+    locationTypes,
+  });
+  res.json({ ok: true, data });
+}));
+
+router.get('/meta/custom-audiences', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const data = await MetaAdsService.listCustomAudiences(req.tenant.clientId);
+  res.json({ ok: true, data });
+}));
+
+router.get('/meta/setup', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const data = await MetaAdsAdvancedService.getSetupHub(req.tenant.clientId);
+  res.json({ ok: true, data });
+}));
+
+router.get('/meta/campaigns', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const data = await MetaAdsAdvancedService.listLocalCampaigns(req.tenant.clientId);
+  res.json({ ok: true, data });
+}));
+
+router.post('/meta/campaigns/:id/status', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const { status } = req.body || {};
+  if (!status) return res.status(400).json({ ok: false, message: 'status is required' });
+  const data = await MetaAdsAdvancedService.updateCampaignStatus(req.tenant.clientId, {
+    campaignId: req.params.id,
+    status,
+  });
+  res.json({ ok: true, data });
+}));
+
+router.post('/meta/campaigns/:id/budget', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const { daily_budget: dailyBudget } = req.body || {};
+  if (dailyBudget == null) return res.status(400).json({ ok: false, message: 'daily_budget is required' });
+  const data = await MetaAdsAdvancedService.updateCampaignBudget(req.tenant.clientId, {
+    campaignId: req.params.id,
+    dailyBudget,
+  });
+  res.json({ ok: true, data });
+}));
+
+router.get('/meta/audience-presets', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  res.json({ ok: true, data: { presets: MetaAdsAdvancedService.AUDIENCE_PRESETS } });
+}));
+
+router.post('/meta/custom-audiences/from-customers', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const { name, preset, description } = req.body || {};
+  const data = await MetaAdsAdvancedService.createCustomAudienceFromCustomers(req.tenant.clientId, {
+    name,
+    preset,
+    description,
+  });
+  res.status(201).json({ ok: true, data });
+}));
+
+router.get('/meta/insights/breakdowns', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const data = await MetaAdsAdvancedService.getInsightBreakdowns(req.tenant.clientId, {
+    days: req.query.days,
+    breakdown: req.query.breakdown,
+  });
+  res.json({ ok: true, data });
+}));
+
+router.post(
+  '/meta/creatives/image',
+  requireRoles('owner', 'manager'),
+  inboxUpload.single('image'),
+  wrapRoute(async (req, res) => {
+    if (!req.file?.buffer) {
+      return res.status(400).json({ ok: false, message: 'image file is required' });
+    }
+    const data = await MetaAdsAdvancedService.uploadAdImage(req.tenant.clientId, {
+      buffer: req.file.buffer,
+      filename: req.file.originalname || 'creative.jpg',
+    });
+    res.status(201).json({ ok: true, data });
+  })
+);
+
+router.post('/meta/campaigns/whatsapp', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const body = req.body || {};
+  const data = await MetaAdsAdvancedService.createClickToWhatsAppCampaign(req.tenant.clientId, {
+    name: body.name,
+    dailyBudget: body.daily_budget,
+    days: body.days,
+    message: body.message,
+    country: body.country,
+    targeting: body.targeting,
+    status: body.status,
+    imageHash: body.image_hash,
+    imageUrl: body.image_url,
+  });
+  res.status(201).json({ ok: true, data });
+}));
+
+router.post('/meta/campaigns/lead', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const body = req.body || {};
+  const data = await MetaAdsAdvancedService.createLeadAd(req.tenant.clientId, {
+    name: body.name,
+    dailyBudget: body.daily_budget,
+    days: body.days,
+    country: body.country,
+    targeting: body.targeting,
+    status: body.status,
+    imageHash: body.image_hash,
+    headline: body.headline,
+    body: body.body,
+    privacyPolicyUrl: body.privacy_policy_url,
+    thankYouMessage: body.thank_you_message,
+  });
+  res.status(201).json({ ok: true, data });
+}));
+
+router.post('/meta/catalog/sync', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const data = await MetaAdsAdvancedService.syncProductCatalog(req.tenant.clientId, {
+    limit: req.body?.limit,
+  });
+  res.json({ ok: true, data });
+}));
+
+router.post('/meta/campaigns/catalog', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const body = req.body || {};
+  const data = await MetaAdsAdvancedService.createCatalogSalesCampaign(req.tenant.clientId, {
+    name: body.name,
+    dailyBudget: body.daily_budget,
+    days: body.days,
+    country: body.country,
+    targeting: body.targeting,
+    status: body.status,
+  });
+  res.status(201).json({ ok: true, data });
+}));
+
+router.post('/meta/refresh-token', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const data = await MetaAdsService.forceRefreshToken(req.tenant.clientId);
+  res.json({ ok: true, data });
 }));
 
 router.get('/billing', requireRoles('owner', 'manager', 'billing_admin', 'viewer', 'operator'), wrapRoute(async (req, res) => {

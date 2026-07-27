@@ -35,6 +35,17 @@ const metaCampaignSchema = new Schema(
       default: 'draft',
     },
     meta_campaign_id: { type: String, default: '' },
+    campaign_type: {
+      type: String,
+      enum: ['standard', 'boost', 'whatsapp', 'lead', 'catalog'],
+      default: 'standard',
+    },
+    boostPostId: { type: String, default: '' },
+    meta_adset_id: { type: String, default: '' },
+    meta_ad_id: { type: String, default: '' },
+    meta_creative_id: { type: String, default: '' },
+    meta_form_id: { type: String, default: '' },
+    targeting: { type: Schema.Types.Mixed, default: null },
   },
   { timestamps: true }
 );
@@ -175,6 +186,20 @@ const clientSchema = new Schema({
     },
     metaBusinessId: { type: String, default: '' },
     partnerRequestId: { type: String, default: '' },
+    /** OAuth connection metadata (Connect Facebook). */
+    connectionMethod: { type: String, enum: ['', 'oauth', 'manual'], default: '' },
+    connectedAt: { type: Date, default: null },
+    connectedUserId: { type: String, default: '' },
+    connectedUserName: { type: String, default: '' },
+    pageId: { type: String, default: '' },
+    pageName: { type: String, default: '' },
+    pageAccessToken: encryptedString,
+    adAccountName: { type: String, default: '' },
+    tokenExpiresAt: { type: Date, default: null },
+    /** Meta Commerce product catalog id (for dynamic product ads). */
+    catalogId: { type: String, default: '' },
+    catalogName: { type: String, default: '' },
+    catalogSyncedAt: { type: Date, default: null },
     campaigns: [metaCampaignSchema],
     enabled: { type: Boolean, default: false },
     lastSync: { type: Date },
