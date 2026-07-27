@@ -2,25 +2,24 @@
 const { Category } = require('../models/category');
 const express = require('express');
 const router = express.Router();
-const jwt = require('jsonwebtoken');
 const multer = require('multer');
-const { getOctokit } = require('../helpers/octokitClient');
+const mongoose = require('mongoose');
 require('dotenv').config();
 
-const { wrapRoute } = require('../helpers/failureEmail'); // ensure correct path
-const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
+const { wrapRoute } = require('../helpers/failureEmail');
 const { createDashboardAuth } = require('../helpers/dashboardAuth');
+const { uploadPublicAsset } = require('../helpers/publicAssetUpload');
 
 const FILE_TYPE_MAP = {
   'image/png': 'png',
   'image/jpeg': 'jpeg',
-  'image/jpg': 'jpg'
+  'image/jpg': 'jpg',
 };
 
 const storage = multer.memoryStorage();
-const upload = multer({ 
-  storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // Limit file size to 5MB
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (!FILE_TYPE_MAP[file.mimetype]) {
       return cb(new Error('Invalid file type'), false);
@@ -29,44 +28,67 @@ const upload = multer({
   },
 });
 
-const createFilePath = (fileName) => `public/uploads/${fileName}`;
-
-const uploadImageToGitHub = async (file, fileName) => {
-  try {
-    const filePath = createFilePath(fileName);
-    const content = file.buffer.toString('base64');
-    const [owner, repo] = process.env.GITHUB_REPO.split('/');
-    const octokit = await getOctokit();
-    const { data } = await octokit.repos.createOrUpdateFileContents({
-      owner,
-      repo,
-      path: filePath,
-      message: `Upload ${fileName}`,
-      content,
-      branch: process.env.GITHUB_BRANCH
-    });
-    // data.content.download_url may be undefined in some responses; return html_url or construct raw url
-    return data && data.content && data.content.download_url
-      ? data.content.download_url
-      : `https://raw.githubusercontent.com/${owner}/${repo}/${process.env.GITHUB_BRANCH}/${filePath}`;
-  } catch (error) {
-    console.error('Error uploading image to GitHub:', error);
-    throw new Error('Failed to upload image to GitHub');
-  }
-};
-
 const validateTokenAndExtractClientID = createDashboardAuth('categories');
 
-// Get all categories
+async function uploadCategoryImage(file, req) {
+  const ext = FILE_TYPE_MAP[file.mimetype] || 'jpg';
+  const fileName = `category-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  const result = await uploadPublicAsset(file.buffer, `public/uploads/categories/${fileName}`, req);
+  return result.url;
+}
+
+async function resolveParentId(clientID, rawParentId) {
+  if (rawParentId === undefined || rawParentId === null || rawParentId === '' || rawParentId === 'none') {
+    return null;
+  }
+  if (!mongoose.Types.ObjectId.isValid(String(rawParentId))) {
+    const err = new Error('Invalid parent category');
+    err.status = 400;
+    throw err;
+  }
+  const parent = await Category.findOne({ _id: rawParentId, clientID });
+  if (!parent) {
+    const err = new Error('Parent category not found');
+    err.status = 400;
+    throw err;
+  }
+  // Max depth 2: parent must be a root
+  if (parent.parentId) {
+    const err = new Error('Only one nesting level is allowed (parent must be a root category)');
+    err.status = 400;
+    throw err;
+  }
+  return parent._id;
+}
+
+function buildTree(flat) {
+  const byId = new Map();
+  flat.forEach((c) => {
+    const obj = typeof c.toObject === 'function' ? c.toObject({ virtuals: true }) : { ...c };
+    obj.children = [];
+    byId.set(String(obj._id || obj.id), obj);
+  });
+  const roots = [];
+  for (const node of byId.values()) {
+    const pid = node.parentId ? String(node.parentId) : null;
+    if (pid && byId.has(pid)) {
+      byId.get(pid).children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+  return roots;
+}
+
+// Get all categories (flat by default; ?tree=1 for nested)
 router.get('/', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
-  const categoryList = await Category.find({ clientID: req.clientID });
-  if (!categoryList) {
-    return res.status(500).json({ success: false, message: 'Failed to fetch categories' });
+  const categoryList = await Category.find({ clientID: req.clientID }).sort({ name: 1 });
+  if (String(req.query.tree || '') === '1' || String(req.query.tree || '') === 'true') {
+    return res.status(200).json(buildTree(categoryList));
   }
   res.status(200).send(categoryList);
 }));
 
-// Get a specific category by ID
 router.get('/:id', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
   const category = await Category.findOne({ _id: req.params.id, clientID: req.clientID });
   if (!category) {
@@ -75,70 +97,62 @@ router.get('/:id', validateTokenAndExtractClientID, wrapRoute(async (req, res) =
   res.status(200).send(category);
 }));
 
-// Update a category
 router.put('/:id', upload.single('image'), validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
-  const file = req.file; // req.file, not req.files
-
-  if (!file && !req.body.name && !req.body.icon && !req.body.color) {
-    return res.status(400).json({ error: 'No image file or update fields provided' });
-  }
-
-  let imagePath = null;
-
-  // If a file is provided, validate and upload
-  if (file) {
-    if (!FILE_TYPE_MAP[file.mimetype]) {
-      return res.status(400).json({ error: 'Invalid file type' });
-    }
-
-    // Generate a unique file name
-    const fileName = `${file.originalname.split(' ').join('-')}-${Date.now()}.${FILE_TYPE_MAP[file.mimetype]}`;
-
-    // Upload image to GitHub
-    imagePath = await uploadImageToGitHub(file, fileName);
-  }
-
-  // Build update object only with provided fields
-  const update = {};
-  if (typeof req.body.name !== 'undefined') update.name = req.body.name;
-  if (typeof req.body.icon !== 'undefined') update.icon = req.body.icon;
-  if (typeof req.body.color !== 'undefined') update.color = req.body.color;
-  if (imagePath) update.image = imagePath;
-
-  // Find and update the category
-  const category = await Category.findOneAndUpdate(
-    { _id: req.params.id, clientID: req.clientID }, // Ensure clientID matches
-    update,
-    { new: true } // Return the updated category
-  );
-
-  if (!category) {
+  const file = req.file;
+  const existing = await Category.findOne({ _id: req.params.id, clientID: req.clientID });
+  if (!existing) {
     return res.status(400).send('The category could not be updated');
   }
 
-  res.send(category);
+  let imagePath = null;
+  if (file) {
+    imagePath = await uploadCategoryImage(file, req);
+  }
+
+  if (typeof req.body.name !== 'undefined') existing.name = String(req.body.name || '').trim();
+  if (typeof req.body.description !== 'undefined') existing.description = String(req.body.description || '');
+  if (typeof req.body.icon !== 'undefined') existing.icon = req.body.icon;
+  if (typeof req.body.color !== 'undefined') existing.color = req.body.color;
+  if (imagePath) existing.image = imagePath;
+
+  if (typeof req.body.parentId !== 'undefined') {
+    const nextParent = await resolveParentId(req.clientID, req.body.parentId);
+    if (nextParent && String(nextParent) === String(existing._id)) {
+      return res.status(400).json({ error: 'Category cannot be its own parent' });
+    }
+    // Cannot nest under a child of self
+    if (nextParent) {
+      const childCount = await Category.countDocuments({
+        clientID: req.clientID,
+        parentId: existing._id,
+      });
+      if (childCount > 0) {
+        return res.status(400).json({ error: 'Move or remove child categories before nesting this one' });
+      }
+    }
+    existing.parentId = nextParent;
+  }
+
+  await existing.save();
+  res.send(existing);
 }));
 
 router.post('/', upload.single('image'), validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
   const file = req.file;
   let imagePath = '';
-
-  // If image is provided, validate and upload it
   if (file) {
-    if (!FILE_TYPE_MAP[file.mimetype]) {
-      return res.status(400).json({ error: 'Invalid file type' });
-    }
-
-    const fileName = `${file.originalname.split(' ').join('-')}-${Date.now()}.${FILE_TYPE_MAP[file.mimetype]}`;
-    imagePath = await uploadImageToGitHub(file, fileName);
+    imagePath = await uploadCategoryImage(file, req);
   }
 
-  // Save to database
+  const parentId = await resolveParentId(req.clientID, req.body.parentId);
+
   let category = new Category({
     name: req.body.name,
+    description: String(req.body.description || ''),
     image: imagePath || '',
     icon: req.body.icon,
     color: req.body.color,
+    parentId,
     clientID: req.clientID,
   });
 
@@ -150,9 +164,17 @@ router.post('/', upload.single('image'), validateTokenAndExtractClientID, wrapRo
   res.status(201).json(category);
 }));
 
-// Delete a category
 router.delete('/:id', validateTokenAndExtractClientID, wrapRoute(async (req, res) => {
-  // Use findOneAndDelete to ensure clientID matches
+  const childCount = await Category.countDocuments({
+    clientID: req.clientID,
+    parentId: req.params.id,
+  });
+  if (childCount > 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'Delete or reassign child categories first',
+    });
+  }
   const category = await Category.findOneAndDelete({ _id: req.params.id, clientID: req.clientID });
   if (!category) {
     return res.status(404).json({ success: false, message: 'Category not found' });

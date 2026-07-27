@@ -1,5 +1,8 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+const axios = require('axios');
+const FormData = require('form-data');
 const { githubUploadConfigured, uploadBufferToGitHub } = require('./githubUpload');
 const { resolvePublicBaseUrl } = require('./publicBaseUrl');
 
@@ -41,8 +44,68 @@ function normalizeRepoPath(repoRelativePath) {
   return normalized;
 }
 
+function cloudinaryConfigured() {
+  return Boolean(
+    process.env.CLOUDINARY_CLOUD_NAME &&
+      process.env.CLOUDINARY_API_KEY &&
+      process.env.CLOUDINARY_API_SECRET
+  );
+}
+
 /**
- * Persist a public asset to GitHub (production) or local public/uploads (dev only).
+ * Upload to Cloudinary when CLOUDINARY_* env vars are set.
+ * Returns HTTPS CDN URL. Prefer this over GitHub for product/commerce images.
+ */
+async function uploadBufferToCloudinary(buffer, repoRelativePath) {
+  const cloud = process.env.CLOUDINARY_CLOUD_NAME;
+  const apiKey = process.env.CLOUDINARY_API_KEY;
+  const apiSecret = process.env.CLOUDINARY_API_SECRET;
+  const folder = (process.env.CLOUDINARY_FOLDER || 'khanaconnect').replace(/^\/+|\/+$/g, '');
+  const publicIdBase = path
+    .basename(repoRelativePath || `asset-${Date.now()}`)
+    .replace(/\.[^.]+$/, '')
+    .slice(0, 120);
+  const timestamp = Math.floor(Date.now() / 1000);
+  const paramsToSign = `folder=${folder}&public_id=${publicIdBase}&timestamp=${timestamp}${apiSecret}`;
+  const signature = crypto.createHash('sha1').update(paramsToSign).digest('hex');
+
+  const form = new FormData();
+  form.append('file', buffer, { filename: path.basename(repoRelativePath || 'upload.jpg') });
+  form.append('api_key', apiKey);
+  form.append('timestamp', String(timestamp));
+  form.append('signature', signature);
+  form.append('folder', folder);
+  form.append('public_id', publicIdBase);
+
+  const { data } = await axios.post(
+    `https://api.cloudinary.com/v1_1/${cloud}/image/upload`,
+    form,
+    {
+      headers: form.getHeaders(),
+      timeout: 60000,
+      maxContentLength: 20 * 1024 * 1024,
+      maxBodyLength: 20 * 1024 * 1024,
+    }
+  );
+  if (!data?.secure_url) {
+    throw new Error('Cloudinary did not return secure_url');
+  }
+  return {
+    url: data.secure_url,
+    fileName: path.basename(repoRelativePath || data.public_id || 'asset'),
+    publicPath: data.public_id || '',
+    storage: 'cloudinary',
+    cloudinary: {
+      public_id: data.public_id,
+      version: data.version,
+      format: data.format,
+    },
+  };
+}
+
+/**
+ * Persist a public asset.
+ * Priority: Cloudinary (if configured) → GitHub → local disk (dev only).
  */
 async function uploadPublicAsset(buffer, repoRelativePath, req) {
   if (!buffer || !buffer.length) {
@@ -50,6 +113,14 @@ async function uploadPublicAsset(buffer, repoRelativePath, req) {
   }
 
   const repoPath = normalizeRepoPath(repoRelativePath);
+
+  if (cloudinaryConfigured()) {
+    try {
+      return await uploadBufferToCloudinary(buffer, repoPath);
+    } catch (err) {
+      console.error('[uploadPublicAsset] Cloudinary failed, falling back:', err.message);
+    }
+  }
 
   if (githubUploadConfigured()) {
     const url = await uploadBufferToGitHub(buffer, repoPath);
@@ -63,7 +134,7 @@ async function uploadPublicAsset(buffer, repoRelativePath, req) {
 
   if (isDeployedEnvironment()) {
     throw new Error(
-      'GitHub upload is required on the server. Set GITHUB_TOKEN, GITHUB_REPO, and GITHUB_BRANCH.'
+      'Image upload is not configured. Set CLOUDINARY_CLOUD_NAME/API_KEY/API_SECRET (recommended) or GITHUB_TOKEN/GITHUB_REPO/GITHUB_BRANCH.'
     );
   }
 
@@ -80,7 +151,7 @@ async function uploadPublicAsset(buffer, repoRelativePath, req) {
   };
 }
 
-/** Delete a local copy only — remote/GitHub URLs are left unchanged. */
+/** Delete a local copy only — remote/GitHub/CDN URLs are left unchanged. */
 function unlinkLocalAssetByUrl(imageUrl) {
   if (!imageUrl || isRemoteAssetUrl(imageUrl)) return;
 
@@ -93,6 +164,7 @@ function unlinkLocalAssetByUrl(imageUrl) {
     path.join(PUBLIC_UPLOADS_DIR, 'signatures', base),
     path.join(PUBLIC_UPLOADS_DIR, 'campaigns', base),
     path.join(PUBLIC_UPLOADS_DIR, 'promotions', base),
+    path.join(PUBLIC_UPLOADS_DIR, 'categories', base),
     path.join(PROJECT_ROOT, 'uploads', 'campaigns', base),
     path.join(PROJECT_ROOT, 'uploads', 'voting', 'items', base),
   ];
@@ -125,6 +197,7 @@ module.exports = {
   requestOrigin,
   publicPathUrl,
   isRemoteAssetUrl,
+  cloudinaryConfigured,
   uploadPublicAsset,
   unlinkLocalAssetByUrl,
 };

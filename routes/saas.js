@@ -581,6 +581,26 @@ router.post('/whatsapp/inbox/reply', requireRoles('owner', 'manager', 'operator'
   res.status(202).json({ ok: true, data });
 }));
 
+router.post('/whatsapp/inbox/product', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
+  const to = req.body?.to || req.body?.contact_wa_id || req.body?.contactWaId;
+  const productId = req.body?.productId || req.body?.product_id;
+  const data = await WhatsAppInboxService.sendProductShare({
+    clientId: req.tenant.clientId,
+    to,
+    productId,
+  });
+  res.status(202).json({ ok: true, data });
+}));
+
+router.get('/whatsapp/inbox/stats', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const days = req.query.days || 30;
+  const data = await WhatsAppInboxService.getInboxStats({
+    clientId: req.tenant.clientId,
+    days,
+  });
+  res.json({ ok: true, data });
+}));
+
 router.post(
   '/whatsapp/inbox/media',
   requireRoles('owner', 'manager', 'operator'),

@@ -64,6 +64,68 @@ const DEFAULT_RULES = [
 
   {
 
+    id: 'more_info',
+
+    keywords: [
+
+      'more info',
+
+      'more information',
+
+      'tell me more',
+
+      'more details',
+
+      'send info',
+
+      'send me info',
+
+      'what is this',
+
+      'what do you offer',
+
+      'what do you do',
+
+      'how does it work',
+
+      'explain',
+
+    ],
+
+    reply:
+
+      'Happy to share more.\n\n' +
+
+      'Khana Technologies partners with SA businesses to set up and run a ' +
+
+      PLATFORM +
+
+      '.\n\n' +
+
+      ROLE +
+
+      '\n\nWhat’s included depends on your scope, but typically:\n' +
+
+      '• Professional website (built/set up as part of the partnership)\n' +
+
+      '• Online bookings and/or online orders\n' +
+
+      '• Customer list linked to the business\n' +
+
+      '• WhatsApp + email updates (official Meta Cloud API inbox in your dashboard)\n' +
+
+      '• Hosting, support, and ongoing access to the system\n\n' +
+
+      'Pricing: most partnerships start from about R450/month after go-live, plus a once-off setup fee based on scope. WhatsApp message credits are prepaid separately.\n\n' +
+
+      'Best way to see it: explore the live demo yourself, then tell us if you want to go further.' +
+
+      CLOSE,
+
+  },
+
+  {
+
     id: 'trial_demo',
 
     keywords: [

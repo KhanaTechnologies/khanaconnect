@@ -1176,6 +1176,186 @@ class WhatsAppInboxService {
     return { message: doc, meta: response.data, window_open_until: windowOpenUntil, media_id: mediaId };
   }
 
+  /**
+   * Share a catalog product into an open inbox chat (24h window).
+   * Sends image+caption when product has an image URL; otherwise text card.
+   */
+  static async sendProductShare({ clientId, to, productId }) {
+    const e164 = normalizePhoneE164(to);
+    if (!e164) throw httpError('Invalid recipient phone number', 400);
+    if (!productId) throw httpError('productId is required', 400);
+
+    const Product = require('../../models/product');
+    const product = await Product.findOne({ _id: productId, clientID: clientId }).lean();
+    if (!product) throw httpError('Product not found', 404);
+
+    const name = product.productName || 'Product';
+    const price = Number(product.price) || 0;
+    const sale = Number(product.salePercentage) || 0;
+    const effective =
+      sale > 0 && sale < 100 ? Math.round(price * (1 - sale / 100) * 100) / 100 : price;
+    const sku = product.sku ? `SKU: ${product.sku}` : '';
+    const caption = [
+      `*${name}*`,
+      `R${effective.toFixed(2)}${sale > 0 ? ` (${sale}% off)` : ''}`,
+      sku,
+      product.description ? String(product.description).slice(0, 280) : '',
+    ]
+      .filter(Boolean)
+      .join('\n')
+      .slice(0, 1024);
+
+    const imageUrl = Array.isArray(product.images) ? product.images.find((u) => /^https?:\/\//i.test(String(u || ''))) : null;
+
+    if (imageUrl) {
+      try {
+        const imgRes = await axios.get(imageUrl, {
+          responseType: 'arraybuffer',
+          timeout: 20000,
+          maxContentLength: 8 * 1024 * 1024,
+        });
+        const mime =
+          imgRes.headers['content-type'] ||
+          (String(imageUrl).toLowerCase().includes('.png') ? 'image/png' : 'image/jpeg');
+        const buf = Buffer.from(imgRes.data);
+        const result = await this.sendMediaReply({
+          clientId,
+          to: e164,
+          fileBuffer: buf,
+          mimeType: mime,
+          filename: `${String(name).replace(/[^\w.-]+/g, '_').slice(0, 40)}.jpg`,
+          caption,
+        });
+        // Override usage kind for analytics
+        try {
+          const WhatsAppService = require('./WhatsAppService');
+          await WhatsAppService.recordWhatsAppUsage({
+            clientId,
+            messageType: 'utility',
+            sourceRef: result?.message?.wamid || `product-${Date.now()}`,
+            metadata: { to: e164, channel: 'inbox', kind: 'product_share', productId: String(productId) },
+          });
+        } catch (_) {
+          /* ignore duplicate usage best-effort */
+        }
+        return { ...result, product: { id: product._id, name, price: effective } };
+      } catch (err) {
+        console.warn('[inbox] product image share failed, falling back to text:', err.message);
+      }
+    }
+
+    const textResult = await this.sendTextReply({ clientId, to: e164, text: caption });
+    return { ...textResult, product: { id: product._id, name, price: effective } };
+  }
+
+  /**
+   * Inbox analytics for dashboard (thin).
+   */
+  static async getInboxStats({ clientId, days = 30 }) {
+    const windowDays = Math.min(Math.max(Number(days) || 30, 1), 90);
+    const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+
+    const [directionCounts, unreadAgg, stageCounts, templateTop, recentInbound] = await Promise.all([
+      SaasWhatsAppMessage.aggregate([
+        {
+          $match: {
+            client_id: clientId,
+            deleted_at: null,
+            timestamp: { $gte: since },
+          },
+        },
+        { $group: { _id: '$direction', count: { $sum: 1 } } },
+      ]),
+      SaasWhatsAppMessage.aggregate([
+        {
+          $match: {
+            client_id: clientId,
+            direction: 'inbound',
+            deleted_at: null,
+            $or: [{ read_at: null }, { read_at: { $exists: false } }],
+          },
+        },
+        { $group: { _id: '$contact_wa_id' } },
+        { $count: 'unreadThreads' },
+      ]),
+      SaasWhatsAppThread.aggregate([
+        { $match: { client_id: clientId } },
+        { $group: { _id: '$stage', count: { $sum: 1 } } },
+      ]),
+      SaasWhatsAppMessage.aggregate([
+        {
+          $match: {
+            client_id: clientId,
+            direction: 'outbound',
+            deleted_at: null,
+            timestamp: { $gte: since },
+            template_name: { $exists: true, $nin: [null, ''] },
+          },
+        },
+        { $group: { _id: '$template_name', count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: 8 },
+      ]),
+      SaasWhatsAppMessage.find({
+        client_id: clientId,
+        direction: 'inbound',
+        deleted_at: null,
+        timestamp: { $gte: since },
+      })
+        .sort({ timestamp: 1 })
+        .select('contact_wa_id timestamp')
+        .limit(500)
+        .lean(),
+    ]);
+
+    const inbound = directionCounts.find((d) => d._id === 'inbound')?.count || 0;
+    const outbound = directionCounts.find((d) => d._id === 'outbound')?.count || 0;
+    const unreadThreads = unreadAgg[0]?.unreadThreads || 0;
+    const byStage = {};
+    for (const row of stageCounts) {
+      byStage[row._id || 'open'] = row.count;
+    }
+
+    // Sample first-response: for up to 80 contacts, find first outbound after first inbound in window
+    const contactsSample = [...new Set(recentInbound.map((m) => m.contact_wa_id))].slice(0, 80);
+    let responseSum = 0;
+    let responseN = 0;
+    for (const contact of contactsSample) {
+      const firstIn = recentInbound.find((m) => m.contact_wa_id === contact);
+      if (!firstIn?.timestamp) continue;
+      const firstOut = await SaasWhatsAppMessage.findOne({
+        client_id: clientId,
+        contact_wa_id: contact,
+        direction: 'outbound',
+        deleted_at: null,
+        timestamp: { $gt: firstIn.timestamp },
+      })
+        .sort({ timestamp: 1 })
+        .select('timestamp')
+        .lean();
+      if (!firstOut?.timestamp) continue;
+      const mins = (new Date(firstOut.timestamp) - new Date(firstIn.timestamp)) / 60000;
+      if (mins >= 0 && mins < 60 * 48) {
+        responseSum += mins;
+        responseN += 1;
+      }
+    }
+
+    return {
+      days: windowDays,
+      summary: {
+        inbound,
+        outbound,
+        total: inbound + outbound,
+        unreadThreads,
+        avgFirstResponseMinutes: responseN ? Math.round((responseSum / responseN) * 10) / 10 : null,
+        respondedSampleSize: responseN,
+      },
+      threadsByStage: byStage,
+      topTemplates: templateTop.map((t) => ({ name: t._id, count: t.count })),
+    };
+  }
+
   static inboxTemplateAllowlist() {
     return ['hello_world', 'order_confirmation', 'booking_confirmation'];
   }

@@ -5,12 +5,10 @@ const jwt = require('jsonwebtoken');
 const Product = require('../models/product');
 const { Category } = require('../models/category');
 const multer = require('multer');
-const { getOctokit } = require('../helpers/octokitClient');
 const { body, validationResult } = require('express-validator');
 const { SalesItem } = require('../models/salesItem');
 const { wrapRoute } = require('../helpers/failureEmail'); // ✅ Import wrapRoute
 const wishlistNotifyService = require('../services/wishlistNotifyService');
-const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const { createDashboardAuth } = require('../helpers/dashboardAuth');
 const { recordTeamActivityFromRequest } = require('../helpers/teamActivity');
 const {
@@ -18,6 +16,7 @@ const {
   publishedProductFilter,
   slugify,
 } = require('../helpers/productCatalogFields');
+const { uploadPublicAsset } = require('../helpers/publicAssetUpload');
 const Collection = require('../models/collection');
 const ProductReview = require('../models/ProductReview');
 const InventoryMovement = require('../models/InventoryMovement');
@@ -37,26 +36,9 @@ const upload = multer({
     limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
 });
 
-const uploadImageToGitHub = async (file, fileName) => {
-    const filePath = `public/uploads/${fileName}`;
-    const content = file.buffer.toString('base64');
-
-    const owner = process.env.GITHUB_REPO.split('/')[0];
-    const repo = process.env.GITHUB_REPO.split('/')[1];
-    const branch = process.env.GITHUB_BRANCH;
-
-    const octokit = await getOctokit();
-    const response = await octokit.repos.createOrUpdateFileContents({
-        owner,
-        repo,
-        path: filePath,
-        message: `Upload ${fileName}`,
-        content,
-        branch
-        // 🚨 NO SHA
-    });
-
-    return response.data.content.download_url;
+const uploadProductImage = async (file, fileName, req) => {
+  const result = await uploadPublicAsset(file.buffer, `public/uploads/${fileName}`, req);
+  return result.url;
 };
 
 // -------------------- ROUTES -------------------- //
@@ -110,7 +92,7 @@ router.post(
 
                 const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${FILE_TYPE_MAP[file.mimetype]}`;
 
-                const imageUrl = await uploadImageToGitHub(file, fileName);
+                const imageUrl = await uploadProductImage(file, fileName, req);
                 imagePaths.push(imageUrl);
             }
 
@@ -207,7 +189,7 @@ router.put(
             const newImagePaths = await Promise.all(files.map(file => {
                 if (!FILE_TYPE_MAP[file.mimetype]) throw new Error('Invalid file type');
                  const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${FILE_TYPE_MAP[file.mimetype]}`;
-                return uploadImageToGitHub(file, fileName);
+                return uploadProductImage(file, fileName, req);
             }));
             updatedImages = [...updatedImages, ...newImagePaths];
         }
