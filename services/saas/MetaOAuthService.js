@@ -26,9 +26,9 @@ function resolveOAuthRedirectUri() {
 const META_OAUTH_REDIRECT_URI = resolveOAuthRedirectUri();
 const DASHBOARD_URL = (process.env.DASHBOARD_URL || 'https://khanatechnologies.co.za').replace(/\/$/, '');
 
+// Login for Business rejects consumer scopes like `email` (Invalid Scopes).
 const OAUTH_SCOPES = [
   'public_profile',
-  'email',
   'pages_show_list',
   'pages_read_engagement',
   'business_management',
@@ -123,7 +123,7 @@ async function completeOAuth({ code, state }) {
   const shortToken = await exchangeCodeForToken(code);
   const { accessToken, expiresIn } = await exchangeLongLivedToken(shortToken);
 
-  const me = await graphGet('/me', accessToken, { fields: 'id,name,email' });
+  const me = await graphGet('/me', accessToken, { fields: 'id,name' });
   const pagesRes = await graphGet('/me/accounts', accessToken, {
     fields: 'id,name,access_token,category',
     limit: 25,
