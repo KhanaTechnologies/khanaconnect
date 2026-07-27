@@ -206,41 +206,125 @@ async function getSetupHub(clientId) {
   };
 }
 
-async function listLocalCampaigns(clientId) {
-  const client = await Client.findOne({ clientID: clientId }).select('metaAds.campaigns').lean();
-  const campaigns = Array.isArray(client?.metaAds?.campaigns) ? client.metaAds.campaigns : [];
+function mapLocalCampaign(c) {
   return {
-    campaigns: campaigns
-      .slice()
-      .reverse()
-      .map((c) => ({
-        id: String(c._id),
-        name: c.name,
-        objective: c.objective,
-        budget: c.budget,
-        status: c.status,
-        campaignType: c.campaign_type || 'standard',
-        metaCampaignId: c.meta_campaign_id || '',
-        metaAdsetId: c.meta_adset_id || '',
-        metaAdId: c.meta_ad_id || '',
-        boostPostId: c.boostPostId || '',
-        createdAt: c.createdAt || null,
-        updatedAt: c.updatedAt || null,
-      })),
+    id: String(c._id),
+    name: c.name,
+    objective: c.objective || '',
+    budget: c.budget,
+    status: c.status,
+    campaignType: c.campaign_type || 'standard',
+    metaCampaignId: c.meta_campaign_id || '',
+    metaAdsetId: c.meta_adset_id || '',
+    metaAdId: c.meta_ad_id || '',
+    boostPostId: c.boostPostId || '',
+    source: 'local',
+    createdAt: c.createdAt || null,
+    updatedAt: c.updatedAt || null,
+  };
+}
+
+async function listMetaAdAccountCampaigns(clientId) {
+  const client = await loadClientWithMeta(clientId);
+  const token = String(client.metaAds.accessToken);
+  const adAccountId = normalizeAdAccountId(client.metaAds.adAccountId);
+  if (!adAccountId) return [];
+
+  try {
+    const res = await graphGet(`/act_${adAccountId}/campaigns`, token, {
+      fields: 'id,name,objective,status,effective_status,daily_budget,lifetime_budget,created_time,updated_time',
+      limit: 50,
+      effective_status: JSON.stringify([
+        'ACTIVE',
+        'PAUSED',
+        'PENDING_REVIEW',
+        'PREAPPROVED',
+        'IN_PROCESS',
+        'WITH_ISSUES',
+      ]),
+    });
+    const rows = Array.isArray(res?.data) ? res.data : [];
+    return rows.map((c) => {
+      const statusRaw = String(c.effective_status || c.status || 'PAUSED').toLowerCase();
+      const status =
+        statusRaw === 'active'
+          ? 'active'
+          : statusRaw === 'archived' || statusRaw === 'deleted'
+            ? 'archived'
+            : 'paused';
+      const budgetCents = Number(c.daily_budget);
+      return {
+        id: `meta_${c.id}`,
+        name: String(c.name || 'Campaign'),
+        objective: String(c.objective || ''),
+        budget: Number.isFinite(budgetCents) && budgetCents > 0 ? budgetCents / 100 : undefined,
+        status,
+        campaignType: String(c.objective || '').includes('OUTCOME_ENGAGEMENT')
+          || String(c.objective || '').includes('POST_ENGAGEMENT')
+          ? 'boost'
+          : 'meta',
+        metaCampaignId: String(c.id),
+        metaAdsetId: '',
+        metaAdId: '',
+        boostPostId: '',
+        source: 'meta',
+        createdAt: c.created_time || null,
+        updatedAt: c.updated_time || null,
+      };
+    });
+  } catch (err) {
+    console.warn('[meta ads] list meta campaigns failed:', formatGraphError(err));
+    return [];
+  }
+}
+
+async function listLocalCampaigns(clientId) {
+  const client = await Client.findOne({ clientID: clientId }).select('metaAds.campaigns metaAds.adAccountId metaAds.accessToken').lean();
+  const local = Array.isArray(client?.metaAds?.campaigns) ? client.metaAds.campaigns : [];
+  const localMapped = local.slice().reverse().map(mapLocalCampaign);
+  const localMetaIds = new Set(
+    localMapped.map((c) => c.metaCampaignId).filter(Boolean)
+  );
+
+  const fromMeta = await listMetaAdAccountCampaigns(clientId);
+  const extras = fromMeta.filter((c) => !localMetaIds.has(c.metaCampaignId));
+
+  return {
+    campaigns: [...localMapped, ...extras],
   };
 }
 
 async function findCampaignSubdoc(client, campaignId) {
   const campaigns = client.metaAds?.campaigns || [];
   const sub = campaigns.id(campaignId) || campaigns.find((c) => String(c._id) === String(campaignId));
-  if (!sub) throw new Error('Campaign not found');
-  return sub;
+  if (sub) return { sub, source: 'local' };
+
+  const rawId = String(campaignId || '').replace(/^meta_/, '');
+  const byMeta =
+    campaigns.find((c) => String(c.meta_campaign_id) === String(campaignId))
+    || campaigns.find((c) => String(c.meta_campaign_id) === rawId);
+  if (byMeta) return { sub: byMeta, source: 'local' };
+
+  if (/^\d+$/.test(rawId)) {
+    return {
+      sub: {
+        _id: `meta_${rawId}`,
+        meta_campaign_id: rawId,
+        meta_adset_id: '',
+        meta_ad_id: '',
+        status: 'paused',
+      },
+      source: 'meta',
+    };
+  }
+
+  throw new Error('Campaign not found');
 }
 
 async function updateCampaignStatus(clientId, { campaignId, status }) {
   const client = await loadClientWithMeta(clientId);
   const token = String(client.metaAds.accessToken);
-  const sub = await findCampaignSubdoc(client, campaignId);
+  const { sub, source } = await findCampaignSubdoc(client, campaignId);
 
   const next = String(status || '').toLowerCase();
   if (!['active', 'paused', 'archived'].includes(next)) {
@@ -263,14 +347,16 @@ async function updateCampaignStatus(clientId, { campaignId, status }) {
     throw new Error(formatGraphError(err));
   }
 
-  sub.status = next;
-  client.metaAds.lastSync = new Date();
-  client.markModified('metaAds');
-  await client.save();
+  if (source === 'local') {
+    sub.status = next;
+    client.metaAds.lastSync = new Date();
+    client.markModified('metaAds');
+    await client.save();
+  }
 
   return {
     id: String(sub._id),
-    status: sub.status,
+    status: next,
     metaCampaignId: sub.meta_campaign_id,
   };
 }
@@ -278,7 +364,7 @@ async function updateCampaignStatus(clientId, { campaignId, status }) {
 async function updateCampaignBudget(clientId, { campaignId, dailyBudget }) {
   const client = await loadClientWithMeta(clientId);
   const token = String(client.metaAds.accessToken);
-  const sub = await findCampaignSubdoc(client, campaignId);
+  const { sub, source } = await findCampaignSubdoc(client, campaignId);
 
   const budgetNum = Number(dailyBudget);
   if (!Number.isFinite(budgetNum) || budgetNum <= 0) {
@@ -287,25 +373,41 @@ async function updateCampaignBudget(clientId, { campaignId, dailyBudget }) {
   const cents = Math.round(budgetNum * 100);
   if (cents < 100) throw new Error('Minimum daily budget is 1.00');
 
-  if (!sub.meta_adset_id) {
+  let adsetId = sub.meta_adset_id ? String(sub.meta_adset_id) : '';
+  if (!adsetId && sub.meta_campaign_id) {
+    try {
+      const adsets = await graphGet(`/${sub.meta_campaign_id}/adsets`, token, {
+        fields: 'id,daily_budget',
+        limit: 5,
+      });
+      adsetId = adsets?.data?.[0]?.id ? String(adsets.data[0].id) : '';
+    } catch (err) {
+      console.warn('[meta ads] adset lookup for budget failed:', formatGraphError(err));
+    }
+  }
+
+  if (!adsetId) {
     throw new Error('This campaign has no ad set — budget can only be edited on boosts/ads created with an ad set');
   }
 
   try {
-    await graphPost(`/${sub.meta_adset_id}`, token, { daily_budget: cents });
+    await graphPost(`/${adsetId}`, token, { daily_budget: cents });
   } catch (err) {
     throw new Error(formatGraphError(err));
   }
 
-  sub.budget = budgetNum;
-  client.metaAds.lastSync = new Date();
-  client.markModified('metaAds');
-  await client.save();
+  if (source === 'local') {
+    sub.budget = budgetNum;
+    if (!sub.meta_adset_id) sub.meta_adset_id = adsetId;
+    client.metaAds.lastSync = new Date();
+    client.markModified('metaAds');
+    await client.save();
+  }
 
   return {
     id: String(sub._id),
-    budget: sub.budget,
-    metaAdsetId: sub.meta_adset_id,
+    budget: budgetNum,
+    metaAdsetId: adsetId,
   };
 }
 

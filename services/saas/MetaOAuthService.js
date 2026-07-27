@@ -27,10 +27,13 @@ const META_OAUTH_REDIRECT_URI = resolveOAuthRedirectUri();
 const DASHBOARD_URL = (process.env.DASHBOARD_URL || 'https://khanatechnologies.co.za').replace(/\/$/, '');
 
 // Login for Business rejects consumer scopes like `email` (Invalid Scopes).
+// pages_read_user_content is required to read Page feed / published_posts for Boost.
 const OAUTH_SCOPES = [
   'public_profile',
   'pages_show_list',
   'pages_read_engagement',
+  'pages_read_user_content',
+  'pages_manage_ads',
   'business_management',
   'ads_read',
   'ads_management',

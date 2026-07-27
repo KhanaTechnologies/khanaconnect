@@ -203,34 +203,87 @@ async function updateSelection(clientId, { pageId, adAccountId }) {
   };
 }
 
+async function ensurePageAccessToken(client, pageId) {
+  let pageToken = client.metaAds?.pageAccessToken
+    ? String(client.metaAds.pageAccessToken)
+    : '';
+  if (pageToken) return pageToken;
+
+  const userToken = String(client.metaAds.accessToken || '');
+  if (!userToken) throw new Error('Facebook is not connected');
+
+  try {
+    const pagesRes = await graphGet('/me/accounts', userToken, {
+      fields: 'id,name,access_token',
+      limit: 50,
+    });
+    const pages = Array.isArray(pagesRes?.data) ? pagesRes.data : [];
+    const match = pages.find((p) => String(p.id) === String(pageId)) || pages[0];
+    if (match?.access_token) {
+      pageToken = String(match.access_token);
+      client.metaAds.pageAccessToken = pageToken;
+      if (match.id) client.metaAds.pageId = String(match.id);
+      if (match.name) client.metaAds.pageName = String(match.name);
+      client.markModified('metaAds');
+      await client.save();
+    }
+  } catch (err) {
+    console.warn('[meta ads] page token refresh failed:', formatGraphError(err));
+  }
+
+  return pageToken || userToken;
+}
+
+function mapPagePosts(posts) {
+  return (Array.isArray(posts) ? posts : []).map((p) => ({
+    id: String(p.id),
+    postId: String(p.id).includes('_') ? String(p.id).split('_').pop() : String(p.id),
+    message: String(p.message || '').slice(0, 500),
+    createdTime: p.created_time || null,
+    picture: p.full_picture || '',
+    permalink: p.permalink_url || '',
+    shares: Number(p.shares?.count) || 0,
+  }));
+}
+
 async function listPagePosts(clientId, { limit = 20 } = {}) {
   const client = await loadClientWithMeta(clientId);
   const pageId = client.metaAds?.pageId;
   if (!pageId) throw new Error('Select a Facebook Page first');
 
-  const pageToken = client.metaAds.pageAccessToken
-    ? String(client.metaAds.pageAccessToken)
-    : String(client.metaAds.accessToken);
+  const cap = Math.min(Math.max(Number(limit) || 20, 1), 50);
+  const fields = 'id,message,created_time,full_picture,permalink_url,shares';
+  const pageToken = await ensurePageAccessToken(client, pageId);
 
-  const feedRes = await graphGet(`/${pageId}/feed`, pageToken, {
-    fields: 'id,message,created_time,full_picture,permalink_url,shares',
-    limit: Math.min(Math.max(Number(limit) || 20, 1), 50),
-  });
+  // Prefer published_posts (Page's own posts). Fall back to posts / feed.
+  const edges = ['published_posts', 'posts', 'feed'];
+  let lastError = null;
 
-  const posts = Array.isArray(feedRes?.data) ? feedRes.data : [];
-  return {
-    pageId: String(pageId),
-    pageName: client.metaAds.pageName || '',
-    posts: posts.map((p) => ({
-      id: String(p.id),
-      postId: String(p.id).includes('_') ? String(p.id).split('_').pop() : String(p.id),
-      message: String(p.message || '').slice(0, 500),
-      createdTime: p.created_time || null,
-      picture: p.full_picture || '',
-      permalink: p.permalink_url || '',
-      shares: Number(p.shares?.count) || 0,
-    })),
-  };
+  for (const edge of edges) {
+    try {
+      const res = await graphGet(`/${pageId}/${edge}`, pageToken, {
+        fields,
+        limit: cap,
+      });
+      return {
+        pageId: String(pageId),
+        pageName: client.metaAds.pageName || '',
+        posts: mapPagePosts(res?.data),
+      };
+    } catch (err) {
+      lastError = err;
+      console.warn(`[meta ads] ${edge} failed:`, formatGraphError(err));
+    }
+  }
+
+  const msg = formatGraphError(lastError);
+  const needsReconnect =
+    /permission|(#200)|(#10)|pages_read|OAuthException/i.test(msg);
+  throw new Error(
+    needsReconnect
+      ? `${msg} Reconnect Facebook and approve Page content permissions (pages_read_engagement, pages_read_user_content).`
+      : msg
+  );
 }
 
 async function getInsights(clientId, { days = 30 } = {}) {
