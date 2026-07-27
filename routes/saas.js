@@ -762,7 +762,8 @@ router.post('/ads/campaigns', requireRoles('owner', 'manager'), idempotencyGuard
 
 router.get('/meta/oauth/start', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
   const url = MetaOAuthService.buildAuthorizeUrl(req.tenant.clientId);
-  res.json({ ok: true, data: { url } });
+  const debug = MetaOAuthService.getAuthorizeDebug();
+  res.json({ ok: true, data: { url, ...debug } });
 }));
 
 router.get('/meta/oauth/status', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {

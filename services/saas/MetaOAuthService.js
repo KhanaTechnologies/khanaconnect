@@ -77,14 +77,25 @@ function buildAuthorizeUrl(clientId) {
     state: signState(clientId),
     response_type: 'code',
   });
-  // Login for Business configurations carry pages_* / ads permissions.
-  // When set, Meta expects config_id instead of (or in addition to) scope=.
+  // Login for Business: use config_id only. Never append scope= alongside it —
+  // extra scopes like pages_read_user_content / pages_manage_ads cause
+  // "Invalid Scopes" for app developers even when the config does not list them.
   if (META_LOGIN_CONFIG_ID) {
     params.set('config_id', META_LOGIN_CONFIG_ID);
   } else {
     params.set('scope', OAUTH_SCOPES);
   }
   return `https://www.facebook.com/v21.0/dialog/oauth?${params.toString()}`;
+}
+
+function getAuthorizeDebug() {
+  return {
+    mode: META_LOGIN_CONFIG_ID ? 'config_id' : 'scope',
+    configId: META_LOGIN_CONFIG_ID || null,
+    scopesWhenNoConfig: OAUTH_SCOPES.split(','),
+    redirectUri: META_OAUTH_REDIRECT_URI,
+    appId: META_APP_ID || null,
+  };
 }
 
 async function graphGet(path, accessToken, params = {}) {
@@ -294,6 +305,7 @@ async function disconnect(clientId) {
 module.exports = {
   isConfigured,
   buildAuthorizeUrl,
+  getAuthorizeDebug,
   completeOAuth,
   getConnectionStatus,
   disconnect,
