@@ -11,6 +11,11 @@ function resolveOAuthRedirectUri() {
   if (process.env.META_OAUTH_REDIRECT_URI) {
     return String(process.env.META_OAUTH_REDIRECT_URI).trim();
   }
+  // Prefer the public dashboard domain — Meta App Domains often rejects *.onrender.com.
+  const dashboard = (process.env.DASHBOARD_URL || 'https://khanatechnologies.co.za').replace(/\/$/, '');
+  if (dashboard) {
+    return `${dashboard}/dashboard/meta-oauth-callback`;
+  }
   const base = (process.env.API_PUBLIC_URL || process.env.PUBLIC_API_URL || process.env.RENDER_EXTERNAL_URL || '')
     .replace(/\/$/, '');
   if (!base) return '';

@@ -124,6 +124,19 @@ router.get('/meta/oauth/callback', wrapRoute(async (req, res) => {
   }
 }));
 
+// Same exchange as GET callback, for dashboard-hosted redirect_uri (App Domains friendly).
+router.post('/meta/oauth/complete', wrapRoute(async (req, res) => {
+  const { code, state, error, error_description: errorDescription } = req.body || {};
+  if (error) {
+    return res.status(400).json({
+      ok: false,
+      message: String(errorDescription || error || 'Facebook connection failed'),
+    });
+  }
+  const data = await MetaOAuthService.completeOAuth({ code, state });
+  res.json({ ok: true, data });
+}));
+
 router.use(tenantResolver);
 
 router.post('/whatsapp/accounts', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
