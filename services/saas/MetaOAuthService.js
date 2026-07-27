@@ -26,18 +26,19 @@ function resolveOAuthRedirectUri() {
 const META_OAUTH_REDIRECT_URI = resolveOAuthRedirectUri();
 const DASHBOARD_URL = (process.env.DASHBOARD_URL || 'https://khanatechnologies.co.za').replace(/\/$/, '');
 
-// Login for Business rejects consumer scopes like `email` (Invalid Scopes).
-// pages_read_user_content is required to read Page feed / published_posts for Boost.
+// Login for Business rejects many scopes on the OAuth `scope=` URL (same as `email`).
+// Page feed / manage-ads permissions belong in a Login for Business *configuration*
+// (config_id), not the authorize scope list — see META_LOGIN_CONFIG_ID.
 const OAUTH_SCOPES = [
   'public_profile',
   'pages_show_list',
   'pages_read_engagement',
-  'pages_read_user_content',
-  'pages_manage_ads',
   'business_management',
   'ads_read',
   'ads_management',
 ].join(',');
+
+const META_LOGIN_CONFIG_ID = (process.env.META_LOGIN_CONFIG_ID || '').trim();
 
 function isConfigured() {
   return Boolean(META_APP_ID && META_APP_SECRET && META_OAUTH_REDIRECT_URI);
@@ -74,9 +75,15 @@ function buildAuthorizeUrl(clientId) {
     client_id: META_APP_ID,
     redirect_uri: META_OAUTH_REDIRECT_URI,
     state: signState(clientId),
-    scope: OAUTH_SCOPES,
     response_type: 'code',
   });
+  // Login for Business configurations carry pages_* / ads permissions.
+  // When set, Meta expects config_id instead of (or in addition to) scope=.
+  if (META_LOGIN_CONFIG_ID) {
+    params.set('config_id', META_LOGIN_CONFIG_ID);
+  } else {
+    params.set('scope', OAUTH_SCOPES);
+  }
   return `https://www.facebook.com/v21.0/dialog/oauth?${params.toString()}`;
 }
 
