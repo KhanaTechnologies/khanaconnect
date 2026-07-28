@@ -1,5 +1,4 @@
-const Client = require('../models/client');
-const { processAllWarehouseLowStockAlerts } = require('../helpers/b2bWarehouseAlerts');
+const { processAllWarehouseLowStockAlerts } = require('../../helpers/b2bWarehouseAlerts');
 
 async function processB2bWarehouseLowStock() {
   const results = await processAllWarehouseLowStockAlerts();
