@@ -11,6 +11,7 @@ const AdsService = require('../services/saas/AdsService');
 const MetaOAuthService = require('../services/saas/MetaOAuthService');
 const MetaAdsService = require('../services/saas/MetaAdsService');
 const MetaAdsAdvancedService = require('../services/saas/MetaAdsAdvancedService');
+const CrmWorkspaceService = require('../services/saas/CrmWorkspaceService');
 const BillingService = require('../services/saas/BillingService');
 const PricingService = require('../services/saas/PricingService');
 const PayFastCreditsService = require('../services/saas/PayFastCreditsService');
@@ -758,6 +759,88 @@ router.post('/ads/campaigns', requireRoles('owner', 'manager'), idempotencyGuard
     accessToken: access_token,
   });
   res.status(201).json({ ok: true, data: campaign });
+}));
+
+router.get('/crm/board', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const data = await CrmWorkspaceService.getBoard(req.tenant.clientId);
+  res.json({ ok: true, data });
+}));
+
+router.put('/crm/stages', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const { stages } = req.body || {};
+  const data = await CrmWorkspaceService.upsertStages(req.tenant.clientId, stages);
+  res.json({ ok: true, data });
+}));
+
+router.post('/crm/opportunities', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
+  const body = req.body || {};
+  if (!body.title) {
+    return res.status(400).json({ ok: false, message: 'title is required' });
+  }
+  const data = await CrmWorkspaceService.createOpportunity(req.tenant.clientId, body, {
+    userId: req.tenant.userId,
+    name: String(body.owner_name || ''),
+  });
+  res.status(201).json({ ok: true, data });
+}));
+
+router.patch('/crm/opportunities/:id', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
+  const data = await CrmWorkspaceService.updateOpportunity(req.tenant.clientId, req.params.id, req.body || {});
+  res.json({ ok: true, data });
+}));
+
+router.get('/crm/tasks', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const data = await CrmWorkspaceService.listTasks(req.tenant.clientId, {
+    status: req.query.status,
+    due: req.query.due,
+  });
+  res.json({ ok: true, data });
+}));
+
+router.post('/crm/tasks', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
+  const body = req.body || {};
+  if (!body.title) {
+    return res.status(400).json({ ok: false, message: 'title is required' });
+  }
+  const data = await CrmWorkspaceService.createTask(req.tenant.clientId, body, {
+    userId: req.tenant.userId,
+    name: String(body.assignee_name || ''),
+  });
+  res.status(201).json({ ok: true, data });
+}));
+
+router.patch('/crm/tasks/:id', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
+  const data = await CrmWorkspaceService.updateTask(req.tenant.clientId, req.params.id, req.body || {});
+  res.json({ ok: true, data });
+}));
+
+router.get('/crm/templates', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (_req, res) => {
+  const data = await CrmWorkspaceService.getVerticalTemplates();
+  res.json({ ok: true, data });
+}));
+
+router.post('/crm/templates/apply', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const { vertical } = req.body || {};
+  if (!vertical) {
+    return res.status(400).json({ ok: false, message: 'vertical is required' });
+  }
+  const data = await CrmWorkspaceService.applyVerticalTemplate(req.tenant.clientId, vertical, {
+    actorName: String(req.body?.assignee_name || ''),
+  });
+  res.json({ ok: true, data });
+}));
+
+router.get('/crm/export.csv', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const type = String(req.query.type || 'opportunities');
+  const csv = await CrmWorkspaceService.exportCsv(req.tenant.clientId, type);
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="crm-${type}.csv"`);
+  res.status(200).send(csv);
+}));
+
+router.post('/crm/reminders/run', requireRoles('owner', 'manager'), wrapRoute(async (_req, res) => {
+  const data = await CrmWorkspaceService.processRemindersTick({});
+  res.json({ ok: true, data });
 }));
 
 router.get('/meta/oauth/start', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {

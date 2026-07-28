@@ -10,6 +10,7 @@ const JOB_NAMES = {
   WHATSAPP_AUTO_REPLY: 'whatsapp-inbox:auto-reply',
   WHATSAPP_BROADCAST: 'whatsapp-inbox:broadcast-send',
   PRODUCT_SALES_EXPIRE: 'products:expire-sales',
+  CRM_TASK_REMINDERS: 'crm:task-reminders',
 };
 
 let agendaInstance = null;
@@ -109,6 +110,7 @@ function registerJobHandlers(agenda) {
   const { processWhatsAppAutoReply } = require('../jobs/handlers/processWhatsAppAutoReply');
   const { processWhatsAppBroadcast } = require('../jobs/handlers/processWhatsAppBroadcast');
   const { expireEndedProductSales } = require('../helpers/expireProductSales');
+  const { processCrmTaskReminders } = require('../jobs/handlers/processCrmTaskReminders');
 
   agenda.define(
     JOB_NAMES.EVENT_BATCH,
@@ -225,6 +227,12 @@ function registerJobHandlers(agenda) {
     async () => expireEndedProductSales()
   );
 
+  agenda.define(
+    JOB_NAMES.CRM_TASK_REMINDERS,
+    { concurrency: 1, lockLifetime: 5 * 60 * 1000 },
+    async () => processCrmTaskReminders()
+  );
+
   agenda.on('start', (job) => {
     if (job.attrs.name === JOB_NAMES.OUTBOUND_EMAIL) {
       console.log(`📤 Outbound email job ${job.attrs._id} started`);
@@ -292,6 +300,10 @@ async function startJobScheduler() {
   const salesExpireInterval = process.env.PRODUCT_SALES_EXPIRE_INTERVAL || '1 hour';
   await agendaInstance.every(salesExpireInterval, JOB_NAMES.PRODUCT_SALES_EXPIRE, {});
   console.log(`🏷️ Product sales expire job scheduled every ${salesExpireInterval}`);
+
+  const crmReminderInterval = process.env.CRM_TASK_REMINDER_INTERVAL || '15 minutes';
+  await agendaInstance.every(crmReminderInterval, JOB_NAMES.CRM_TASK_REMINDERS, {});
+  console.log(`🗂️ CRM reminder job scheduled every ${crmReminderInterval}`);
 
   console.log('✅ MongoDB job scheduler (Agenda) started');
   return agendaInstance;
