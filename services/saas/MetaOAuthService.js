@@ -36,6 +36,8 @@ const OAUTH_SCOPES = [
   'business_management',
   'ads_read',
   'ads_management',
+  'instagram_basic',
+  'instagram_content_publish',
 ].join(',');
 
 const META_LOGIN_CONFIG_ID = (process.env.META_LOGIN_CONFIG_ID || '').trim();

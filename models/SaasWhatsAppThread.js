@@ -28,6 +28,9 @@ const saasWhatsAppThreadSchema = new mongoose.Schema(
       },
     },
     marketing_opt_out: { type: Boolean, default: false },
+    /** Click-to-WhatsApp click id from inbound ad referral (Conversions API). */
+    ctwa_clid: { type: String, default: '', trim: true },
+    ctwa_clid_at: { type: Date, default: null },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );

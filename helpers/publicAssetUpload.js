@@ -55,12 +55,16 @@ function cloudinaryConfigured() {
 /**
  * Upload to Cloudinary when CLOUDINARY_* env vars are set.
  * Returns HTTPS CDN URL. Prefer this over GitHub for product/commerce images.
+ * @param {'image'|'video'|'auto'} [options.resourceType='image']
  */
-async function uploadBufferToCloudinary(buffer, repoRelativePath) {
+async function uploadBufferToCloudinary(buffer, repoRelativePath, options = {}) {
   const cloud = process.env.CLOUDINARY_CLOUD_NAME;
   const apiKey = process.env.CLOUDINARY_API_KEY;
   const apiSecret = process.env.CLOUDINARY_API_SECRET;
   const folder = (process.env.CLOUDINARY_FOLDER || 'khanaconnect').replace(/^\/+|\/+$/g, '');
+  const resourceType = ['image', 'video', 'auto'].includes(String(options.resourceType || ''))
+    ? String(options.resourceType)
+    : 'image';
   const publicIdBase = path
     .basename(repoRelativePath || `asset-${Date.now()}`)
     .replace(/\.[^.]+$/, '')
@@ -77,14 +81,15 @@ async function uploadBufferToCloudinary(buffer, repoRelativePath) {
   form.append('folder', folder);
   form.append('public_id', publicIdBase);
 
+  const maxBytes = resourceType === 'image' ? 20 * 1024 * 1024 : 100 * 1024 * 1024;
   const { data } = await axios.post(
-    `https://api.cloudinary.com/v1_1/${cloud}/image/upload`,
+    `https://api.cloudinary.com/v1_1/${cloud}/${resourceType}/upload`,
     form,
     {
       headers: form.getHeaders(),
-      timeout: 60000,
-      maxContentLength: 20 * 1024 * 1024,
-      maxBodyLength: 20 * 1024 * 1024,
+      timeout: resourceType === 'image' ? 60000 : 180000,
+      maxContentLength: maxBytes,
+      maxBodyLength: maxBytes,
     }
   );
   if (!data?.secure_url) {
@@ -95,10 +100,13 @@ async function uploadBufferToCloudinary(buffer, repoRelativePath) {
     fileName: path.basename(repoRelativePath || data.public_id || 'asset'),
     publicPath: data.public_id || '',
     storage: 'cloudinary',
+    resourceType: data.resource_type || resourceType,
     cloudinary: {
       public_id: data.public_id,
       version: data.version,
       format: data.format,
+      resource_type: data.resource_type,
+      duration: data.duration,
     },
   };
 }
@@ -106,17 +114,19 @@ async function uploadBufferToCloudinary(buffer, repoRelativePath) {
 /**
  * Persist a public asset.
  * Priority: Cloudinary (if configured) → GitHub → local disk (dev only).
+ * @param {{ resourceType?: 'image'|'video'|'auto' }} [options]
  */
-async function uploadPublicAsset(buffer, repoRelativePath, req) {
+async function uploadPublicAsset(buffer, repoRelativePath, req, options = {}) {
   if (!buffer || !buffer.length) {
     throw new Error('No file data received');
   }
 
   const repoPath = normalizeRepoPath(repoRelativePath);
+  const resourceType = options.resourceType || 'image';
 
   if (cloudinaryConfigured()) {
     try {
-      return await uploadBufferToCloudinary(buffer, repoPath);
+      return await uploadBufferToCloudinary(buffer, repoPath, { resourceType });
     } catch (err) {
       console.error('[uploadPublicAsset] Cloudinary failed, falling back:', err.message);
     }

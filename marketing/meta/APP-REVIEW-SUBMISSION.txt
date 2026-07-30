@@ -1,0 +1,243 @@
+KHANA CONNECT — META APP REVIEW + DATA HANDLING
+Paste-ready copy for Meta App Review (KhanaConnectW / Khana Technologies)
+Update Login for Business config_id permissions BEFORE recording screencasts:
+  public_profile, pages_show_list, pages_read_engagement, business_management,
+  ads_read, ads_management, instagram_basic, instagram_content_publish
+WhatsApp permissions stay on System User token (NOT Login config):
+  whatsapp_business_messaging, whatsapp_business_management, whatsapp_business_manage_events
+After adding permissions: Disconnect → Connect Facebook again for each test user.
+Privacy policy URL: https://khanatechnologies.co.za/privacy-policy
+
+================================================================================
+DATA HANDLING (Meta questionnaire)
+================================================================================
+
+Do you have data processors that will have access to Platform Data?
+→ YES
+Names: MongoDB Atlas; Render; Cloudinary (media). GoDaddy for hosting/email where applicable.
+
+Who is responsible for all Platform Data Meta shares with you?
+→ KHANA TECHNOLOGIES (Pty) Ltd
+
+Country where this person or entity is located?
+→ South Africa
+
+Have you provided personal data to public authorities in response to national
+security requests in the past 12 months?
+→ No
+  (Confirm against your own records before submit.)
+
+Which policies/processes regarding requests from public authorities?
+→ Tick only what you actually have documented. If none are formalized yet, select
+  "None of the above" OR put a short internal process in place first, then tick:
+  - Required review of the legality of these requests
+  - Provisions for challenging these requests if considered unlawful
+  - Data minimization policy
+  - Documentation of these requests
+
+================================================================================
+pages_show_list
+================================================================================
+How we use it:
+KhanaConnect is a business management platform. Clients connect Meta so they can
+manage Facebook Page ads, boost Page posts, and view Page-linked performance.
+After Facebook Login we call /me/accounts to list Pages the person manages and
+show that list so they can select the correct Page for their workspace.
+
+Value: Clients who manage multiple Pages can choose the right one. Without this
+permission they cannot connect a Page for ads or boosting.
+
+Necessity: Required to verify Page management and power Page-based Meta Ads features.
+
+Screencast: Meta Ads or Account Management → Connect Facebook → consent → Page
+dropdown shows managed Pages → select Page → Save.
+
+Agree: Yes — use only for listing/verifying managed Pages and related allowed uses.
+
+================================================================================
+pages_read_engagement
+================================================================================
+How we use it:
+After a Page is selected, we read that Page’s published posts so the client can
+choose a post to boost from KhanaConnect (Boost posts → Facebook).
+
+Value: Clients boost existing organic posts without leaving the dashboard.
+
+Necessity: Cannot list Page posts for boost flows without this permission.
+(Requires pages_show_list.)
+
+Screencast: Connect → select Page → Boost posts → Facebook → posts load → open
+Boost dialog (create as PAUSED).
+
+Agree: Yes — allowed usage only.
+
+================================================================================
+public_profile
+================================================================================
+How we use it:
+Standard Login: we read the connected person’s Meta id and name via /me to show
+who connected Facebook and store connection status in Account Management / Meta Ads.
+
+Value: Clear confirmation of which Meta user linked the business account.
+
+Necessity: Required for Facebook Login connection identity.
+
+Agree: Yes — allowed usage only.
+
+================================================================================
+business_management
+================================================================================
+How we use it:
+Used with Marketing API flows that touch Business Manager assets (e.g. product
+catalog create/sync under the client’s business, ad account business context).
+Clients manage ads and catalogs belonging to their business from KhanaConnect.
+
+Value: Catalog and business-asset campaigns work without leaving Khana.
+
+Necessity: Catalog sync and some ad-account/business asset operations require it.
+
+Screencast: Meta Ads → Create ads → Catalog sync / catalog campaign (or Setup
+showing business-linked ad account + catalog checklist).
+
+Agree: Yes — allowed usage only.
+
+================================================================================
+ads_read
+================================================================================
+How we use it:
+We read ad account insights (spend, reach, clicks, impressions, campaign breakdowns)
+and display them in Meta Ads → Insights with CSV/print export.
+
+Value: Clients see delivery performance of Khana-created and Meta campaigns.
+
+Necessity: Insights UI cannot function without ads_read.
+
+Screencast: Meta Ads → Insights → charts/metrics → optional CSV export.
+(Seed a paused or active campaign first if the account is empty.)
+
+Agree: Yes — allowed usage only.
+
+================================================================================
+ads_management
+================================================================================
+How we use it:
+Clients create and manage Meta campaigns from Khana: boost Facebook/Instagram posts,
+WhatsApp click-to-message ads, lead ads, catalog ads; pause/resume; update budgets;
+build custom audiences from customers. (Requires pages_read_engagement.)
+
+Value: Run Meta ads from the same ops dashboard as orders/customers.
+
+Necessity: Creating/updating campaigns, ad sets, ads, and audiences requires it.
+
+Screencast: Boost a post as PAUSED → Campaigns list → Create ads (WhatsApp or lead)
+as PAUSED → Audiences from customers.
+
+Agree: Yes — allowed usage only.
+
+================================================================================
+instagram_basic
+================================================================================
+How we use it:
+Resolve the Instagram professional account linked to the client’s Facebook Page,
+list IG media for boosting, and show linked username on Setup.
+
+Value: Instagram-first businesses can boost IG posts from Khana.
+
+Necessity: Required to identify the IG account and list media; also required for
+instagram_content_publish.
+
+Screencast: Connect Facebook → Setup shows Instagram linked → Boost → Instagram
+posts list.
+
+Agree: Yes — allowed usage only.
+
+================================================================================
+instagram_content_publish
+================================================================================
+How we use it:
+Clients publish image posts to their Page-linked Instagram professional account
+from Meta Ads → Publish to Instagram (public image URL + caption → media container
+→ media_publish). (Requires instagram_basic.)
+
+Value: Schedule/publish product or promo images without switching apps.
+
+Necessity: Content Publishing API requires this permission.
+
+Screencast: Meta Ads → Publish to Instagram → paste public image URL + caption →
+Publish → success with media id → media appears under Boost → Instagram.
+
+API test calls: POST /{ig-user-id}/media and POST /{ig-user-id}/media_publish
+(performed via KhanaConnect after Login).
+
+Agree: Yes — allowed usage only.
+
+================================================================================
+whatsapp_business_management
+================================================================================
+How we use it:
+Clients (or Khana on their behalf) connect a WhatsApp Business Account via Cloud API
+credentials. We manage WABA-related setup: subscribe the app to the WABA webhook,
+list/sync message templates, phone numbers, and operate inbox messaging for that WABA.
+
+Value: Order/booking alerts and WhatsApp inbox on the business number.
+
+Necessity: WABA asset management and template sync require this permission
+(via System User token — not Facebook Login).
+
+Screencast: Account Management → WhatsApp → save Cloud API credentials → Sync
+templates → WhatsApp Inbox reply OR send test template.
+
+API test calls: WABA subscribed_apps, message_templates, send message.
+
+Agree: Yes — allowed usage only.
+
+================================================================================
+whatsapp_business_manage_events
+================================================================================
+How we use it:
+For a WABA administered by the client, KhanaConnect links a Conversions dataset
+(GET/POST /{WABA_ID}/dataset) and logs conversion events (Lead, Purchase, etc.) to
+Meta via POST /{DATASET_ID}/events with action_source=business_messaging and
+messaging_channel=whatsapp, including ctwa_clid from Click-to-WhatsApp ad referrals.
+Used for ads targeting, optimization, and reporting in Events Manager.
+
+Value: Clients optimize Click-to-WhatsApp ads using real Lead/Purchase outcomes.
+
+Necessity: Cannot send WhatsApp messaging conversion events to Meta without it.
+
+Screencast:
+1. Account Management → WhatsApp → Advanced Cloud API (credentials saved).
+2. Link Events Manager dataset.
+3. Ensure a Click-to-WhatsApp conversation produced a ctwa_clid (or paste one).
+4. Send test Lead (and optionally Purchase) event.
+5. Show success in Khana and/or Events Manager dataset activity.
+
+Agree: Yes — only for logging events on WABAs for Meta ads targeting, optimization,
+and reporting per allowed usage.
+
+================================================================================
+SCREENCAST ORDER (efficient single recording or split clips)
+================================================================================
+1) Connect Facebook (public_profile + pages_show_list)
+2) Select Page; open Boost Facebook posts (pages_read_engagement)
+3) Setup Instagram linked; Boost IG posts (instagram_basic)
+4) Publish to Instagram (instagram_content_publish)
+5) Create paused boost / campaign; Campaigns; Insights (ads_management + ads_read)
+6) Catalog sync if available (business_management)
+7) Pixel: Send test Lead to Events Manager (Setup tab)
+8) WhatsApp: credentials, templates/inbox (whatsapp_business_management)
+9) WhatsApp: Link dataset + Send test Lead (whatsapp_business_manage_events)
+
+Prefer PAUSED campaigns in demos. Use H.264 MP4 under Meta’s size limit, or a
+public Drive/Dropbox link if the uploader fails.
+
+================================================================================
+MANUAL META DASHBOARD CHECKLIST (you)
+================================================================================
+[ ] Login for Business config includes instagram_basic + instagram_content_publish
+[ ] META_LOGIN_CONFIG_ID on Render matches that config
+[ ] System User WhatsApp token includes whatsapp_business_manage_events
+[ ] Deploy backend + frontend with these features
+[ ] Privacy policy live at /privacy-policy (section 5A)
+[ ] Reconnect test user after permission changes
+[ ] Record screencasts against Live/test app as Meta requires

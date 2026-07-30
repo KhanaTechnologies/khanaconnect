@@ -75,8 +75,19 @@ async function processEventBatch({ events, clientId }) {
   };
 }
 
+const MIN_GRAPH_VERSION = 19;
+const DEFAULT_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v21.0';
+
+// Clients saved before the Graph upgrade still carry a hard-coded v18.0, which Meta
+// no longer serves. Anything below the supported floor falls back to the current version.
+function resolveGraphVersion(stored) {
+  const major = Number(/^v(\d+)/.exec(String(stored || ''))?.[1]);
+  return Number.isFinite(major) && major >= MIN_GRAPH_VERSION ? stored : DEFAULT_GRAPH_VERSION;
+}
+
 async function sendToMeta(events, client) {
-  const { pixelId, accessToken, testEventCode, apiVersion = 'v18.0' } = client.metaAds;
+  const { pixelId, accessToken, testEventCode } = client.metaAds;
+  const apiVersion = resolveGraphVersion(client.metaAds.apiVersion);
   const metaEvents = events.map((event) => formatMetaEvent(event, client));
 
   const requestBody = {
@@ -90,7 +101,6 @@ async function sendToMeta(events, client) {
 
   const baseUrl = `https://graph.facebook.com/${apiVersion}`;
 
-  const fetch = require('node-fetch');
   const response = await fetch(`${baseUrl}/${pixelId}/events`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -157,10 +167,6 @@ function formatMetaEvent(event, client) {
   }
   if (metadata.fbp) userData.fbp = metadata.fbp;
   if (metadata.fbc) userData.fbc = metadata.fbc;
-
-  if (!userData.em && !userData.ph && !userData.fbp) {
-    userData.em = [hashData('test@example.com')];
-  }
 
   const eventMap = {
     PAGE_VIEW: 'PageView',

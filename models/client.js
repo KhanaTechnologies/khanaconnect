@@ -182,7 +182,7 @@ const clientSchema = new Schema({
     pixelId: encryptedString,
     accessToken: encryptedString,
     testEventCode: encryptedString,
-    apiVersion: { type: String, default: 'v18.0' },
+    apiVersion: { type: String, default: 'v21.0' },
     /** Marketing API ad account id (digits only; no act_ prefix). */
     adAccountId: { type: String, default: '' },
     ownershipType: {

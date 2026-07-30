@@ -322,6 +322,13 @@ class WhatsAppInboxService {
       const tsSec = Number(msg.timestamp);
       const timestamp = Number.isFinite(tsSec) && tsSec > 0 ? new Date(tsSec * 1000) : new Date();
       const contactName = contactNameByWaId[from] || '';
+      let ctwaClid = '';
+      try {
+        const WhatsAppConversionsService = require('./WhatsAppConversionsService');
+        ctwaClid = WhatsAppConversionsService.extractCtwaClidFromRaw(msg) || '';
+      } catch {
+        /* optional */
+      }
 
       try {
         // Do not mix contact_name in both $set and $setOnInsert — Mongo rejects that conflict.
@@ -341,10 +348,24 @@ class WhatsAppInboxService {
               status: 'received',
               timestamp,
               raw: msg,
+              ...(ctwaClid ? { ctwa_clid: ctwaClid } : {}),
             },
           },
           { upsert: true }
         );
+        if (ctwaClid) {
+          try {
+            const WhatsAppConversionsService = require('./WhatsAppConversionsService');
+            await WhatsAppConversionsService.captureCtwaFromInbound({
+              clientId: threadClientId,
+              contactWaId: from,
+              rawMsg: msg,
+              timestamp,
+            });
+          } catch (ctwaErr) {
+            console.warn('[whatsapp inbox] ctwa capture failed:', ctwaErr.message);
+          }
+        }
         if (contactName) {
           await SaasWhatsAppMessage.updateMany(
             { client_id: threadClientId, contact_wa_id: from },

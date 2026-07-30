@@ -1,0 +1,189 @@
+KHANA TECHNOLOGIES — CANVA CREATIVE BRIEF
+=========================================
+For: Meta/Instagram ads, LinkedIn posts, website banners, pitch decks
+Brand: Khana Technologies / Khana Connect
+Website: khanatechnologies.co.za
+Live demo: khanatechnologies.co.za/demo
+Market: South Africa (ZAR pricing, local business owners + wholesale/B2B)
+
+──────────────────────────────────────────────────────────────────────────────
+1. BRAND POSITIONING (one line)
+──────────────────────────────────────────────────────────────────────────────
+Khana is your long-term technology partner — we build, launch, and stay.
+Not a build-and-leave agency.
+
+Tone: Confident, warm, plain English. No jargon. Partner, not vendor.
+
+──────────────────────────────────────────────────────────────────────────────
+2. WHO WE’RE TALKING TO
+──────────────────────────────────────────────────────────────────────────────
+Audience A — SMB owners (retail, food, services)
+  • Running or growing a business in SA
+  • Tired of plugin puzzles, scattered tools, agencies that disappear
+  • Want: one dashboard for sales, bookings, and marketing tools
+
+Audience B — Wholesale / B2B merchants
+  • Sell to shops, distributors, or trade buyers
+  • Need: tier pricing, buyer accounts, online ordering, multi-warehouse stock
+  • Pain: phone/email orders, spreadsheets, no buyer self-service
+
+──────────────────────────────────────────────────────────────────────────────
+3. CORE OFFERINGS (what to show in visuals)
+──────────────────────────────────────────────────────────────────────────────
+KHANA CONNECT — Business platform
+  • Online store + product catalog
+  • Orders & fulfilment
+  • Bookings & appointments (services)
+  • Revenue Command Center (cart recovery, segments, campaigns)
+  • Email & newsletter tools
+  • One dashboard — your team, your brand colour
+
+B2B TRADE (wholesale module)
+  • Merchant: approve buyers, tier pricing (Gold/Silver/Bronze), warehouses, low-stock alerts
+  • Buyer portal: trade login, negotiated prices, cart, PO numbers, order history
+  • Retail + wholesale on one Khana platform
+
+──────────────────────────────────────────────────────────────────────────────
+4. KEY MESSAGES (pick 1 headline + 1 sub per ad)
+──────────────────────────────────────────────────────────────────────────────
+Headlines (SMB):
+  • One dashboard for your whole business
+  • Your store, bookings & sales tools — in one place
+  • We stay after launch
+  • Stop juggling plugins. Start operating from one place.
+  • Built for South African businesses
+
+Headlines (B2B):
+  • Wholesale ordering, online
+  • Your buyers order 24/7 — at trade prices
+  • B2B trade portal + merchant dashboard
+  • Tier pricing, warehouses, trade orders — built in
+
+Sub-lines / body:
+  • Store · Bookings · Dashboard · Revenue tools
+  • No login puzzle. No disappearing dev agency.
+  • See it live — free interactive demo at khanatechnologies.co.za/demo
+  • Partner with Khana — we set up, launch, and support you long-term
+
+CTAs (buttons):
+  • Start guided demo
+  • See it in action
+  • Partner with us
+  • Talk to Khana
+  • Get started
+
+──────────────────────────────────────────────────────────────────────────────
+5. PROOF / SAMPLE STATS (demo data — use as illustrative)
+──────────────────────────────────────────────────────────────────────────────
+  • R48k+ monthly revenue overview
+  • 186 orders / month
+  • R12.4k cart recovery (30 days)
+  • 18 approved wholesale buyers
+  • 3 warehouses (JHB, CPT, DBN)
+  • 2FA secure buyer login
+
+Demo story company name: Cape Fresh Supplies (fictional — good for mockups)
+
+──────────────────────────────────────────────────────────────────────────────
+6. VISUAL DIRECTION
+──────────────────────────────────────────────────────────────────────────────
+Style: Clean SaaS, professional, trustworthy — not flashy startup neon
+
+Colours:
+  • Navy:   #1e4d8c / #1e3a5f
+  • Blue:   #2563eb (dashboard accent)
+  • Teal:   #0d9488 / #14b8a6
+  • Purple: #6366f1 (B2B accent)
+  • White/light grey backgrounds for ads; dark mode optional for tech feel
+
+Assets in repo (import into Canva as SVG):
+  marketing/canva/vectors/
+    khana-dashboard-platform.svg      — full dashboard infographic
+    khana-b2b-trade-platform.svg      — B2B two-sided story
+    khana-dashboard-ad-square.svg     — 1080×1080 SMB ad layout
+    khana-b2b-ad-square.svg           — 1080×1080 B2B ad layout
+
+Screenshots: Take from live demo after deploy
+  /demo/dashboard          — main dashboard
+  /demo/dashboard/b2b      — wholesale merchant view
+  /demo/trade/catalog      — buyer trade portal
+
+Formats:
+  • Instagram/Facebook feed: 1080×1080
+  • Story/Reels: 1080×1920
+  • LinkedIn: 1200×627
+  • Carousel: 1080×1080 per slide (3–5 slides)
+
+──────────────────────────────────────────────────────────────────────────────
+7. AD ANGLES (ready-made campaigns)
+──────────────────────────────────────────────────────────────────────────────
+Campaign 1 — “We stay” (trust)
+  Headline: We don’t build and leave.
+  Body: Khana is your long-term partner for store, bookings, and day-to-day operations.
+  CTA: Partner with us
+
+Campaign 2 — “One platform” (SMB)
+  Headline: One dashboard. Your whole business.
+  Body: Products, orders, bookings, cart recovery & email — no plugin puzzle.
+  CTA: See live demo
+
+Campaign 3 — “Wholesale online” (B2B)
+  Headline: Your trade buyers can order online.
+  Body: Tier pricing, buyer portal, warehouses & PO checkout — built into Khana.
+  CTA: See B2B demo
+
+Campaign 4 — “Interactive demo” (low friction)
+  Headline: See Khana Connect in action
+  Body: Walk through a sample business — no login, no sales call required.
+  CTA: Start guided tour → /demo
+
+Campaign 5 — “Cart recovery” (operations)
+  Headline: Recover abandoned carts automatically
+  Body: Use your Revenue Command Center to follow up abandoned carts and run targeted campaigns.
+  CTA: Talk to Khana
+
+──────────────────────────────────────────────────────────────────────────────
+8. CAROUSEL STORYBOARD (5 slides — general SMB)
+──────────────────────────────────────────────────────────────────────────────
+Slide 1: Hook — “One platform for sales, bookings & operations”
+Slide 2: Dashboard screenshot — revenue & orders at a glance
+Slide 3: Bookings + store — “Retail and services, together”
+Slide 4: Revenue tools — cart recovery, segments, campaigns
+Slide 5: CTA — “Partner with Khana · khanatechnologies.co.za/demo”
+
+B2B carousel (5 slides):
+Slide 1: “Wholesale ordering, built in”
+Slide 2: Merchant dashboard — buyers & tier pricing
+Slide 3: Warehouses & low-stock alerts
+Slide 4: Buyer portal — trade catalog & cart
+Slide 5: CTA — “Retail + B2B · one Khana platform”
+
+──────────────────────────────────────────────────────────────────────────────
+9. DO / DON’T
+──────────────────────────────────────────────────────────────────────────────
+DO:
+  • Use “partner” language, South African context (Rands, local examples)
+  • Show real UI (demo screenshots) where possible
+  • Keep text minimal on image — detail in caption
+  • Include logo + khanatechnologies.co.za
+
+DON’T:
+  • Promise “custom app in 48 hours” or unrealistic timelines
+  • Promise guaranteed revenue outcomes (e.g. “we will make you more money”)
+  • Look like a generic offshore dev shop
+  • Overcrowd with feature lists — one idea per ad
+  • Use Lorem ipsum — use Cape Fresh / sample stats above
+
+──────────────────────────────────────────────────────────────────────────────
+10. LINKS & CONTACT
+──────────────────────────────────────────────────────────────────────────────
+  Website:     https://khanatechnologies.co.za
+  Live demo:     https://khanatechnologies.co.za/demo
+  Contact:       https://khanatechnologies.co.za/contact
+  Platform info: https://khanatechnologies.co.za/platform
+  Pricing:       https://khanatechnologies.co.za/pricing
+
+Logo: Use Khana Technologies logo from website / brand kit
+
+──────────────────────────────────────────────────────────────────────────────
+END OF BRIEF — paste sections into Canva Doc or share with designer

@@ -1,0 +1,169 @@
+KHANA TECHNOLOGIES — CANVA POSTER PROMPT (ECOMMERCE)
+====================================================
+Copy the PROMPT block below into Canva → Magic Media / Text to Image / Magic Design.
+Use with your Brand Kit colours loaded (see CONSISTENCY RULES at bottom).
+
+──────────────────────────────────────────────────────────────────────────────
+POSTER PROMPT — ECOMMERCE OFFERING (1080×1080 Facebook post)
+──────────────────────────────────────────────────────────────────────────────
+
+Design a clean, professional Facebook poster for a South African technology company called Khana Technologies.
+
+Subject: Ecommerce offering — one dashboard to run an online store, products, orders, and marketing tools.
+
+Visual style:
+- Modern SaaS marketing poster, not flashy or cheesy
+- Light background (soft off-white or very light blue-grey)
+- Accent colours: navy blue #1e4d8c, primary blue #2563eb, teal #0d9488
+- Minimal, lots of breathing room — not cluttered
+- Subtle rounded UI mockup or abstract dashboard shapes (cards, chart line, shopping bag icon) — no fake brand logos from other companies
+- Professional, trustworthy, warm — aimed at small business owners in South Africa
+
+Layout:
+- Top: small space for Khana Technologies logo
+- Headline area (large, bold, sans-serif): "Your online store. One dashboard."
+- Subheadline (smaller): "Products · Orders · Payments · Marketing tools"
+- Bottom third: short line "We build it, launch it, and stay." + website khanatechnologies.co.za
+- Optional small CTA pill button style: "See live demo"
+
+Typography feel: Plus Jakarta Sans or similar modern rounded sans-serif. Bold headline, regular body.
+
+Do NOT include: stock photo people pointing at laptops, neon gradients, clip art, lorem ipsum, US dollars, generic "Shop Now" ecommerce clichés, overcrowded feature lists.
+
+Mood: Calm confidence. Partner you can trust — not a cheap template.
+
+Format: Square 1080×1080 px, safe margins for Facebook feed.
+
+──────────────────────────────────────────────────────────────────────────────
+SHORTER PROMPT (if Canva limits characters)
+──────────────────────────────────────────────────────────────────────────────
+
+Clean SaaS poster, 1080×1080, light background, navy #1e4d8c and teal #0d9488 accents. South African business tech brand Khana Technologies. Headline "Your online store. One dashboard." Subtext: products, orders, payments, marketing tools. Minimal dashboard UI mockup, shopping elements, lots of white space. Professional, warm, trustworthy. Footer: khanatechnologies.co.za. No cheesy stock photos, no neon.
+
+──────────────────────────────────────────────────────────────────────────────
+STORY / REEL VERSION (1080×1920) — extra line for prompt
+──────────────────────────────────────────────────────────────────────────────
+
+Same style as above but vertical 9:16. Headline at upper third, UI visual in centre, CTA and URL at bottom. Text readable on mobile.
+
+──────────────────────────────────────────────────────────────────────────────
+CONSISTENCY RULES — USE ON EVERY KHANA CANVA DESIGN
+──────────────────────────────────────────────────────────────────────────────
+
+BRAND NAME
+  Primary: Khana Technologies
+  Product: Khana Connect (use when showing the platform/dashboard)
+  Never: KhanaConnect one word, never all caps KHANA
+
+COLOURS (add to Canva Brand Kit)
+  Navy:     #1e4d8c  — headlines, dark accents
+  Blue:     #2563eb  — buttons, links, primary accent
+  Teal:     #0d9488  — secondary accent, status highlights
+  Purple:   #6366f1  — B2B / wholesale designs only
+  Background: #f8fafc or white
+  Text dark: #1e293b
+  Text muted: #64748b
+
+FONTS (Canva equivalents if Plus Jakarta not available)
+  Headlines: Plus Jakarta Sans Bold / Montserrat Bold / Poppins SemiBold
+  Body:      Plus Jakarta Sans Regular / Inter / Open Sans
+  One headline font + one body font only — never mix more than 2 families
+
+LOGO
+  Always use your Khana logo file — top-left or centred top
+  Clear space around logo = height of the "K" mark minimum
+
+LAYOUT HABITS
+  • One main idea per poster — not a feature dump
+  • Headline max 6–8 words
+  • Subline max one short sentence or 3–4 dot-separated items
+  • Always include khanatechnologies.co.za (or /demo for demo CTAs)
+  • CTA buttons: rounded pill or rounded rectangle, blue #2563eb fill, white text
+  • Margins: keep text 48px+ from edges on 1080 designs
+
+TONE OF COPY (human, not AI)
+  ✓ "We build it, launch it, and stay."
+  ✓ "One place for your shop, bookings, and orders."
+  ✓ "No plugin puzzle."
+  ✗ "Leverage synergistic solutions"
+  ✗ "Empowering businesses to scale"
+  ✗ Long em-dash lists
+
+POSTER SERIES — MATCHING PROMPTS FOR OTHER OFFERINGS
+  Copy the ecommerce prompt and swap the SUBJECT + HEADLINE:
+
+  Bookings:
+    Headline: "Bookings that run themselves."
+    Sub: Appointments · Staff · Confirmations · One dashboard
+
+  Revenue / marketing:
+    Headline: "Turn browsers into buyers."
+    Sub: Cart recovery · Customer segments · Campaigns
+
+  B2B wholesale (use purple accent):
+    Headline: "Wholesale ordering, online."
+    Sub: Trade buyers · Tier pricing · Warehouses · Buyer portal
+
+  Full platform:
+    Headline: "One dashboard. Your whole business."
+    Sub: Store · Bookings · Orders · Marketing tools
+
+COPY SAFETY
+  • Treat all numbers as illustrative unless sourced from a cited case study
+  • Avoid guaranteed outcomes (e.g. “double revenue”, “we make you more money”)
+
+EXPORT
+  Facebook feed: PNG 1080×1080
+  Story: PNG 1080×1920
+  Keep a Canva Brand Template folder: "Khana — Facebook Series"
+
+EXISTING ASSETS (import, don’t regenerate)
+  marketing/canva/vectors/khana-dashboard-ad-square.svg
+  marketing/canva/vectors/khana-dashboard-platform.svg
+  Screenshots from khanatechnologies.co.za/demo
+
+──────────────────────────────────────────────────────────────────────────────
+POSTER PROMPT — BOOKINGS OFFERING (1080×1080 Facebook post)
+──────────────────────────────────────────────────────────────────────────────
+
+Design a clean, professional Facebook poster for a South African technology company called Khana Technologies.
+
+Subject: Online booking system — appointments, staff schedules, and automated confirmations from one dashboard. For service businesses (salons, clinics, tutors, consultants, trades, etc.).
+
+Visual style:
+- Same series as Khana ecommerce posters — keep visual consistency
+- Modern SaaS marketing poster, not flashy or cheesy
+- Light background (soft off-white or very light blue-grey)
+- Accent colours: navy blue #1e4d8c, primary blue #2563eb, teal #0d9488
+- Minimal, lots of breathing room — not cluttered
+- Subtle rounded UI mockup: calendar grid, appointment slots, clock or calendar icon, simple staff row — no fake logos from other brands
+- Professional, trustworthy, warm — aimed at South African service business owners
+
+Layout:
+- Top: small space for Khana Technologies logo
+- Headline (large, bold, sans-serif): "Bookings that run themselves."
+- Subheadline (smaller): "Appointments · Staff · Confirmations · One dashboard"
+- Bottom third: "We build it, launch it, and stay." + khanatechnologies.co.za
+- Optional CTA pill: "See live demo"
+
+Typography: Plus Jakarta Sans or similar modern rounded sans-serif.
+
+Do NOT include: spa clichés, neon, overcrowded calendars, stock photo hands on phones, US date formats, lorem ipsum.
+
+Mood: Calm, organised, reliable — less stress for the business owner.
+
+Format: Square 1080×1080 px, safe margins for Facebook feed.
+
+──────────────────────────────────────────────────────────────────────────────
+BOOKINGS — SHORT PROMPT (if Canva limits characters)
+──────────────────────────────────────────────────────────────────────────────
+
+Clean SaaS poster 1080×1080, light background, navy #1e4d8c and teal #0d9488. Khana Technologies, South Africa. Headline "Bookings that run themselves." Subtext: appointments, staff, confirmations, one dashboard. Minimal calendar UI mockup, white space, professional and warm. Footer khanatechnologies.co.za. Match Khana ecommerce poster style. No cheesy stock photos.
+
+──────────────────────────────────────────────────────────────────────────────
+BOOKINGS — STORY (1080×1920)
+──────────────────────────────────────────────────────────────────────────────
+
+Same booking poster style, vertical 9:16. Calendar visual centred. Headline top, URL and CTA bottom. Mobile-readable text.
+
+Screenshot reference: khanatechnologies.co.za/demo/dashboard/bookings

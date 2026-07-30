@@ -31,6 +31,8 @@ const saasWhatsAppMessageSchema = new mongoose.Schema(
     error: { type: String, default: '' },
     timestamp: { type: Date, required: true, index: true },
     raw: { type: mongoose.Schema.Types.Mixed, default: null },
+    /** Click-to-WhatsApp click id when message arrived from an ad referral. */
+    ctwa_clid: { type: String, default: '', trim: true, index: true },
     read_at: { type: Date, default: null },
     /** Soft-delete from Khana inbox only (Meta Cloud API cannot delete chat messages). */
     deleted_at: { type: Date, default: null, index: true },

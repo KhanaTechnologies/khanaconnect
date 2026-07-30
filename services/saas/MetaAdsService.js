@@ -207,7 +207,9 @@ async function updateSelection(clientId, { pageId, adAccountId }) {
         limit: 5,
       });
       const pixels = Array.isArray(pixRes?.data) ? pixRes.data : [];
-      if (pixels[0]?.id) {
+      // Only seed a pixel when none is set — a deliberately chosen dataset must
+      // survive later ad account re-selection.
+      if (pixels[0]?.id && !client.metaAds.pixelId) {
         client.metaAds.pixelId = String(pixels[0].id);
       }
     } catch (err) {
@@ -935,6 +937,342 @@ async function forceRefreshToken(clientId) {
   };
 }
 
+async function resolveIgPublishContext(clientId) {
+  const client = await loadClientWithMeta(clientId);
+  const pageId = client.metaAds?.pageId;
+  if (!pageId) throw new Error('Select a Facebook Page first');
+
+  const pageToken = await ensurePageAccessToken(client, pageId);
+  let igUserId = String(client.metaAds.instagramUserId || '').trim();
+  let igUsername = String(client.metaAds.instagramUsername || '').trim();
+
+  if (!igUserId) {
+    const ig = await resolveInstagramFromPage(pageId, pageToken);
+    igUserId = ig.instagramUserId;
+    igUsername = ig.instagramUsername;
+    if (igUserId) {
+      client.metaAds.instagramUserId = igUserId;
+      client.metaAds.instagramUsername = igUsername;
+      client.markModified('metaAds');
+      await client.save();
+    }
+  }
+
+  if (!igUserId) {
+    throw new Error(
+      'This Facebook Page has no linked Instagram professional account. Link Instagram to the Page in Meta, then reconnect Facebook.'
+    );
+  }
+
+  return { client, pageId, pageToken, igUserId, igUsername };
+}
+
+async function waitForIgContainer(containerId, pageToken, { maxAttempts = 30, intervalMs = 3000 } = {}) {
+  let statusCode = '';
+  for (let i = 0; i < maxAttempts; i += 1) {
+    try {
+      const status = await graphGet(`/${containerId}`, pageToken, {
+        fields: 'status_code,status',
+      });
+      statusCode = String(status?.status_code || status?.status || '').toUpperCase();
+      if (statusCode === 'FINISHED' || statusCode === 'PUBLISHED') {
+        return statusCode;
+      }
+      if (statusCode === 'ERROR' || statusCode === 'EXPIRED') {
+        throw new Error(`Instagram media container failed with status ${statusCode}`);
+      }
+    } catch (err) {
+      if (err.message?.includes('container failed')) throw err;
+      console.warn('[meta ads] IG container status poll:', formatGraphError(err));
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return statusCode || 'IN_PROGRESS';
+}
+
+function mapPublishPermissionError(err) {
+  const msg = formatGraphError(err);
+  if (/permission|instagram_content_publish|(#10)|(#200)/i.test(msg)) {
+    return new Error(
+      `${msg} Reconnect Facebook after adding instagram_content_publish (and instagram_basic) to the Login for Business configuration.`
+    );
+  }
+  return new Error(msg);
+}
+
+/**
+ * Publish image, carousel, video, or Reel to the Page-linked Instagram account.
+ * mediaType: 'IMAGE' | 'CAROUSEL' | 'VIDEO' | 'REELS'
+ */
+async function publishInstagramMedia(
+  clientId,
+  { mediaType = 'IMAGE', imageUrl = '', videoUrl = '', imageUrls = [], caption = '' } = {}
+) {
+  const { pageToken, igUserId, igUsername } = await resolveIgPublishContext(clientId);
+  const type = String(mediaType || 'IMAGE').toUpperCase();
+  const captionText = String(caption || '').slice(0, 2200);
+
+  const urls = Array.isArray(imageUrls)
+    ? imageUrls.map((u) => String(u || '').trim()).filter((u) => /^https?:\/\//i.test(u))
+    : [];
+  const singleImage = String(imageUrl || '').trim();
+  if (singleImage && /^https?:\/\//i.test(singleImage) && !urls.includes(singleImage)) {
+    urls.unshift(singleImage);
+  }
+  const video = String(videoUrl || '').trim();
+
+  let containerId;
+
+  try {
+    if (type === 'CAROUSEL' || (type === 'IMAGE' && urls.length > 1)) {
+      if (urls.length < 2) {
+        throw new Error('Carousel posts need at least 2 public image URLs');
+      }
+      if (urls.length > 10) {
+        throw new Error('Instagram carousels support at most 10 images');
+      }
+      const childIds = [];
+      for (const url of urls) {
+        const child = await graphPost(`/${igUserId}/media`, pageToken, {
+          image_url: url,
+          is_carousel_item: true,
+        });
+        const childId = String(child?.id || '').trim();
+        if (!childId) throw new Error('Meta did not return a carousel item container id');
+        childIds.push(childId);
+      }
+      const parent = await graphPost(`/${igUserId}/media`, pageToken, {
+        media_type: 'CAROUSEL',
+        children: childIds.join(','),
+        caption: captionText,
+      });
+      containerId = String(parent?.id || '').trim();
+    } else if (type === 'VIDEO' || type === 'REELS') {
+      if (!/^https?:\/\//i.test(video)) {
+        throw new Error('videoUrl must be a public http(s) URL Meta can fetch');
+      }
+      const created = await graphPost(`/${igUserId}/media`, pageToken, {
+        media_type: type === 'REELS' ? 'REELS' : 'VIDEO',
+        video_url: video,
+        caption: captionText,
+      });
+      containerId = String(created?.id || '').trim();
+    } else {
+      // IMAGE
+      const url = urls[0] || '';
+      if (!/^https?:\/\//i.test(url)) {
+        throw new Error('Upload an image on Khana or provide a public image URL');
+      }
+      const created = await graphPost(`/${igUserId}/media`, pageToken, {
+        image_url: url,
+        caption: captionText,
+      });
+      containerId = String(created?.id || '').trim();
+    }
+  } catch (err) {
+    if (err.message?.includes('Carousel') || err.message?.includes('Upload an image') || err.message?.includes('videoUrl')) {
+      throw err;
+    }
+    throw mapPublishPermissionError(err);
+  }
+
+  if (!containerId) throw new Error('Meta did not return a media container id');
+
+  const pollAttempts = type === 'VIDEO' || type === 'REELS' ? 40 : 15;
+  const statusCode = await waitForIgContainer(containerId, pageToken, {
+    maxAttempts: pollAttempts,
+    intervalMs: type === 'VIDEO' || type === 'REELS' ? 4000 : 2000,
+  });
+
+  let publishedId;
+  try {
+    const published = await graphPost(`/${igUserId}/media_publish`, pageToken, {
+      creation_id: containerId,
+    });
+    publishedId = String(published?.id || '').trim();
+  } catch (err) {
+    throw new Error(formatGraphError(err));
+  }
+
+  if (!publishedId) throw new Error('Meta did not return a published media id');
+
+  return {
+    containerId,
+    mediaId: publishedId,
+    mediaType: type === 'IMAGE' && urls.length > 1 ? 'CAROUSEL' : type,
+    instagramUserId: igUserId,
+    instagramUsername: igUsername,
+    caption: captionText,
+    imageUrl: urls[0] || '',
+    imageUrls: urls,
+    videoUrl: video || '',
+    containerStatus: statusCode || 'FINISHED',
+  };
+}
+
+/**
+ * Upload a local video buffer directly to Meta using Instagram's resumable
+ * upload protocol, then publish it. This avoids requiring a CDN/Git URL.
+ */
+async function publishInstagramVideoBuffer(
+  clientId,
+  { buffer, mediaType = 'REELS', caption = '', contentType = 'video/mp4' } = {}
+) {
+  if (!buffer?.length) throw new Error('Video file data is required');
+  const type = String(mediaType || 'REELS').toUpperCase();
+  if (!['VIDEO', 'REELS'].includes(type)) {
+    throw new Error('Direct video upload supports VIDEO or REELS');
+  }
+
+  const { pageToken, igUserId, igUsername } = await resolveIgPublishContext(clientId);
+  const captionText = String(caption || '').slice(0, 2200);
+
+  let containerId;
+  try {
+    const created = await graphPost(`/${igUserId}/media`, pageToken, {
+      media_type: type,
+      upload_type: 'resumable',
+      caption: captionText,
+    });
+    containerId = String(created?.id || '').trim();
+  } catch (err) {
+    throw mapPublishPermissionError(err);
+  }
+  if (!containerId) throw new Error('Meta did not return a resumable media container id');
+
+  const versionMatch = String(META_GRAPH_BASE).match(/\/(v\d+\.\d+)\/?$/i);
+  const apiVersion = versionMatch?.[1] || 'v21.0';
+  try {
+    await axios.post(
+      `https://rupload.facebook.com/ig-api-upload/${apiVersion}/${containerId}`,
+      buffer,
+      {
+        timeout: 5 * 60 * 1000,
+        maxContentLength: 250 * 1024 * 1024,
+        maxBodyLength: 250 * 1024 * 1024,
+        headers: {
+          Authorization: `OAuth ${pageToken}`,
+          offset: '0',
+          file_size: String(buffer.length),
+          'Content-Type': contentType || 'application/octet-stream',
+        },
+      }
+    );
+  } catch (err) {
+    throw new Error(`Meta video upload failed: ${formatGraphError(err)}`);
+  }
+
+  const statusCode = await waitForIgContainer(containerId, pageToken, {
+    maxAttempts: 60,
+    intervalMs: 4000,
+  });
+  if (!['FINISHED', 'PUBLISHED'].includes(statusCode)) {
+    throw new Error(`Instagram video is still processing (${statusCode}). Try again shortly.`);
+  }
+
+  let publishedId;
+  try {
+    const published = await graphPost(`/${igUserId}/media_publish`, pageToken, {
+      creation_id: containerId,
+    });
+    publishedId = String(published?.id || '').trim();
+  } catch (err) {
+    throw new Error(formatGraphError(err));
+  }
+  if (!publishedId) throw new Error('Meta did not return a published video id');
+
+  return {
+    containerId,
+    mediaId: publishedId,
+    mediaType: type,
+    instagramUserId: igUserId,
+    instagramUsername: igUsername,
+    caption: captionText,
+    uploadMethod: 'meta_resumable',
+    containerStatus: statusCode,
+  };
+}
+
+/** @deprecated Prefer publishInstagramMedia — kept for callers. */
+async function publishInstagramImage(clientId, { imageUrl, caption = '' } = {}) {
+  return publishInstagramMedia(clientId, { mediaType: 'IMAGE', imageUrl, caption });
+}
+
+/**
+ * Send a single Conversions API test event to the client's Meta Pixel (Events Manager).
+ */
+async function sendPixelTestEvent(clientId, { eventName = 'Lead', testEventCode = '' } = {}) {
+  const client = await loadClientWithMeta(clientId);
+  const pixelId = client.metaAds?.pixelId ? String(client.metaAds.pixelId).trim() : '';
+  const accessToken = client.metaAds?.accessToken ? String(client.metaAds.accessToken).trim() : '';
+  if (!pixelId || !accessToken) {
+    throw new Error(
+      'Meta Pixel is not configured. Connect Facebook with an ad account that has a Pixel, or save Pixel ID in Account Management.'
+    );
+  }
+
+  const name = String(eventName || 'Lead').trim() || 'Lead';
+  const allowed = new Set(['PageView', 'Lead', 'ViewContent', 'AddToCart', 'Purchase']);
+  if (!allowed.has(name)) {
+    throw new Error(`Unsupported test event: ${name}`);
+  }
+
+  const code =
+    String(testEventCode || '').trim() ||
+    (client.metaAds?.testEventCode ? String(client.metaAds.testEventCode).trim() : '');
+
+  const eventTime = Math.floor(Date.now() / 1000);
+  const eventId = `kc_test_${clientId}_${eventTime}`;
+  const payload = {
+    data: [
+      {
+        event_name: name,
+        event_time: eventTime,
+        event_id: eventId,
+        action_source: 'website',
+        event_source_url: process.env.PUBLIC_FRONTEND_URL || 'https://khanatechnologies.co.za',
+        user_data: {
+          client_user_agent: 'KhanaConnect-TestEvent/1.0',
+          external_id: require('crypto').createHash('sha256').update(String(clientId)).digest('hex'),
+        },
+        custom_data:
+          name === 'Purchase' || name === 'AddToCart'
+            ? { currency: 'ZAR', value: 1 }
+            : undefined,
+      },
+    ],
+    access_token: accessToken,
+  };
+  if (code) payload.test_event_code = code;
+
+  // Strip undefined custom_data
+  if (payload.data[0].custom_data === undefined) {
+    delete payload.data[0].custom_data;
+  }
+
+  try {
+    const { data } = await axios.post(`${META_GRAPH_BASE}/${pixelId}/events`, payload, {
+      timeout: 25000,
+      headers: { 'Content-Type': 'application/json' },
+    });
+    return {
+      ok: true,
+      pixelId,
+      eventName: name,
+      eventId,
+      testEventCode: code || null,
+      eventsReceived: data?.events_received,
+      fbtraceId: data?.fbtrace_id,
+      messages: data?.messages,
+      hint: code
+        ? 'Open Events Manager → Test Events for this Pixel to see the event within about a minute.'
+        : 'Open Events Manager → Overview for this Pixel. For instant visibility, set a Test Event Code first.',
+    };
+  } catch (err) {
+    throw new Error(formatGraphError(err));
+  }
+}
+
 module.exports = {
   loadClientWithMeta,
   refreshTokenIfNeeded,
@@ -944,6 +1282,10 @@ module.exports = {
   updateSelection,
   listPagePosts,
   listInstagramMedia,
+  publishInstagramImage,
+  publishInstagramMedia,
+  publishInstagramVideoBuffer,
+  sendPixelTestEvent,
   getInsights,
   boostPost,
   buildTargetingSpec,

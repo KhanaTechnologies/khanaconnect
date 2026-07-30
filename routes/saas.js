@@ -27,6 +27,10 @@ const inboxUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 16 * 1024 * 1024 },
 });
+const instagramMediaUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 100 * 1024 * 1024 },
+});
 
 // Public Meta webhook challenge + signed event callbacks (reusable verifier middleware).
 router.get('/webhooks/whatsapp', handleMetaWebhookChallenge('WHATSAPP_WEBHOOK_VERIFY_TOKEN'));
@@ -165,6 +169,14 @@ router.post('/whatsapp/accounts', requireRoles('owner', 'manager', 'operator'), 
     accessToken: access_token,
   });
 
+  let dataset = null;
+  try {
+    const WhatsAppConversionsService = require('../services/saas/WhatsAppConversionsService');
+    dataset = await WhatsAppConversionsService.ensureDataset(req.tenant.clientId);
+  } catch (e) {
+    console.warn('[whatsapp] dataset link on account save:', e.message);
+  }
+
   res.status(201).json({
     ok: true,
     data: {
@@ -175,6 +187,7 @@ router.post('/whatsapp/accounts', requireRoles('owner', 'manager', 'operator'), 
       status: doc.status,
       has_token: true,
       webhook_subscribed: subscribe?.ok === true,
+      dataset_id: dataset?.datasetId || doc.dataset_id || '',
     },
   });
 }));
@@ -221,9 +234,57 @@ router.get('/whatsapp/account', requireRoles('owner', 'manager', 'operator', 'vi
       mode: doc.mode,
       status: doc.status,
       has_token: !!doc.access_token_encrypted,
+      dataset_id: doc.dataset_id || '',
+      dataset_linked_at: doc.dataset_linked_at || null,
+      last_conversion_at: doc.last_conversion_at || null,
+      last_conversion_event_name: doc.last_conversion_event_name || '',
       updated_at: doc.updated_at,
     },
   });
+}));
+
+/** WhatsApp Conversions API (Events Manager) — dataset + test events. */
+router.get('/whatsapp/conversions/status', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const WhatsAppConversionsService = require('../services/saas/WhatsAppConversionsService');
+  const data = await WhatsAppConversionsService.getConversionsStatus(req.tenant.clientId);
+  res.json({ ok: true, data });
+}));
+
+router.post('/whatsapp/conversions/dataset', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
+  const WhatsAppConversionsService = require('../services/saas/WhatsAppConversionsService');
+  try {
+    const data = await WhatsAppConversionsService.ensureDataset(req.tenant.clientId);
+    res.json({ ok: true, data });
+  } catch (err) {
+    const status = err.status || 500;
+    res.status(status).json({ ok: false, message: err.message, meta: err.meta || null });
+  }
+}));
+
+router.post('/whatsapp/conversions/test-event', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
+  const WhatsAppConversionsService = require('../services/saas/WhatsAppConversionsService');
+  try {
+    const data = await WhatsAppConversionsService.sendConversionEvent(req.tenant.clientId, {
+      eventName: req.body?.eventName || req.body?.event_name || 'Lead',
+      ctwaClid: req.body?.ctwaClid || req.body?.ctwa_clid || '',
+      contactWaId: req.body?.contactWaId || req.body?.contact_wa_id || '',
+      currency: req.body?.currency || 'ZAR',
+      value: req.body?.value,
+    });
+    res.json({ ok: true, data });
+  } catch (err) {
+    try {
+      const SaasWhatsAppAccount = require('../models/SaasWhatsAppAccount');
+      await SaasWhatsAppAccount.updateOne(
+        { client_id: req.tenant.clientId, status: 'active' },
+        { $set: { last_conversion_error: String(err.message || '').slice(0, 500) } }
+      );
+    } catch {
+      /* ignore */
+    }
+    const status = err.status || 500;
+    res.status(status).json({ ok: false, message: err.message, meta: err.meta || null });
+  }
 }));
 
 /** Readiness for client WhatsApp Cloud API notifications (toggle + credits + sender). */
@@ -888,6 +949,174 @@ router.get('/meta/instagram/media', requireRoles('owner', 'manager', 'operator',
   const limit = req.query.limit;
   const data = await MetaAdsService.listInstagramMedia(req.tenant.clientId, { limit });
   res.json({ ok: true, data });
+}));
+
+router.post('/meta/instagram/publish', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  try {
+    const body = req.body || {};
+    const mediaType = String(body.mediaType || body.media_type || 'IMAGE').toUpperCase();
+    const imageUrls = Array.isArray(body.imageUrls)
+      ? body.imageUrls
+      : Array.isArray(body.image_urls)
+        ? body.image_urls
+        : [];
+    const data = await MetaAdsService.publishInstagramMedia(req.tenant.clientId, {
+      mediaType,
+      imageUrl: body.imageUrl || body.image_url || '',
+      videoUrl: body.videoUrl || body.video_url || '',
+      imageUrls,
+      caption: body.caption || '',
+    });
+    res.json({ ok: true, data });
+  } catch (err) {
+    res.status(400).json({ ok: false, message: err.message });
+  }
+}));
+
+router.post(
+  '/meta/instagram/upload',
+  requireRoles('owner', 'manager'),
+  instagramMediaUpload.array('files', 10),
+  wrapRoute(async (req, res) => {
+    const files = Array.isArray(req.files) ? req.files : [];
+    if (!files.length) {
+      return res.status(400).json({ ok: false, message: 'At least one image or video file is required' });
+    }
+
+    const { uploadPublicAsset } = require('../helpers/publicAssetUpload');
+    const crypto = require('crypto');
+    const path = require('path');
+    const uploaded = [];
+
+    for (const file of files) {
+      const mime = String(file.mimetype || '').toLowerCase();
+      const isVideo = mime.startsWith('video/');
+      const isImage = mime.startsWith('image/');
+      if (!isVideo && !isImage) {
+        return res.status(400).json({
+          ok: false,
+          message: `Unsupported file type: ${file.originalname || mime || 'unknown'}`,
+        });
+      }
+      const ext =
+        path.extname(file.originalname || '') ||
+        (isVideo ? '.mp4' : '.jpg');
+      const safeExt = String(ext).replace(/[^.a-zA-Z0-9]/g, '').slice(0, 8) || (isVideo ? '.mp4' : '.jpg');
+      const repoPath = `public/uploads/instagram/${req.tenant.clientId}/${Date.now()}-${crypto
+        .randomBytes(4)
+        .toString('hex')}${safeExt.startsWith('.') ? safeExt : `.${safeExt}`}`;
+
+      const asset = await uploadPublicAsset(file.buffer, repoPath, req, {
+        resourceType: isVideo ? 'video' : 'image',
+      });
+      uploaded.push({
+        url: asset.url,
+        fileName: asset.fileName || file.originalname || 'upload',
+        mediaKind: isVideo ? 'video' : 'image',
+        storage: asset.storage,
+        mime,
+        size: file.size,
+      });
+    }
+
+    res.status(201).json({
+      ok: true,
+      data: {
+        files: uploaded,
+        imageUrls: uploaded.filter((f) => f.mediaKind === 'image').map((f) => f.url),
+        videoUrl: uploaded.find((f) => f.mediaKind === 'video')?.url || '',
+      },
+    });
+  })
+);
+
+/**
+ * Publish files selected in Khana:
+ * - images are persisted using the existing Cloudinary → GitHub fallback
+ * - videos/Reels are uploaded directly to Meta (resumable upload)
+ */
+router.post(
+  '/meta/instagram/publish-upload',
+  requireRoles('owner', 'manager'),
+  instagramMediaUpload.array('files', 10),
+  wrapRoute(async (req, res) => {
+    const files = Array.isArray(req.files) ? req.files : [];
+    if (!files.length) {
+      return res.status(400).json({ ok: false, message: 'At least one image or video is required' });
+    }
+
+    const mediaType = String(req.body?.mediaType || req.body?.media_type || 'IMAGE').toUpperCase();
+    const caption = String(req.body?.caption || '');
+
+    try {
+      if (mediaType === 'VIDEO' || mediaType === 'REELS') {
+        if (files.length !== 1 || !String(files[0].mimetype || '').startsWith('video/')) {
+          return res.status(400).json({
+            ok: false,
+            message: 'Select exactly one video for a feed video or Reel',
+          });
+        }
+        const data = await MetaAdsService.publishInstagramVideoBuffer(req.tenant.clientId, {
+          buffer: files[0].buffer,
+          mediaType,
+          caption,
+          contentType: files[0].mimetype,
+        });
+        return res.json({ ok: true, data });
+      }
+
+      const imageFiles = files.filter((file) =>
+        String(file.mimetype || '').toLowerCase().startsWith('image/')
+      );
+      if (imageFiles.length !== files.length) {
+        return res.status(400).json({ ok: false, message: 'Photo posts only accept image files' });
+      }
+      if (mediaType === 'CAROUSEL' && (imageFiles.length < 2 || imageFiles.length > 10)) {
+        return res.status(400).json({
+          ok: false,
+          message: 'Instagram carousels require 2–10 images',
+        });
+      }
+
+      const { uploadPublicAsset } = require('../helpers/publicAssetUpload');
+      const crypto = require('crypto');
+      const path = require('path');
+      const imageUrls = [];
+      for (const file of imageFiles) {
+        const ext = path.extname(file.originalname || '') || '.jpg';
+        const safeExt = String(ext).replace(/[^.a-zA-Z0-9]/g, '').slice(0, 8) || '.jpg';
+        const repoPath = `public/uploads/instagram/${req.tenant.clientId}/${Date.now()}-${crypto
+          .randomBytes(4)
+          .toString('hex')}${safeExt.startsWith('.') ? safeExt : `.${safeExt}`}`;
+        const asset = await uploadPublicAsset(file.buffer, repoPath, req, {
+          resourceType: 'image',
+        });
+        imageUrls.push(asset.url);
+      }
+
+      const data = await MetaAdsService.publishInstagramMedia(req.tenant.clientId, {
+        mediaType: imageUrls.length > 1 ? 'CAROUSEL' : 'IMAGE',
+        imageUrl: imageUrls[0],
+        imageUrls,
+        caption,
+      });
+      return res.json({ ok: true, data });
+    } catch (err) {
+      return res.status(400).json({ ok: false, message: err.message });
+    }
+  })
+);
+
+router.post('/meta/pixel/test-event', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
+  try {
+    const data = await MetaAdsService.sendPixelTestEvent(req.tenant.clientId, {
+      eventName: req.body?.eventName || req.body?.event_name || 'Lead',
+      testEventCode: req.body?.testEventCode || req.body?.test_event_code || '',
+    });
+    res.json({ ok: true, data });
+  } catch (err) {
+    res.status(400).json({ ok: false, message: err.message });
+  }
 }));
 
 router.get('/meta/insights', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
