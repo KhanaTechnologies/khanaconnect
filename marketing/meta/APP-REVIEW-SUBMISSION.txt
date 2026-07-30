@@ -196,12 +196,13 @@ whatsapp_business_manage_events
 ================================================================================
 How we use it:
 For a WABA administered by the client, KhanaConnect links a Conversions dataset
-(GET/POST /{WABA_ID}/dataset) and logs conversion events (Lead, Purchase, etc.) to
+(GET/POST /{WABA_ID}/dataset) and logs conversion events (LeadSubmitted, Purchase, etc.) to
 Meta via POST /{DATASET_ID}/events with action_source=business_messaging and
 messaging_channel=whatsapp, including ctwa_clid from Click-to-WhatsApp ad referrals.
 Used for ads targeting, optimization, and reporting in Events Manager.
+First inbound CTWA message also auto-sends LeadSubmitted when ctwa_clid is captured.
 
-Value: Clients optimize Click-to-WhatsApp ads using real Lead/Purchase outcomes.
+Value: Clients optimize Click-to-WhatsApp ads using real LeadSubmitted/Purchase outcomes.
 
 Necessity: Cannot send WhatsApp messaging conversion events to Meta without it.
 
@@ -209,7 +210,7 @@ Screencast:
 1. Account Management → WhatsApp → Advanced Cloud API (credentials saved).
 2. Link Events Manager dataset.
 3. Ensure a Click-to-WhatsApp conversation produced a ctwa_clid (or paste one).
-4. Send test Lead (and optionally Purchase) event.
+4. Send test LeadSubmitted (and optionally Purchase) event.
 5. Show success in Khana and/or Events Manager dataset activity.
 
 Agree: Yes — only for logging events on WABAs for Meta ads targeting, optimization,
@@ -226,7 +227,7 @@ SCREENCAST ORDER (efficient single recording or split clips)
 6) Catalog sync if available (business_management)
 7) Pixel: Send test Lead to Events Manager (Setup tab)
 8) WhatsApp: credentials, templates/inbox (whatsapp_business_management)
-9) WhatsApp: Link dataset + Send test Lead (whatsapp_business_manage_events)
+9) WhatsApp: Link dataset + Send test LeadSubmitted (whatsapp_business_manage_events)
 
 Prefer PAUSED campaigns in demos. Use H.264 MP4 under Meta’s size limit, or a
 public Drive/Dropbox link if the uploader fails.
@@ -241,3 +242,15 @@ MANUAL META DASHBOARD CHECKLIST (you)
 [ ] Privacy policy live at /privacy-policy (section 5A)
 [ ] Reconnect test user after permission changes
 [ ] Record screencasts against Live/test app as Meta requires
+
+================================================================================
+CLIENT META ONBOARDING (per paying tenant)
+================================================================================
+Each client must use THEIR OWN Meta assets — never Khana’s pixel or WABA.
+[ ] Client Connect Facebook (own Page + ad account + IG)
+[ ] Client creates own Events Manager dataset/Pixel in their Business Manager
+[ ] Save Pixel ID on Account Management (web CAPI) AND put that ID in their
+    storefront index.html fbq('init', '…') — do not reuse 1063249069528132
+[ ] Client saves own WABA System User token with whatsapp_business_manage_events
+[ ] Link WhatsApp dataset + confirm LeadSubmitted on first CTWA inbound
+[ ] Confirm WhatsApp send fails cleanly if credentials missing (no Khana fallback)

@@ -97,15 +97,9 @@ class WhatsAppService {
     });
     if (account) return { account, resolvedClientId: clientId };
 
-    if (clientId !== 'Khana') {
-      const khana = await SaasWhatsAppAccount.findOne({ client_id: 'Khana', status: 'active' }).sort({
-        updated_at: -1,
-      });
-      if (khana) return { account: khana, resolvedClientId: 'Khana' };
-    }
-
+    // Do not fall back to Khana's WABA — that mixes tenant traffic and credentials.
     throw httpError(
-      'No active WhatsApp Cloud API account for this client or Khana fallback. Save Cloud API credentials first.',
+      'No active WhatsApp Cloud API account for this client. Save this client’s own WABA credentials under Account Management.',
       400
     );
   }

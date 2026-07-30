@@ -204,12 +204,12 @@ const REATTRIBUTE_OUTBOUND_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 class WhatsAppInboxService {
   static async resolveClientIdForPhoneNumberId(phoneNumberId) {
     const id = String(phoneNumberId || '').trim();
-    if (!id) return 'Khana';
+    if (!id) return '';
     const account = await SaasWhatsAppAccount.findOne({ phone_number_id: id, status: 'active' })
       .sort({ updated_at: -1 })
       .select('client_id')
       .lean();
-    return account?.client_id || 'Khana';
+    return account?.client_id || '';
   }
 
   /**
@@ -217,7 +217,8 @@ class WhatsAppInboxService {
    * they messaged this contact within the last 7 days (real template/session reply).
    */
   static resolveThreadClientId(ownerClientId, recentOut) {
-    const owner = String(ownerClientId || '').trim() || 'Khana';
+    const owner = String(ownerClientId || '').trim();
+    if (!owner) return String(recentOut?.client_id || '').trim() || '';
     if (!recentOut?.client_id) return owner;
     const outClient = String(recentOut.client_id || '').trim();
     if (!outClient || outClient === owner) return owner;
@@ -286,6 +287,12 @@ class WhatsAppInboxService {
 
     const phoneNumberId = String(value.metadata?.phone_number_id || '').trim();
     const clientId = await this.resolveClientIdForPhoneNumberId(phoneNumberId);
+    if (!clientId) {
+      console.warn(
+        `[whatsapp inbox] No SaasWhatsAppAccount for phone_number_id=${phoneNumberId || '(missing)'} — skipping ingest`
+      );
+      return { ingested: 0, statusUpdates: 0, skipped: true, reason: 'unknown_phone_number_id' };
+    }
     let ingested = 0;
     let statusUpdates = 0;
 
@@ -991,16 +998,14 @@ class WhatsAppInboxService {
   }
 
   static async resolveSendAccount(clientId) {
-    let sendAccount = await SaasWhatsAppAccount.findOne({ client_id: clientId, status: 'active' }).sort({
+    const sendAccount = await SaasWhatsAppAccount.findOne({ client_id: clientId, status: 'active' }).sort({
       updated_at: -1,
     });
-    if (!sendAccount && clientId !== 'Khana') {
-      sendAccount = await SaasWhatsAppAccount.findOne({ client_id: 'Khana', status: 'active' }).sort({
-        updated_at: -1,
-      });
-    }
     if (!sendAccount) {
-      throw httpError('No active WhatsApp Cloud API account for this client.', 400);
+      throw httpError(
+        'No active WhatsApp Cloud API account for this client. Save this client’s own WABA credentials under Account Management.',
+        400
+      );
     }
     return sendAccount;
   }

@@ -311,7 +311,9 @@ async function disconnect(clientId) {
   client.metaAds.pageName = '';
   client.metaAds.instagramUserId = '';
   client.metaAds.instagramUsername = '';
+  client.metaAds.adAccountId = '';
   client.metaAds.adAccountName = '';
+  client.metaAds.pixelId = '';
   client.metaAds.connectionMethod = '';
   client.metaAds.tokenExpiresAt = null;
   client.metaAds.enabled = false;

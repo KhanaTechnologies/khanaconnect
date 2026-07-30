@@ -352,13 +352,24 @@ async function getConversionsStatus(clientId) {
 
 /**
  * Persist Click-to-WhatsApp click id from an inbound webhook message.
+ * On first capture for this contact, auto-send LeadSubmitted to Events Manager.
  */
 async function captureCtwaFromInbound({ clientId, contactWaId, rawMsg, timestamp }) {
   const ctwaClid = extractCtwaClidFromRaw(rawMsg);
   if (!ctwaClid || !clientId || !contactWaId) return null;
 
   const at = timestamp instanceof Date ? timestamp : new Date();
+  let isFirstCapture = false;
   try {
+    const existing = await SaasWhatsAppThread.findOne({
+      client_id: clientId,
+      contact_wa_id: contactWaId,
+      ctwa_clid: { $exists: true, $nin: [null, ''] },
+    })
+      .select('ctwa_clid')
+      .lean();
+    isFirstCapture = !existing?.ctwa_clid || existing.ctwa_clid !== ctwaClid;
+
     await SaasWhatsAppThread.findOneAndUpdate(
       { client_id: clientId, contact_wa_id: contactWaId },
       {
@@ -372,6 +383,27 @@ async function captureCtwaFromInbound({ clientId, contactWaId, rawMsg, timestamp
   } catch (e) {
     console.warn('[whatsapp capi] thread ctwa save failed:', e.message);
   }
+
+  if (isFirstCapture) {
+    try {
+      await sendConversionEvent(clientId, {
+        eventName: 'LeadSubmitted',
+        ctwaClid,
+        contactWaId,
+        eventTime: Math.floor(at.getTime() / 1000),
+      });
+    } catch (e) {
+      console.warn('[whatsapp capi] auto LeadSubmitted failed:', e.message);
+      try {
+        const account = await loadOwnAccount(clientId);
+        account.last_conversion_error = String(e.message || 'auto LeadSubmitted failed').slice(0, 500);
+        await account.save();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
   return ctwaClid;
 }
 
