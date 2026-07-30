@@ -1,11 +1,53 @@
+const crypto = require('crypto');
 const axios = require('axios');
 const { decrypt } = require('../../helpers/encryption');
+const Client = require('../../models/client');
 const SaasWhatsAppAccount = require('../../models/SaasWhatsAppAccount');
 const SaasWhatsAppThread = require('../../models/SaasWhatsAppThread');
 const SaasWhatsAppMessage = require('../../models/SaasWhatsAppMessage');
 
 const WA_API_BASE = process.env.WHATSAPP_GRAPH_BASE || 'https://graph.facebook.com/v25.0';
 const PARTNER_AGENT = process.env.WHATSAPP_CAPI_PARTNER_AGENT || 'KhanaConnect';
+
+// Meta CAPI for Business Messaging allowlist (not the same as website Pixel events).
+// Website uses "Lead"; messaging requires "LeadSubmitted". Sending "Lead" with
+// action_source=business_messaging is rejected (Messaging Event Invalid Event Type).
+const MESSAGING_EVENTS = new Set([
+  'LeadSubmitted',
+  'Purchase',
+  'AddToCart',
+  'InitiateCheckout',
+  'ViewContent',
+  'QualifiedLead',
+  'OrderCreated',
+  'OrderShipped',
+  'OrderDelivered',
+  'OrderCanceled',
+  'OrderReturned',
+  'CartAbandoned',
+]);
+
+function hashSha256(value) {
+  if (!value) return null;
+  return crypto.createHash('sha256').update(String(value).trim().toLowerCase()).digest('hex');
+}
+
+function normalizeMessagingEventName(raw) {
+  const name = String(raw || 'LeadSubmitted').trim() || 'LeadSubmitted';
+  // Alias website Pixel "Lead" → messaging "LeadSubmitted"
+  if (name === 'Lead') return 'LeadSubmitted';
+  return name;
+}
+
+async function resolvePageId(clientId) {
+  try {
+    const client = await Client.findOne({ clientID: clientId }).select('metaAds.pageId');
+    const pageId = client?.toObject({ getters: true })?.metaAds?.pageId;
+    return pageId ? String(pageId).trim() : '';
+  } catch {
+    return '';
+  }
+}
 
 function httpError(message, status = 400, extra = {}) {
   const err = new Error(message);
@@ -161,10 +203,12 @@ async function sendConversionEvent(clientId, input = {}) {
 
   const token = decryptToken(account);
   const wabaId = String(account.waba_id || '').trim();
-  const eventName = String(input.eventName || 'Lead').trim() || 'Lead';
-  const allowed = new Set(['Lead', 'Purchase', 'AddToCart', 'InitiateCheckout', 'CompleteRegistration']);
-  if (!allowed.has(eventName)) {
-    throw httpError(`Unsupported event_name: ${eventName}`, 400);
+  const eventName = normalizeMessagingEventName(input.eventName);
+  if (!MESSAGING_EVENTS.has(eventName)) {
+    throw httpError(
+      `Unsupported messaging event_name: ${eventName}. Use LeadSubmitted (not Lead), Purchase, AddToCart, InitiateCheckout, or ViewContent.`,
+      400
+    );
   }
 
   let ctwaClid = String(input.ctwaClid || '').trim();
@@ -185,17 +229,45 @@ async function sendConversionEvent(clientId, input = {}) {
   }
 
   const eventTime = Number(input.eventTime) || Math.floor(Date.now() / 1000);
+  const eventId =
+    String(input.eventId || '').trim() ||
+    `wa_${eventName}_${ctwaClid.slice(0, 24)}_${eventTime}`;
+
+  const pageId = String(input.pageId || '').trim() || (await resolvePageId(clientId));
+  const messagingChannel = String(input.messagingChannel || 'whatsapp').trim() || 'whatsapp';
+
+  const userData = {
+    whatsapp_business_account_id: wabaId,
+    ctwa_clid: ctwaClid,
+  };
+  if (pageId) userData.page_id = pageId;
+
+  // Optional match keys declared in Events Manager setup (hashed per Meta CAPI rules).
+  const email = String(input.email || '').trim();
+  const phone = String(input.phone || contactWaId || '').trim();
+  if (email) {
+    const hashed = hashSha256(email);
+    if (hashed) userData.em = [hashed];
+  }
+  if (phone) {
+    // WhatsApp contact ids are usually digits-only MSISDNs — strip non-digits before hash.
+    const digits = phone.replace(/\D/g, '');
+    const hashed = hashSha256(digits || phone);
+    if (hashed) userData.ph = [hashed];
+  }
+  if (input.pageScopedUserId) {
+    userData.page_scoped_user_id = String(input.pageScopedUserId).trim();
+  }
+
   const payload = {
     data: [
       {
         event_name: eventName,
         event_time: eventTime,
+        event_id: eventId,
         action_source: 'business_messaging',
-        messaging_channel: 'whatsapp',
-        user_data: {
-          whatsapp_business_account_id: wabaId,
-          ctwa_clid: ctwaClid,
-        },
+        messaging_channel: messagingChannel,
+        user_data: userData,
       },
     ],
     partner_agent: PARTNER_AGENT,
@@ -232,6 +304,8 @@ async function sendConversionEvent(clientId, input = {}) {
     datasetId,
     wabaId,
     eventName,
+    eventId,
+    pageId: pageId || undefined,
     ctwaClid: `${ctwaClid.slice(0, 12)}…`,
     contactWaId: contactWaId || undefined,
     eventsReceived: response?.events_received,
