@@ -313,7 +313,8 @@ async function disconnect(clientId) {
   client.metaAds.instagramUsername = '';
   client.metaAds.adAccountId = '';
   client.metaAds.adAccountName = '';
-  client.metaAds.pixelId = '';
+  // Keep pixelId across Disconnect → Connect. OAuth often cannot re-seed it when the
+  // ad account has no attached Pixel (business datasets live on BM, not act_*).
   client.metaAds.connectionMethod = '';
   client.metaAds.tokenExpiresAt = null;
   client.metaAds.enabled = false;
