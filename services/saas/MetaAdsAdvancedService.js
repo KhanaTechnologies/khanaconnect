@@ -274,6 +274,8 @@ async function listMetaAdAccountCampaigns(clientId) {
         'PREAPPROVED',
         'IN_PROCESS',
         'WITH_ISSUES',
+        'CAMPAIGN_PAUSED',
+        'ARCHIVED',
       ]),
     });
     const rows = Array.isArray(res?.data) ? res.data : [];
@@ -380,14 +382,16 @@ async function updateCampaignStatus(clientId, { campaignId, status }) {
 
   try {
     if (campaignMetaId) {
-      if (next === 'deleted' || next === 'archived') {
-        // Archive/delete at campaign level; Meta removes it from active campaign lists.
-        await graphPost(`/${campaignMetaId}`, token, { status: metaStatus });
+      if (next === 'deleted') {
+        await graphPost(`/${campaignMetaId}`, token, { status: 'DELETED' });
+      } else if (next === 'archived') {
+        await graphPost(`/${campaignMetaId}`, token, { status: 'ARCHIVED' });
       } else {
+        // Restore/pause/activate: update campaign (and child objects when we have them).
         const targets = [sub.meta_ad_id, sub.meta_adset_id, sub.meta_campaign_id]
           .map((id) => String(id || '').replace(/^meta_/, ''))
           .filter(Boolean);
-        const unique = [...new Set(targets)];
+        const unique = [...new Set(targets.length ? targets : [campaignMetaId])];
         for (const id of unique) {
           await graphPost(`/${id}`, token, { status: metaStatus });
         }
@@ -398,12 +402,14 @@ async function updateCampaignStatus(clientId, { campaignId, status }) {
   }
 
   if (source === 'local') {
+    // Soft-delete (archive) keeps the subdoc so admins can Restore → paused.
+    // Hard delete (DELETED) removes the local record.
     if (next === 'deleted') {
       client.metaAds.campaigns = (client.metaAds.campaigns || []).filter(
         (c) => String(c._id) !== String(sub._id)
       );
     } else {
-      sub.status = next === 'archived' ? 'archived' : next;
+      sub.status = next;
     }
     client.metaAds.lastSync = new Date();
     client.markModified('metaAds');
