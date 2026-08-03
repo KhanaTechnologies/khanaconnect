@@ -31,6 +31,9 @@ async function graphPost(path, accessToken, params = {}) {
 
 function formatGraphError(err) {
   const fb = err?.response?.data?.error;
+  if (fb?.error_user_msg) {
+    return fb.error_user_title ? `${fb.error_user_title}: ${fb.error_user_msg}` : fb.error_user_msg;
+  }
   if (fb?.message) {
     return fb.message;
   }
@@ -756,6 +759,13 @@ async function boostPost(
   if (dailyBudgetCents < 100) {
     throw new Error('Minimum daily budget is 1.00 in your ad account currency');
   }
+  // Meta enforces a higher per-account floor (often ~R15–R20 for ZAR). Prefer at least 20
+  // in major currencies so App Review demos do not fail after campaign create.
+  if (dailyBudgetNum < 20) {
+    throw new Error(
+      'Daily budget is below Meta’s typical account minimum. Try at least 20 in your ad account currency (e.g. R20 ZAR).'
+    );
+  }
 
   const durationDays = Math.min(Math.max(Number(days) || 7, 1), 30);
   const adStatus = String(status).toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'PAUSED';
@@ -804,6 +814,8 @@ async function boostPost(
       objective: 'OUTCOME_ENGAGEMENT',
       status: adStatus,
       special_ad_categories: JSON.stringify([]),
+      // Required when budget is on ad sets (ABO), not campaign budget (CBO). Meta error 4834011.
+      is_adset_budget_sharing_enabled: false,
     });
     campaignId = campaign.id;
 
@@ -819,6 +831,8 @@ async function boostPost(
       bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
       targeting: JSON.stringify(targeting),
       promoted_object: JSON.stringify({ page_id: pageId }),
+      // Required with OUTCOME_ENGAGEMENT + POST_ENGAGEMENT for organic post boosts.
+      destination_type: 'ON_POST',
       start_time: startTime,
       end_time: endTime,
       status: adStatus,

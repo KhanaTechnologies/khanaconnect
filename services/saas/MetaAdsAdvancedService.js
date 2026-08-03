@@ -17,6 +17,9 @@ const META_GRAPH_BASE = process.env.META_GRAPH_BASE || 'https://graph.facebook.c
 
 function formatGraphError(err) {
   const fb = err?.response?.data?.error;
+  if (fb?.error_user_msg) {
+    return fb.error_user_title ? `${fb.error_user_title}: ${fb.error_user_msg}` : fb.error_user_msg;
+  }
   if (fb?.message) return fb.message;
   return err?.message || 'Meta API request failed';
 }
@@ -654,6 +657,7 @@ async function createClickToWhatsAppCampaign(
       objective: 'OUTCOME_ENGAGEMENT',
       status: adStatus,
       special_ad_categories: JSON.stringify([]),
+      is_adset_budget_sharing_enabled: false,
     });
     campaignId = campaign.id;
 
@@ -714,6 +718,7 @@ async function createClickToWhatsAppCampaign(
         objective: 'OUTCOME_TRAFFIC',
         status: adStatus,
         special_ad_categories: JSON.stringify([]),
+        is_adset_budget_sharing_enabled: false,
       });
       campaignId = campaign.id;
       const startTime = Math.floor(Date.now() / 1000);
@@ -881,6 +886,7 @@ async function createLeadAd(
       objective: 'OUTCOME_LEADS',
       status: adStatus,
       special_ad_categories: JSON.stringify([]),
+      is_adset_budget_sharing_enabled: false,
     });
     campaignId = campaign.id;
 
@@ -1110,6 +1116,7 @@ async function createCatalogSalesCampaign(
       objective: 'OUTCOME_SALES',
       status: adStatus,
       special_ad_categories: JSON.stringify([]),
+      is_adset_budget_sharing_enabled: false,
     });
     campaignId = campaign.id;
 
