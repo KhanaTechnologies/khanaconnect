@@ -360,28 +360,51 @@ async function updateCampaignStatus(clientId, { campaignId, status }) {
   const { sub, source } = await findCampaignSubdoc(client, campaignId);
 
   const next = String(status || '').toLowerCase();
-  if (!['active', 'paused', 'archived'].includes(next)) {
-    throw new Error('status must be active, paused, or archived');
+  if (!['active', 'paused', 'archived', 'deleted'].includes(next)) {
+    throw new Error('status must be active, paused, archived, or deleted');
   }
 
   const metaStatus =
-    next === 'active' ? 'ACTIVE' : next === 'archived' ? 'ARCHIVED' : 'PAUSED';
+    next === 'active'
+      ? 'ACTIVE'
+      : next === 'archived'
+        ? 'ARCHIVED'
+        : next === 'deleted'
+          ? 'DELETED'
+          : 'PAUSED';
 
-  const targets = [sub.meta_ad_id, sub.meta_adset_id, sub.meta_campaign_id].filter(Boolean);
-  if (!targets.length) throw new Error('Campaign has no Meta IDs to update');
+  const campaignMetaId = String(sub.meta_campaign_id || '').replace(/^meta_/, '');
+  if (!campaignMetaId && next !== 'deleted') {
+    throw new Error('Campaign has no Meta campaign ID to update');
+  }
 
   try {
-    // Prefer updating the campaign; Meta cascades to children for PAUSED/ACTIVE in many cases.
-    // Also update ad + adset for reliability on boosts.
-    for (const id of targets) {
-      await graphPost(`/${id}`, token, { status: metaStatus });
+    if (campaignMetaId) {
+      if (next === 'deleted' || next === 'archived') {
+        // Archive/delete at campaign level; Meta removes it from active campaign lists.
+        await graphPost(`/${campaignMetaId}`, token, { status: metaStatus });
+      } else {
+        const targets = [sub.meta_ad_id, sub.meta_adset_id, sub.meta_campaign_id]
+          .map((id) => String(id || '').replace(/^meta_/, ''))
+          .filter(Boolean);
+        const unique = [...new Set(targets)];
+        for (const id of unique) {
+          await graphPost(`/${id}`, token, { status: metaStatus });
+        }
+      }
     }
   } catch (err) {
     throw new Error(formatGraphError(err));
   }
 
   if (source === 'local') {
-    sub.status = next;
+    if (next === 'deleted') {
+      client.metaAds.campaigns = (client.metaAds.campaigns || []).filter(
+        (c) => String(c._id) !== String(sub._id)
+      );
+    } else {
+      sub.status = next === 'archived' ? 'archived' : next;
+    }
     client.metaAds.lastSync = new Date();
     client.markModified('metaAds');
     await client.save();
@@ -390,7 +413,7 @@ async function updateCampaignStatus(clientId, { campaignId, status }) {
   return {
     id: String(sub._id),
     status: next,
-    metaCampaignId: sub.meta_campaign_id,
+    metaCampaignId: campaignMetaId,
   };
 }
 
