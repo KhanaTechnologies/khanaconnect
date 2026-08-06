@@ -24,6 +24,49 @@ function formatGraphError(err) {
   return err?.message || 'Meta API request failed';
 }
 
+function httpError(message, status = 400) {
+  const err = new Error(String(message || 'Request failed'));
+  err.status = status;
+  return err;
+}
+
+/** Client-visible Meta/Graph failures (avoid opaque wrapRoute 500). */
+function throwMeta(err, context = 'Meta API request failed') {
+  const msg = formatGraphError(err);
+  console.error(`[meta ads] ${context}:`, msg, err?.response?.data || '');
+  throw httpError(msg || context, 400);
+}
+
+/**
+ * Catalogs must live under a Business Manager. Personal ad accounts often have no
+ * business edge — fall back to /me/businesses from the connected Facebook Login.
+ */
+async function resolveBusinessIdForCatalog(client, token) {
+  if (client.metaAds?.metaBusinessId) {
+    return String(client.metaAds.metaBusinessId);
+  }
+
+  const adAccountId = normalizeAdAccountId(client.metaAds?.adAccountId);
+  if (adAccountId) {
+    try {
+      const acc = await graphGet(`/act_${adAccountId}`, token, { fields: 'business' });
+      if (acc?.business?.id) return String(acc.business.id);
+    } catch (err) {
+      console.warn('[meta ads] ad account business lookup failed:', formatGraphError(err));
+    }
+  }
+
+  try {
+    const biz = await graphGet('/me/businesses', token, { fields: 'id,name' });
+    const first = (biz?.data || [])[0];
+    if (first?.id) return String(first.id);
+  } catch (err) {
+    console.warn('[meta ads] /me/businesses failed:', formatGraphError(err));
+  }
+
+  return '';
+}
+
 async function graphGet(path, accessToken, params = {}) {
   const { data } = await axios.get(`${META_GRAPH_BASE}${path}`, {
     params: { access_token: accessToken, ...params },
@@ -992,35 +1035,34 @@ async function ensureProductCatalog(clientId, { name } = {}) {
     };
   }
 
-  const businessId = client.metaAds.metaBusinessId;
+  const businessId = await resolveBusinessIdForCatalog(client, token);
+  if (!businessId) {
+    throw httpError(
+      'No Meta Business Manager found for this login. Open Meta Business Settings, ensure your user admins a Business that can own catalogs (e.g. Khana Technologies 1), add/claim your ad account there if needed, then reconnect Facebook in KhanaConnect.',
+      400
+    );
+  }
+
+  if (String(client.metaAds.metaBusinessId || '') !== businessId) {
+    client.metaAds.metaBusinessId = businessId;
+    client.markModified('metaAds');
+  }
+
   const catalogName =
     String(name || '').trim() || `${client.companyName || 'Khana'} Catalog`;
 
   let catalogId;
   try {
-    if (businessId) {
-      const created = await graphPost(`/${businessId}/owned_product_catalogs`, token, {
-        name: catalogName,
-      });
-      catalogId = created.id;
-    } else {
-      // Fallback: some tokens can create via ad account business
-      const adAccountId = normalizeAdAccountId(client.metaAds.adAccountId);
-      const acc = await graphGet(`/act_${adAccountId}`, token, { fields: 'business' });
-      const bid = acc?.business?.id;
-      if (!bid) {
-        throw new Error(
-          'No Meta Business ID on this ad account. Open Business Settings via the setup link, then reconnect Facebook.'
-        );
-      }
-      client.metaAds.metaBusinessId = String(bid);
-      const created = await graphPost(`/${bid}/owned_product_catalogs`, token, {
-        name: catalogName,
-      });
-      catalogId = created.id;
-    }
+    const created = await graphPost(`/${businessId}/owned_product_catalogs`, token, {
+      name: catalogName,
+    });
+    catalogId = created.id;
   } catch (err) {
-    throw new Error(formatGraphError(err));
+    throwMeta(err, 'Create product catalog failed');
+  }
+
+  if (!catalogId) {
+    throw httpError('Meta did not return a catalog id when creating the product catalog', 400);
   }
 
   client.metaAds.catalogId = String(catalogId);
@@ -1035,40 +1077,55 @@ async function ensureProductCatalog(clientId, { name } = {}) {
 async function syncProductCatalog(clientId, { limit = 200 } = {}) {
   const client = await loadClientWithMeta(clientId);
   const token = String(client.metaAds.accessToken);
-  const { catalogId } = await ensureProductCatalog(clientId);
+  let catalogId;
+  try {
+    ({ catalogId } = await ensureProductCatalog(clientId));
+  } catch (err) {
+    if (err?.status) throw err;
+    throwMeta(err, 'Ensure product catalog failed');
+  }
 
   const products = await Product.find(publishedProductFilter({ clientID: clientId }))
     .select('productName description price images sku slug countInStock brand')
     .limit(Math.min(Math.max(Number(limit) || 200, 1), 500));
 
   const baseUrl = String(client.return_url || '').replace(/\/$/, '');
-  const requests = products.map((p) => {
-    const retailerId = String(p.sku || p._id);
-    const image = Array.isArray(p.images) && p.images[0] ? String(p.images[0]) : '';
-    const link = baseUrl
-      ? `${baseUrl}/products/${p.slug || p._id}`
-      : `https://www.facebook.com/${retailerId}`;
-    const availability = Number(p.countInStock) > 0 ? 'in stock' : 'out of stock';
-    const price = `${Number(p.price || 0).toFixed(2)} ZAR`;
+  const requests = products
+    .map((p) => {
+      const retailerId = String(p.sku || p._id);
+      const image = Array.isArray(p.images) && p.images[0] ? String(p.images[0]).trim() : '';
+      const link = baseUrl
+        ? `${baseUrl}/products/${p.slug || p._id}`
+        : `https://www.facebook.com/${retailerId}`;
+      const availability = Number(p.countInStock) > 0 ? 'in stock' : 'out of stock';
+      const price = `${Number(p.price || 0).toFixed(2)} ZAR`;
+      const imageLink = /^https?:\/\//i.test(image) ? image : '';
 
-    return {
-      method: 'UPDATE',
-      retailer_id: retailerId,
-      data: {
-        name: String(p.productName || 'Product').slice(0, 200),
-        description: String(p.description || p.productName || '').slice(0, 5000),
-        availability,
-        condition: 'new',
-        price,
-        link,
-        image_link: image || link,
-        brand: String(p.brand || client.companyName || 'Brand').slice(0, 100),
-      },
-    };
-  });
+      return {
+        method: 'UPDATE',
+        retailer_id: retailerId,
+        data: {
+          name: String(p.productName || 'Product').slice(0, 200),
+          description: String(p.description || p.productName || '').slice(0, 5000),
+          availability,
+          condition: 'new',
+          price,
+          link: /^https?:\/\//i.test(link) ? link : `https://www.facebook.com/${retailerId}`,
+          image_link: imageLink,
+          brand: String(p.brand || client.companyName || 'Brand').slice(0, 100),
+        },
+      };
+    })
+    .filter((row) => row.data.image_link);
 
+  if (!products.length) {
+    throw httpError('No published products to sync. Publish at least one product with an image first.', 400);
+  }
   if (!requests.length) {
-    throw new Error('No published products to sync');
+    throw httpError(
+      'No published products have public https image URLs. Add product images, then sync again.',
+      400
+    );
   }
 
   // Meta allows batches; keep under 500 items
@@ -1079,17 +1136,21 @@ async function syncProductCatalog(clientId, { limit = 200 } = {}) {
       allow_upsert: true,
     });
   } catch (err) {
-    throw new Error(formatGraphError(err));
+    throwMeta(err, 'Catalog items_batch failed');
   }
 
-  client.metaAds.catalogSyncedAt = new Date();
-  client.markModified('metaAds');
-  await client.save();
+  // Reload client in case ensureProductCatalog already saved metaBusinessId/catalogId
+  const fresh = await loadClientWithMeta(clientId);
+  fresh.metaAds.catalogSyncedAt = new Date();
+  if (!fresh.metaAds.catalogId) fresh.metaAds.catalogId = String(catalogId);
+  fresh.markModified('metaAds');
+  await fresh.save();
 
   return {
     catalogId,
     synced: requests.length,
-    catalogSyncedAt: client.metaAds.catalogSyncedAt,
+    skippedWithoutImage: Math.max(0, products.length - requests.length),
+    catalogSyncedAt: fresh.metaAds.catalogSyncedAt,
   };
 }
 
