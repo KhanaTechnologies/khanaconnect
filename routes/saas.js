@@ -295,7 +295,7 @@ router.post('/whatsapp/conversions/test-event', requireRoles('owner', 'manager',
   const WhatsAppConversionsService = require('../services/saas/WhatsAppConversionsService');
   try {
     const data = await WhatsAppConversionsService.sendConversionEvent(req.tenant.clientId, {
-      eventName: req.body?.eventName || req.body?.event_name || 'Lead',
+      eventName: req.body?.eventName || req.body?.event_name || 'LeadSubmitted',
       ctwaClid: req.body?.ctwaClid || req.body?.ctwa_clid || '',
       contactWaId: req.body?.contactWaId || req.body?.contact_wa_id || '',
       currency: req.body?.currency || 'ZAR',
@@ -1140,7 +1140,7 @@ router.post(
 router.post('/meta/pixel/test-event', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
   try {
     const data = await MetaAdsService.sendPixelTestEvent(req.tenant.clientId, {
-      eventName: req.body?.eventName || req.body?.event_name || 'Lead',
+      eventName: req.body?.eventName || req.body?.event_name || 'LeadSubmitted',
       testEventCode: req.body?.testEventCode || req.body?.test_event_code || '',
     });
     res.json({ ok: true, data });
