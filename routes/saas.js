@@ -253,7 +253,21 @@ router.get('/whatsapp/conversions/status', requireRoles('owner', 'manager', 'ope
 router.post('/whatsapp/conversions/dataset', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
   const WhatsAppConversionsService = require('../services/saas/WhatsAppConversionsService');
   try {
-    const data = await WhatsAppConversionsService.ensureDataset(req.tenant.clientId);
+    const datasetId = String(req.body?.dataset_id || req.body?.datasetId || '').trim();
+    const allClients = req.body?.all_clients === true || req.body?.allClients === true;
+    let data;
+    if (datasetId && allClients) {
+      if (String(req.tenant.clientId) !== 'Khana') {
+        const err = new Error('Only the Khana workspace can update datasets for all clients');
+        err.status = 403;
+        throw err;
+      }
+      data = await WhatsAppConversionsService.setDatasetIdForAllAccounts(datasetId);
+    } else if (datasetId) {
+      data = await WhatsAppConversionsService.setDatasetId(req.tenant.clientId, datasetId);
+    } else {
+      data = await WhatsAppConversionsService.ensureDataset(req.tenant.clientId);
+    }
     res.json({ ok: true, data });
   } catch (err) {
     const status = err.status || 500;

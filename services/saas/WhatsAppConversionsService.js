@@ -153,6 +153,53 @@ async function ensureDataset(clientId) {
   };
 }
 
+/**
+ * Manually set the Events Manager dataset / pixel id used for messaging conversions.
+ * Prefer this when the WABA auto-linked dataset is inactive and another dataset is active.
+ */
+async function setDatasetId(clientId, datasetIdInput) {
+  const datasetId = String(datasetIdInput || '').trim();
+  if (!/^\d{5,30}$/.test(datasetId)) {
+    throw httpError('dataset_id must be a numeric Meta dataset or pixel id', 400);
+  }
+  const account = await loadOwnAccount(clientId);
+  account.dataset_id = datasetId;
+  account.dataset_linked_at = new Date();
+  account.last_conversion_error = '';
+  await account.save();
+  return {
+    wabaId: String(account.waba_id || ''),
+    datasetId,
+    linkedAt: account.dataset_linked_at,
+    clientId: String(account.client_id),
+  };
+}
+
+/** Set the same dataset id on every WhatsApp Cloud API account (all tenants). */
+async function setDatasetIdForAllAccounts(datasetIdInput) {
+  const datasetId = String(datasetIdInput || '').trim();
+  if (!/^\d{5,30}$/.test(datasetId)) {
+    throw httpError('dataset_id must be a numeric Meta dataset or pixel id', 400);
+  }
+  const at = new Date();
+  const result = await SaasWhatsAppAccount.updateMany(
+    {},
+    {
+      $set: {
+        dataset_id: datasetId,
+        dataset_linked_at: at,
+        last_conversion_error: '',
+      },
+    }
+  );
+  return {
+    datasetId,
+    linkedAt: at,
+    matched: result.matchedCount ?? result.n ?? 0,
+    modified: result.modifiedCount ?? result.nModified ?? 0,
+  };
+}
+
 async function findLatestCtwaClid(clientId) {
   const thread = await SaasWhatsAppThread.findOne({
     client_id: clientId,
@@ -409,6 +456,8 @@ async function captureCtwaFromInbound({ clientId, contactWaId, rawMsg, timestamp
 
 module.exports = {
   ensureDataset,
+  setDatasetId,
+  setDatasetIdForAllAccounts,
   sendConversionEvent,
   getConversionsStatus,
   captureCtwaFromInbound,
