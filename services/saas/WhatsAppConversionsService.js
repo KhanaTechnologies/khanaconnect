@@ -58,16 +58,20 @@ function httpError(message, status = 400, extra = {}) {
 
 function formatMetaError(err) {
   const data = err?.response?.data;
+  const fb = data?.error;
   const metaMsg =
-    data?.error?.message ||
-    data?.error?.error_user_msg ||
+    fb?.error_user_msg ||
+    fb?.message ||
     data?.message ||
     err?.message ||
     'WhatsApp Conversions API request failed';
-  const code = data?.error?.code;
+  const code = fb?.code;
+  const sub = fb?.error_subcode;
+  const bits = [metaMsg];
+  if (code != null) bits.push(`(#${code}${sub != null ? `/${sub}` : ''})`);
   const status = err?.response?.status && err.response.status >= 400 ? err.response.status : 502;
-  return httpError(code != null ? `${metaMsg} (#${code})` : metaMsg, status, {
-    meta: data?.error || data || null,
+  return httpError(bits.join(' '), status >= 500 ? 502 : 400, {
+    meta: fb || data || null,
   });
 }
 
@@ -286,6 +290,9 @@ async function findLatestCtwaClid(clientId) {
 
 /**
  * Send a conversion event to THIS client's WABA dataset (Events Manager).
+ * WhatsApp payload must match Meta's business_messaging sample:
+ * user_data = { whatsapp_business_account_id, ctwa_clid } only by default.
+ * Do not send page_id (Messenger branch) on messaging_channel=whatsapp.
  */
 async function sendConversionEvent(clientId, input = {}) {
   let account = await loadOwnAccount(clientId);
@@ -328,30 +335,25 @@ async function sendConversionEvent(clientId, input = {}) {
     String(input.eventId || '').trim() ||
     `wa_${String(clientId).slice(0, 24)}_${eventName}_${ctwaClid.slice(0, 16)}_${eventTime}`;
 
-  const pageId = String(input.pageId || '').trim() || (await resolvePageId(clientId));
   const messagingChannel = String(input.messagingChannel || 'whatsapp').trim() || 'whatsapp';
 
+  // Meta WhatsApp sample: only WABA id + ctwa_clid. Extra user_data keys often cause (#100).
   const userData = {
     whatsapp_business_account_id: wabaId,
     ctwa_clid: ctwaClid,
   };
-  if (pageId) userData.page_id = pageId;
 
-  // Optional match keys declared in Events Manager setup (hashed per Meta CAPI rules).
+  // Optional CRM match keys — only when explicitly provided (never auto from WA contact id).
   const email = String(input.email || '').trim();
-  const phone = String(input.phone || contactWaId || '').trim();
+  const phone = String(input.phone || '').trim();
   if (email) {
     const hashed = hashSha256(email);
     if (hashed) userData.em = [hashed];
   }
   if (phone) {
-    // WhatsApp contact ids are usually digits-only MSISDNs — strip non-digits before hash.
     const digits = phone.replace(/\D/g, '');
     const hashed = hashSha256(digits || phone);
     if (hashed) userData.ph = [hashed];
-  }
-  if (input.pageScopedUserId) {
-    userData.page_scoped_user_id = String(input.pageScopedUserId).trim();
   }
 
   const payload = {
@@ -386,10 +388,20 @@ async function sendConversionEvent(clientId, input = {}) {
     });
     response = data;
   } catch (err) {
+    const fb = err?.response?.data?.error;
+    console.error('[whatsapp capi] events failed:', {
+      datasetId,
+      wabaId,
+      eventName,
+      code: fb?.code,
+      subcode: fb?.error_subcode,
+      message: fb?.message,
+      userMsg: fb?.error_user_msg,
+      blame: fb?.error_data || fb?.fbtrace_id,
+    });
     throw formatMetaError(err);
   }
 
-  // Reload in case ensureDataset updated fields on a different document instance
   const fresh = await loadOwnAccount(clientId);
   fresh.last_conversion_event_name = eventName;
   fresh.last_conversion_at = new Date();
@@ -403,7 +415,6 @@ async function sendConversionEvent(clientId, input = {}) {
     clientId: String(clientId),
     eventName,
     eventId,
-    pageId: pageId || undefined,
     ctwaClid: `${ctwaClid.slice(0, 12)}…`,
     contactWaId: contactWaId || undefined,
     eventsReceived: response?.events_received,
