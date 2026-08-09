@@ -99,39 +99,51 @@ function decryptToken(account) {
 }
 
 /**
- * Create or fetch the Conversions dataset linked to this WABA.
+ * Website Pixel IDs must never be used as the default messaging dataset for tenants.
+ * Override with KHANA_WEBSITE_PIXEL_ID if the site pixel changes.
+ */
+const FORBIDDEN_SHARED_DATASET_IDS = new Set(
+  String(process.env.KHANA_WEBSITE_PIXEL_ID || '1063249069528132')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+);
+
+function isForbiddenSharedDataset(datasetId) {
+  return FORBIDDEN_SHARED_DATASET_IDS.has(String(datasetId || '').trim());
+}
+
+/**
+ * Resolve the Conversions dataset that Meta attaches to a WABA.
+ * GET existing → POST create if missing.
  * Requires whatsapp_business_management + whatsapp_business_manage_events.
  */
-async function ensureDataset(clientId) {
-  const account = await loadOwnAccount(clientId);
-  const token = decryptToken(account);
-  const wabaId = String(account.waba_id || '').trim();
-  if (!wabaId) throw httpError('WABA ID is missing on the WhatsApp account', 400);
+async function fetchOrCreateWabaDatasetId(wabaId, token) {
+  let datasetId = '';
 
-  let datasetId = String(account.dataset_id || '').trim();
-
-  if (!datasetId) {
-    try {
-      const getRes = await axios.get(`${WA_API_BASE}/${wabaId}/dataset`, {
-        params: { access_token: token },
-        timeout: 25000,
-      });
-      datasetId = String(getRes.data?.id || getRes.data?.data?.[0]?.id || '').trim();
-    } catch (err) {
-      // Dataset may not exist yet — create below
-      if (err?.response?.status && err.response.status !== 404) {
-        console.warn('[whatsapp capi] GET dataset:', err?.response?.data?.error?.message || err.message);
+  try {
+    const getRes = await axios.get(`${WA_API_BASE}/${wabaId}/dataset`, {
+      params: { access_token: token },
+      timeout: 25000,
+    });
+    datasetId = String(getRes.data?.id || getRes.data?.data?.[0]?.id || '').trim();
+  } catch (err) {
+    const status = err?.response?.status;
+    if (status && status !== 404) {
+      console.warn('[whatsapp capi] GET /{waba}/dataset:', err?.response?.data?.error?.message || err.message);
+      // Permission / auth errors should surface — do not pretend create will work.
+      if (status === 401 || status === 403 || err?.response?.data?.error?.code === 190) {
+        throw formatMetaError(err);
       }
     }
   }
 
   if (!datasetId) {
     try {
-      const postRes = await axios.post(
-        `${WA_API_BASE}/${wabaId}/dataset`,
-        null,
-        { params: { access_token: token }, timeout: 25000 }
-      );
+      const postRes = await axios.post(`${WA_API_BASE}/${wabaId}/dataset`, null, {
+        params: { access_token: token },
+        timeout: 25000,
+      });
       datasetId = String(postRes.data?.id || '').trim();
     } catch (err) {
       throw formatMetaError(err);
@@ -141,62 +153,97 @@ async function ensureDataset(clientId) {
   if (!datasetId) {
     throw httpError('Meta did not return a dataset_id for this WhatsApp Business Account', 502);
   }
+  if (isForbiddenSharedDataset(datasetId)) {
+    throw httpError(
+      'Refusing to bind messaging conversions to the shared website Pixel. Use the WABA dataset from Meta.',
+      502
+    );
+  }
+  return datasetId;
+}
+
+/**
+ * Ensure this client has their own WABA-linked Conversions dataset saved.
+ * @param {string} clientId
+ * @param {{ force?: boolean }} [opts] force=true always re-reads from Meta (fixes wrongly saved shared pixels)
+ */
+async function ensureDataset(clientId, opts = {}) {
+  const force = opts.force === true;
+  const account = await loadOwnAccount(clientId);
+  const token = decryptToken(account);
+  const wabaId = String(account.waba_id || '').trim();
+  if (!wabaId) throw httpError('WABA ID is missing on the WhatsApp account', 400);
+
+  let datasetId = String(account.dataset_id || '').trim();
+  const source = String(account.dataset_source || '').trim();
+  const needsRefresh =
+    force ||
+    !datasetId ||
+    source === 'cleared' ||
+    isForbiddenSharedDataset(datasetId);
+
+  if (needsRefresh) {
+    datasetId = await fetchOrCreateWabaDatasetId(wabaId, token);
+  }
 
   account.dataset_id = datasetId;
+  account.dataset_source = 'waba';
   account.dataset_linked_at = new Date();
+  account.dataset_decommissioned_at = null;
+  account.last_conversion_error = '';
   await account.save();
 
   return {
     wabaId,
     datasetId,
     linkedAt: account.dataset_linked_at,
-  };
-}
-
-/**
- * Manually set the Events Manager dataset / pixel id used for messaging conversions.
- * Prefer this when the WABA auto-linked dataset is inactive and another dataset is active.
- */
-async function setDatasetId(clientId, datasetIdInput) {
-  const datasetId = String(datasetIdInput || '').trim();
-  if (!/^\d{5,30}$/.test(datasetId)) {
-    throw httpError('dataset_id must be a numeric Meta dataset or pixel id', 400);
-  }
-  const account = await loadOwnAccount(clientId);
-  account.dataset_id = datasetId;
-  account.dataset_linked_at = new Date();
-  account.last_conversion_error = '';
-  await account.save();
-  return {
-    wabaId: String(account.waba_id || ''),
-    datasetId,
-    linkedAt: account.dataset_linked_at,
+    source: 'waba',
+    refreshed: needsRefresh,
     clientId: String(account.client_id),
   };
 }
 
-/** Set the same dataset id on every WhatsApp Cloud API account (all tenants). */
-async function setDatasetIdForAllAccounts(datasetIdInput) {
-  const datasetId = String(datasetIdInput || '').trim();
-  if (!/^\d{5,30}$/.test(datasetId)) {
-    throw httpError('dataset_id must be a numeric Meta dataset or pixel id', 400);
-  }
-  const at = new Date();
+/**
+ * Stop using this client's messaging dataset locally (offboarding).
+ * Does not delete the Meta-side asset (Meta may retain it on the WABA); we clear
+ * stored ids so Khana never sends further events for this tenant.
+ */
+async function decommissionDataset(clientId) {
   const result = await SaasWhatsAppAccount.updateMany(
-    {},
+    { client_id: clientId },
     {
       $set: {
-        dataset_id: datasetId,
-        dataset_linked_at: at,
+        dataset_id: '',
+        dataset_source: 'cleared',
+        dataset_linked_at: null,
+        dataset_decommissioned_at: new Date(),
         last_conversion_error: '',
+        last_conversion_event_name: '',
+        last_conversion_at: null,
       },
     }
   );
   return {
-    datasetId,
-    linkedAt: at,
+    clientId: String(clientId),
+    decommissioned: true,
     matched: result.matchedCount ?? result.n ?? 0,
     modified: result.modifiedCount ?? result.nModified ?? 0,
+  };
+}
+
+/**
+ * Disable Cloud API credentials + clear conversions dataset for this tenant.
+ */
+async function disconnectCloudAccount(clientId) {
+  const decommission = await decommissionDataset(clientId);
+  const result = await SaasWhatsAppAccount.updateMany(
+    { client_id: clientId, status: 'active' },
+    { $set: { status: 'disabled' } }
+  );
+  return {
+    ...decommission,
+    accountsDisabled: result.modifiedCount ?? result.nModified ?? 0,
+    disconnected: true,
   };
 }
 
@@ -238,14 +285,15 @@ async function findLatestCtwaClid(clientId) {
 }
 
 /**
- * Send a conversion event to the WABA dataset (Events Manager).
+ * Send a conversion event to THIS client's WABA dataset (Events Manager).
  */
 async function sendConversionEvent(clientId, input = {}) {
-  const account = await loadOwnAccount(clientId);
+  let account = await loadOwnAccount(clientId);
   let datasetId = String(account.dataset_id || '').trim();
-  if (!datasetId) {
-    const ensured = await ensureDataset(clientId);
+  if (!datasetId || isForbiddenSharedDataset(datasetId) || account.dataset_source === 'cleared') {
+    const ensured = await ensureDataset(clientId, { force: true });
     datasetId = ensured.datasetId;
+    account = await loadOwnAccount(clientId);
   }
 
   const token = decryptToken(account);
@@ -278,7 +326,7 @@ async function sendConversionEvent(clientId, input = {}) {
   const eventTime = Number(input.eventTime) || Math.floor(Date.now() / 1000);
   const eventId =
     String(input.eventId || '').trim() ||
-    `wa_${eventName}_${ctwaClid.slice(0, 24)}_${eventTime}`;
+    `wa_${String(clientId).slice(0, 24)}_${eventName}_${ctwaClid.slice(0, 16)}_${eventTime}`;
 
   const pageId = String(input.pageId || '').trim() || (await resolvePageId(clientId));
   const messagingChannel = String(input.messagingChannel || 'whatsapp').trim() || 'whatsapp';
@@ -341,15 +389,18 @@ async function sendConversionEvent(clientId, input = {}) {
     throw formatMetaError(err);
   }
 
-  account.last_conversion_event_name = eventName;
-  account.last_conversion_at = new Date();
-  account.last_conversion_error = '';
-  await account.save();
+  // Reload in case ensureDataset updated fields on a different document instance
+  const fresh = await loadOwnAccount(clientId);
+  fresh.last_conversion_event_name = eventName;
+  fresh.last_conversion_at = new Date();
+  fresh.last_conversion_error = '';
+  await fresh.save();
 
   return {
     ok: true,
     datasetId,
     wabaId,
+    clientId: String(clientId),
     eventName,
     eventId,
     pageId: pageId || undefined,
@@ -374,26 +425,33 @@ async function getConversionsStatus(clientId) {
       configured: false,
       hasAccount: false,
       datasetId: '',
+      datasetSource: '',
       wabaId: '',
       hasCtwaClid: false,
       lastConversionAt: null,
       lastConversionEventName: '',
       lastConversionError: '',
+      sharedDatasetBlocked: false,
     };
   }
 
+  const datasetId = String(account.dataset_id || '');
   const found = await findLatestCtwaClid(clientId);
   return {
     configured: true,
     hasAccount: true,
-    datasetId: String(account.dataset_id || ''),
-    wabaId: String(account.waba_id || ''),
+    datasetId,
+    datasetSource: String(account.dataset_source || ''),
     datasetLinkedAt: account.dataset_linked_at || null,
+    datasetDecommissionedAt: account.dataset_decommissioned_at || null,
+    wabaId: String(account.waba_id || ''),
     hasCtwaClid: Boolean(found?.ctwaClid),
     ctwaContactWaId: found?.contactWaId || '',
     lastConversionAt: account.last_conversion_at || null,
     lastConversionEventName: account.last_conversion_event_name || '',
     lastConversionError: account.last_conversion_error || '',
+    sharedDatasetBlocked: isForbiddenSharedDataset(datasetId),
+    needsRelink: !datasetId || isForbiddenSharedDataset(datasetId) || account.dataset_source === 'cleared',
   };
 }
 
@@ -456,11 +514,12 @@ async function captureCtwaFromInbound({ clientId, contactWaId, rawMsg, timestamp
 
 module.exports = {
   ensureDataset,
-  setDatasetId,
-  setDatasetIdForAllAccounts,
+  decommissionDataset,
+  disconnectCloudAccount,
   sendConversionEvent,
   getConversionsStatus,
   captureCtwaFromInbound,
   extractCtwaClidFromRaw,
   findLatestCtwaClid,
+  isForbiddenSharedDataset,
 };

@@ -149,6 +149,14 @@ router.post('/whatsapp/accounts', requireRoles('owner', 'manager', 'operator'), 
   if (!waba_id || !phone_number_id || !access_token) {
     return res.status(400).json({ ok: false, message: 'waba_id, phone_number_id and access_token are required' });
   }
+
+  const prev = await SaasWhatsAppAccount.findOne({
+    client_id: req.tenant.clientId,
+    phone_number_id,
+  }).select('waba_id dataset_id');
+
+  const wabaChanged = prev && String(prev.waba_id) !== String(waba_id);
+
   const doc = await SaasWhatsAppAccount.findOneAndUpdate(
     { client_id: req.tenant.clientId, phone_number_id },
     {
@@ -159,6 +167,14 @@ router.post('/whatsapp/accounts', requireRoles('owner', 'manager', 'operator'), 
         mode,
         access_token_encrypted: encrypt(access_token),
         status: 'active',
+        // New or changed WABA → drop any prior dataset so we bind to this WABA only
+        ...(wabaChanged || !prev
+          ? {
+              dataset_id: '',
+              dataset_source: 'cleared',
+              dataset_linked_at: null,
+            }
+          : {}),
       },
     },
     { upsert: true, new: true }
@@ -172,7 +188,7 @@ router.post('/whatsapp/accounts', requireRoles('owner', 'manager', 'operator'), 
   let dataset = null;
   try {
     const WhatsAppConversionsService = require('../services/saas/WhatsAppConversionsService');
-    dataset = await WhatsAppConversionsService.ensureDataset(req.tenant.clientId);
+    dataset = await WhatsAppConversionsService.ensureDataset(req.tenant.clientId, { force: true });
   } catch (e) {
     console.warn('[whatsapp] dataset link on account save:', e.message);
   }
@@ -187,9 +203,16 @@ router.post('/whatsapp/accounts', requireRoles('owner', 'manager', 'operator'), 
       status: doc.status,
       has_token: true,
       webhook_subscribed: subscribe?.ok === true,
-      dataset_id: dataset?.datasetId || doc.dataset_id || '',
+      dataset_id: dataset?.datasetId || '',
+      dataset_source: dataset?.source || doc.dataset_source || '',
     },
   });
+}));
+
+router.post('/whatsapp/accounts/disconnect', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const WhatsAppConversionsService = require('../services/saas/WhatsAppConversionsService');
+  const data = await WhatsAppConversionsService.disconnectCloudAccount(req.tenant.clientId);
+  res.json({ ok: true, data });
 }));
 
 router.get('/whatsapp/setup', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (_req, res) => {
@@ -253,26 +276,19 @@ router.get('/whatsapp/conversions/status', requireRoles('owner', 'manager', 'ope
 router.post('/whatsapp/conversions/dataset', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
   const WhatsAppConversionsService = require('../services/saas/WhatsAppConversionsService');
   try {
-    const datasetId = String(req.body?.dataset_id || req.body?.datasetId || '').trim();
-    const allClients = req.body?.all_clients === true || req.body?.allClients === true;
-    let data;
-    if (datasetId && allClients) {
-      if (String(req.tenant.clientId) !== 'Khana') {
-        const err = new Error('Only the Khana workspace can update datasets for all clients');
-        err.status = 403;
-        throw err;
-      }
-      data = await WhatsAppConversionsService.setDatasetIdForAllAccounts(datasetId);
-    } else if (datasetId) {
-      data = await WhatsAppConversionsService.setDatasetId(req.tenant.clientId, datasetId);
-    } else {
-      data = await WhatsAppConversionsService.ensureDataset(req.tenant.clientId);
-    }
+    const force = req.body?.force !== false; // default true: always bind to this client's WABA dataset
+    const data = await WhatsAppConversionsService.ensureDataset(req.tenant.clientId, { force });
     res.json({ ok: true, data });
   } catch (err) {
     const status = err.status || 500;
     res.status(status).json({ ok: false, message: err.message, meta: err.meta || null });
   }
+}));
+
+router.post('/whatsapp/conversions/decommission', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const WhatsAppConversionsService = require('../services/saas/WhatsAppConversionsService');
+  const data = await WhatsAppConversionsService.decommissionDataset(req.tenant.clientId);
+  res.json({ ok: true, data });
 }));
 
 router.post('/whatsapp/conversions/test-event', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
