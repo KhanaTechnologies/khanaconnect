@@ -402,13 +402,20 @@ async function listPagePosts(clientId, { limit = 20 } = {}) {
   }
 
   const msg = formatGraphError(lastError);
-  const needsReconnect =
-    /permission|(#200)|(#10)|pages_read|OAuthException/i.test(msg);
-  throw new Error(
-    needsReconnect
-      ? `${msg} Reconnect Facebook and approve Page content permissions (pages_read_engagement, pages_read_user_content).`
-      : msg
-  );
+  const needsPermissions =
+    /permission|(#200)|(#10)|pages_read|OAuthException|Page Public Content Access/i.test(msg);
+  // Soft-fail so Boost / Posts tabs stay usable (empty list + clear fix hint).
+  return {
+    pageId: String(pageId),
+    pageName: client.metaAds.pageName || '',
+    posts: [],
+    error: needsPermissions
+      ? `${msg} Add pages_read_engagement and pages_read_user_content to the Login for Business configuration (META_LOGIN_CONFIG_ID), then Disconnect → Connect Facebook again and approve all Page permissions.`
+      : msg,
+    missingPermissions: needsPermissions
+      ? ['pages_read_engagement', 'pages_read_user_content']
+      : [],
+  };
 }
 
 async function getInsights(clientId, { days = 30 } = {}) {

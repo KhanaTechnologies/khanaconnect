@@ -1,11 +1,15 @@
 KHANA CONNECT — META APP REVIEW + DATA HANDLING
 Paste-ready copy for Meta App Review (KhanaConnectW / Khana Technologies)
 Update Login for Business config_id permissions BEFORE recording screencasts:
-  public_profile, pages_show_list, pages_read_engagement, business_management,
-  ads_read, ads_management, instagram_basic, instagram_content_publish
+  public_profile, pages_show_list, pages_read_engagement, pages_read_user_content,
+  pages_manage_posts, business_management, ads_read, ads_management,
+  instagram_basic, instagram_content_publish
+  (Optional later: pages_manage_engagement)
 WhatsApp permissions stay on System User token (NOT Login config):
   whatsapp_business_messaging, whatsapp_business_management, whatsapp_business_manage_events
 After adding permissions: Disconnect → Connect Facebook again for each test user.
+IMPORTANT: Connecting again without editing the Login configuration does nothing —
+ Graph still returns (#10) for Page feed/posts until those scopes are on the config.
 Privacy policy URL: https://khanatechnologies.co.za/privacy-policy
 
 ================================================================================
@@ -58,18 +62,54 @@ Agree: Yes — use only for listing/verifying managed Pages and related allowed 
 pages_read_engagement
 ================================================================================
 How we use it:
-After a Page is selected, we read that Page’s published posts so the client can
-choose a post to boost from KhanaConnect (Boost posts → Facebook).
+After a Page is selected, we read that Page’s feed/posts and engagement summaries
+(likes/reactions, comments, shares) so the client can boost posts and see organic
+post activity in Meta Ads → Posts / Boost posts.
 
-Value: Clients boost existing organic posts without leaving the dashboard.
+Value: Clients boost existing organic posts and monitor Page engagement without
+leaving the dashboard.
 
-Necessity: Cannot list Page posts for boost flows without this permission.
-(Requires pages_show_list.)
+Necessity: Cannot list Page posts or engagement for Boost / Posts without this
+permission. (Requires pages_show_list.)
 
 Screencast: Connect → select Page → Boost posts → Facebook → posts load → open
-Boost dialog (create as PAUSED).
+Boost dialog (create as PAUSED). Also Meta Ads → Posts showing like/comment counts.
 
 Agree: Yes — allowed usage only.
+
+================================================================================
+pages_read_user_content
+================================================================================
+How we use it:
+Meta’s Page published_posts / posts edges require this permission (or Page Public
+Content Access) to read content associated with the managed Page. We use it only
+for Pages the client selects and manages, to list organic posts for Boost and the
+Posts activity view alongside pages_read_engagement.
+
+Value: Reliable Page post listing for boost and engagement UIs.
+
+Necessity: Without it Graph returns (#10) on published_posts/posts even when
+pages_read_engagement is present.
+
+Screencast: Same as pages_read_engagement (Boost posts + Posts tab).
+
+Agree: Yes — allowed usage only. Read-only for managed Pages.
+
+================================================================================
+pages_manage_posts
+================================================================================
+How we use it:
+Clients publish organic posts to their selected Facebook Page from Meta Ads →
+Publish (text, photo, carousel, video), optionally together with Instagram, or
+on a schedule. We call Page photos/feed/videos with the Page access token.
+
+Value: Create Page content from Khana without opening Facebook manually.
+
+Necessity: Required to create Page posts on behalf of the managed Page.
+
+Screencast: Meta Ads → Publish → Facebook (or both) → caption + media → Publish now.
+
+Agree: Yes — allowed usage only for Pages the client manages and selects.
 
 ================================================================================
 public_profile
@@ -88,16 +128,27 @@ Agree: Yes — allowed usage only.
 business_management
 ================================================================================
 How we use it:
-Used with Marketing API flows that touch Business Manager assets (e.g. product
-catalog create/sync under the client’s business, ad account business context).
-Clients manage ads and catalogs belonging to their business from KhanaConnect.
+Primarily to resolve and use Meta Business Manager context for the client’s
+connected Facebook Login: associate the correct Business with their selected
+ad account (metaBusinessId), surface Setup checklist / Business Manager deep
+links (billing, Business Settings), and keep ad workflows scoped to BM assets
+the authenticated user is allowed to manage—not a disconnected personal-only
+setup.
 
-Value: Catalog and business-asset campaigns work without leaving Khana.
+Catalog create/sync under the client’s business is a supported follow-on when
+Catalog Terms and permissions allow; it is secondary to BM context for Setup
+and ad-account operations.
 
-Necessity: Catalog sync and some ad-account/business asset operations require it.
+Value: Clients see which Business / ad account their workspace is tied to and
+run Meta ads from Khana against the correct BM assets.
 
-Screencast: Meta Ads → Create ads → Catalog sync / catalog campaign (or Setup
-showing business-linked ad account + catalog checklist).
+Necessity: Without business_management we cannot reliably read Business Manager
+association for the connected ad account or operate BM-scoped asset context in
+Setup and related Marketing API flows.
+
+Screencast: Meta Ads → Setup — Page + ad account connected, checklist / Business
+Manager deep links (payment or Business Settings). Narrate BM context resolution.
+(Catalog sync optional if working; not required for this clip.)
 
 Agree: Yes — allowed usage only.
 

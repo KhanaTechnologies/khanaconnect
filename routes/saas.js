@@ -972,8 +972,17 @@ router.put('/meta/selection', requireRoles('owner', 'manager'), wrapRoute(async 
 
 router.get('/meta/posts', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
   const limit = req.query.limit;
-  const data = await MetaAdsService.listPagePosts(req.tenant.clientId, { limit });
-  res.json({ ok: true, data });
+  try {
+    const data = await MetaAdsService.listPagePosts(req.tenant.clientId, { limit });
+    // Permission soft-fails return posts: [] + error — still 200 so UI can show the hint.
+    res.json({ ok: true, data });
+  } catch (err) {
+    res.status(400).json({
+      ok: false,
+      message: err.message || 'Could not load Page posts',
+      data: { posts: [], error: err.message || 'Could not load Page posts' },
+    });
+  }
 }));
 
 router.get('/meta/organic-posts', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
