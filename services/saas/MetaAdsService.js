@@ -533,6 +533,34 @@ function buildTargetingSpec(input = {}) {
     geo_locations.regions = regionEntries;
   }
 
+  const customLocationsRaw = Array.isArray(input.custom_locations)
+    ? input.custom_locations
+    : Array.isArray(input.customLocations)
+      ? input.customLocations
+      : [];
+  const custom_locations = customLocationsRaw
+    .map((loc) => {
+      if (!loc || typeof loc !== 'object') return null;
+      const latitude = Number(loc.latitude ?? loc.lat);
+      const longitude = Number(loc.longitude ?? loc.lng ?? loc.lon);
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+      const radius = Number(loc.radius);
+      const entry = {
+        latitude,
+        longitude,
+        radius: Number.isFinite(radius) && radius > 0 ? radius : 17,
+        distance_unit: String(loc.distance_unit || loc.distanceUnit || 'kilometer'),
+      };
+      if (loc.address_string || loc.addressString || loc.name) {
+        entry.address_string = String(loc.address_string || loc.addressString || loc.name);
+      }
+      return entry;
+    })
+    .filter(Boolean);
+  if (custom_locations.length) {
+    geo_locations.custom_locations = custom_locations;
+  }
+
   const age_min = clampAge(input.age_min ?? input.ageMin, 18);
   const age_max = clampAge(input.age_max ?? input.ageMax, 65);
   if (age_min > age_max) {
