@@ -852,46 +852,53 @@ router.post('/waitlist', validateClient, wrapRoute(async (req, res) => {
     res.status(201).json(waitlistEntry);
 }));
 
-// DELETE: Cancel booking
+// DELETE: Permanently remove booking (Cancel status is via PUT / status change)
 router.delete('/:id', validateClient, wrapRoute(async (req, res) => {
     const { id } = req.params;
     const clientId = req.clientId;
     const client = await Client.findOne({ clientID: req.clientId });
-    const { reason } = req.body;
+    const reason =
+      (req.body && req.body.reason) ||
+      (typeof req.query.reason === 'string' ? req.query.reason : '') ||
+      'Removed by dashboard user';
 
     const booking = await Booking.findOne({ _id: id, clientID: clientId });
     if (!booking) {
         return res.status(404).json({ error: 'Booking not found or unauthorized' });
     }
 
-    // Send cancellation email
-    try {
-        await sendBookingCancellationEmail(
-            booking,
-            client.businessEmail,
-            client.businessEmailPassword,
-            client.clientName || clientId,
-            reason,
-            client.emailSignature || '',
-            clientEmailBrandingPayload(client)
-        );
-    } catch (emailError) {
-        console.error('Failed to send cancellation email:', emailError);
+    // Best-effort customer notice before the row is removed
+    if (client && booking.status !== 'cancelled') {
+        try {
+            await sendBookingCancellationEmail(
+                booking,
+                client.businessEmail,
+                client.businessEmailPassword,
+                client.clientName || clientId,
+                reason,
+                client.emailSignature || '',
+                clientEmailBrandingPayload(client)
+            );
+        } catch (emailError) {
+            console.error('Failed to send cancellation email:', emailError);
+        }
     }
 
-    // Process waitlist if this was a desirable time slot
     if (booking.status === 'confirmed') {
-        await processWaitlist(booking);
+        try {
+            await processWaitlist(booking);
+        } catch (wlErr) {
+            console.error('Waitlist processing after booking delete failed:', wlErr);
+        }
     }
 
-    booking.status = 'cancelled';
-    await booking.save();
+    await Booking.deleteOne({ _id: booking._id, clientID: clientId });
 
-    res.json({ message: 'Booking cancelled successfully' });
+    res.json({ message: 'Booking deleted successfully', id: String(booking._id) });
     recordTeamActivityFromRequest(req, {
       category: 'bookings',
-      action: 'booking.cancelled',
-      summary: `Booking ${booking._id} cancelled`,
+      action: 'booking.deleted',
+      summary: `Booking ${booking._id} permanently deleted`,
       metadata: { bookingId: String(booking._id) },
     });
 }));
