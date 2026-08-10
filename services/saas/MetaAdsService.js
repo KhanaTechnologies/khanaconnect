@@ -283,6 +283,101 @@ function mapPagePosts(posts) {
   }));
 }
 
+/** Fields Boost used successfully before organic engagement was added. */
+const PAGE_POST_FIELDS_LIGHT = 'id,message,created_time,full_picture,permalink_url,shares';
+/** Engagement summaries — often need pages_read_engagement; never block listing. */
+const PAGE_POST_FIELDS_ENGAGEMENT =
+  'id,message,created_time,full_picture,permalink_url,shares,reactions.summary(true),comments.summary(true)';
+
+async function graphGetPagePostsEdge(pageId, token, edge, fields, limit) {
+  const res = await graphGet(`/${pageId}/${edge}`, token, { fields, limit });
+  return mapPagePosts(res?.data);
+}
+
+/**
+ * List Page posts for Boost + Posts activity.
+ * Uses light fields first (restore Boost). Engagement counts are best-effort.
+ */
+async function listPagePosts(clientId, { limit = 20, includeEngagement = true } = {}) {
+  const client = await loadClientWithMeta(clientId);
+  const pageId = client.metaAds?.pageId;
+  if (!pageId) throw new Error('Select a Facebook Page first');
+
+  const cap = Math.min(Math.max(Number(limit) || 20, 1), 50);
+  const pageToken = await ensurePageAccessToken(client, pageId);
+  const userToken = String(client.metaAds?.accessToken || '').trim();
+  const tokens = [...new Set([pageToken, userToken].filter(Boolean))];
+
+  // Same edge order as when Boost last worked; light fields first.
+  const edges = ['published_posts', 'posts', 'feed'];
+  let lastError = null;
+  let posts = null;
+  let usedEdge = null;
+  let usedTokenKind = null;
+
+  for (const token of tokens) {
+    const tokenKind = token === pageToken ? 'page' : 'user';
+    for (const edge of edges) {
+      try {
+        posts = await graphGetPagePostsEdge(pageId, token, edge, PAGE_POST_FIELDS_LIGHT, cap);
+        usedEdge = edge;
+        usedTokenKind = tokenKind;
+        break;
+      } catch (err) {
+        lastError = err;
+        console.warn(`[meta ads] ${edge} (${tokenKind}, light) failed:`, formatGraphError(err));
+      }
+    }
+    if (posts) break;
+  }
+
+  if (!posts) {
+    const msg = formatGraphError(lastError);
+    const needsPermissions =
+      /permission|(#200)|(#10)|pages_read|OAuthException|Page Public Content Access/i.test(msg);
+    return {
+      pageId: String(pageId),
+      pageName: client.metaAds.pageName || '',
+      posts: [],
+      error: needsPermissions
+        ? `${msg} Add pages_read_engagement and pages_read_user_content to the Login for Business configuration (META_LOGIN_CONFIG_ID), then Disconnect → Connect Facebook again and approve all Page permissions.`
+        : msg,
+      missingPermissions: needsPermissions
+        ? ['pages_read_engagement', 'pages_read_user_content']
+        : [],
+    };
+  }
+
+  // Best-effort likes/comments — never fail Boost if this step is denied.
+  if (includeEngagement && usedEdge && usedTokenKind) {
+    const token = usedTokenKind === 'page' ? pageToken : userToken;
+    try {
+      const rich = await graphGetPagePostsEdge(
+        pageId,
+        token,
+        usedEdge,
+        PAGE_POST_FIELDS_ENGAGEMENT,
+        cap
+      );
+      const byId = new Map(rich.map((p) => [p.id, p]));
+      posts = posts.map((p) => {
+        const e = byId.get(p.id);
+        return e
+          ? { ...p, likes: e.likes, comments: e.comments, shares: e.shares || p.shares }
+          : p;
+      });
+    } catch (err) {
+      console.warn('[meta ads] engagement enrich failed (posts still returned):', formatGraphError(err));
+    }
+  }
+
+  return {
+    pageId: String(pageId),
+    pageName: client.metaAds.pageName || '',
+    posts,
+  };
+}
+
 async function listInstagramMedia(clientId, { limit = 20 } = {}) {
   const client = await loadClientWithMeta(clientId);
   const pageId = client.metaAds?.pageId;
@@ -368,54 +463,6 @@ async function listInstagramMedia(clientId, { limit = 20 } = {}) {
         : msg
     );
   }
-}
-
-async function listPagePosts(clientId, { limit = 20 } = {}) {
-  const client = await loadClientWithMeta(clientId);
-  const pageId = client.metaAds?.pageId;
-  if (!pageId) throw new Error('Select a Facebook Page first');
-
-  const cap = Math.min(Math.max(Number(limit) || 20, 1), 50);
-  const fields =
-    'id,message,created_time,full_picture,permalink_url,shares,reactions.summary(true),comments.summary(true)';
-  const pageToken = await ensurePageAccessToken(client, pageId);
-
-  // Prefer published_posts (Page's own posts). Fall back to posts / feed.
-  const edges = ['published_posts', 'posts', 'feed'];
-  let lastError = null;
-
-  for (const edge of edges) {
-    try {
-      const res = await graphGet(`/${pageId}/${edge}`, pageToken, {
-        fields,
-        limit: cap,
-      });
-      return {
-        pageId: String(pageId),
-        pageName: client.metaAds.pageName || '',
-        posts: mapPagePosts(res?.data),
-      };
-    } catch (err) {
-      lastError = err;
-      console.warn(`[meta ads] ${edge} failed:`, formatGraphError(err));
-    }
-  }
-
-  const msg = formatGraphError(lastError);
-  const needsPermissions =
-    /permission|(#200)|(#10)|pages_read|OAuthException|Page Public Content Access/i.test(msg);
-  // Soft-fail so Boost / Posts tabs stay usable (empty list + clear fix hint).
-  return {
-    pageId: String(pageId),
-    pageName: client.metaAds.pageName || '',
-    posts: [],
-    error: needsPermissions
-      ? `${msg} Add pages_read_engagement and pages_read_user_content to the Login for Business configuration (META_LOGIN_CONFIG_ID), then Disconnect → Connect Facebook again and approve all Page permissions.`
-      : msg,
-    missingPermissions: needsPermissions
-      ? ['pages_read_engagement', 'pages_read_user_content']
-      : [],
-  };
 }
 
 async function getInsights(clientId, { days = 30 } = {}) {
