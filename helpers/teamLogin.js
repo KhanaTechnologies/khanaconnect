@@ -46,7 +46,7 @@ function buildLoginResponse(client, member, token) {
     client.role === 'admin' && (!member || member.orgRole === 'owner');
 
   const canManageTeam = member
-    ? ['owner', 'admin'].includes(member.orgRole) && !permissions.readOnly
+    ? ['owner', 'admin', 'manager'].includes(member.orgRole) && !permissions.readOnly
     : platformAdminSession;
 
   return {

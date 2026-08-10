@@ -126,10 +126,92 @@ function applyClientFeatureAccess(memberPerms, client) {
   return merged;
 }
 
-const TEAM_MANAGER_ROLES = new Set(['owner', 'admin']);
+const TEAM_MANAGER_ROLES = new Set(['owner', 'admin', 'manager']);
+
+const ORG_ROLE_RANK = {
+  owner: 40,
+  admin: 30,
+  manager: 20,
+  member: 10,
+};
 
 function canManageTeam(orgRole) {
   return TEAM_MANAGER_ROLES.has(orgRole);
+}
+
+/** Roles strictly below the actor that they may invite / edit / remove. */
+function manageableRolesFor(actorRole) {
+  switch (String(actorRole || '')) {
+    case 'owner':
+      return ['admin', 'manager', 'member'];
+    case 'admin':
+      return ['manager', 'member'];
+    case 'manager':
+      return ['member'];
+    default:
+      return [];
+  }
+}
+
+function canManageOrgRole(actorRole, targetRole) {
+  return manageableRolesFor(actorRole).includes(String(targetRole || ''));
+}
+
+function canAssignOrgRole(actorRole, assignRole) {
+  return manageableRolesFor(actorRole).includes(String(assignRole || ''));
+}
+
+function actorOrgRoleFromSession(session) {
+  if (!session) return null;
+  if (session.orgRole) return session.orgRole;
+  if (session.platformAdmin && !session.member) return 'owner';
+  return null;
+}
+
+/**
+ * @throws {{ status: number, message: string }}
+ */
+function assertCanManageTargetMember(session, targetMember) {
+  const actorRole = actorOrgRoleFromSession(session);
+  if (!actorRole || !canManageTeam(actorRole) || session.permissions?.readOnly) {
+    const err = new Error('Team management access required');
+    err.status = 403;
+    throw err;
+  }
+  if (!targetMember || !canManageOrgRole(actorRole, targetMember.orgRole)) {
+    const err = new Error('You can only manage team members below your role');
+    err.status = 403;
+    throw err;
+  }
+}
+
+/**
+ * @throws {{ status: number, message: string }}
+ */
+function assertCanAssignOrgRole(session, orgRole) {
+  const actorRole = actorOrgRoleFromSession(session);
+  if (!actorRole || !canManageTeam(actorRole) || session.permissions?.readOnly) {
+    const err = new Error('Team management access required');
+    err.status = 403;
+    throw err;
+  }
+  if (!canAssignOrgRole(actorRole, orgRole)) {
+    const err = new Error(
+      actorRole === 'manager'
+        ? 'Managers can only add Members'
+        : 'You cannot assign a role at or above your own'
+    );
+    err.status = 403;
+    throw err;
+  }
+}
+
+/** Session-level team management — org role + not view-only. */
+function sessionCanManageTeam(session) {
+  if (!session) return false;
+  if (session.platformAdmin && !session.member) return true;
+  if (session.permissions?.readOnly) return false;
+  return canManageTeam(session.orgRole);
 }
 
 module.exports = {
@@ -142,4 +224,12 @@ module.exports = {
   applyClientFeatureAccess,
   canManageTeam,
   TEAM_MANAGER_ROLES,
+  ORG_ROLE_RANK,
+  manageableRolesFor,
+  canManageOrgRole,
+  canAssignOrgRole,
+  actorOrgRoleFromSession,
+  assertCanManageTargetMember,
+  assertCanAssignOrgRole,
+  sessionCanManageTeam,
 };

@@ -32,8 +32,7 @@ async function resolveSessionFromToken(decoded) {
       return null;
     }
     const permissions = applyClientFeatureAccess(member.permissions, client);
-    // Do NOT grant team management just because the tenant is the platform-admin client.
-    // Only owner/admin org roles can manage Team; view-only members never can.
+    // Owner, admin, and manager can open Team (managers only act on members below them).
     const manageTeam = canManageTeam(member.orgRole) && !permissions.readOnly;
     return {
       client,

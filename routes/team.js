@@ -12,6 +12,10 @@ const {
 const {
   normalizePermissions,
   permissionsFromClient,
+  assertCanAssignOrgRole,
+  assertCanManageTargetMember,
+  manageableRolesFor,
+  actorOrgRoleFromSession,
 } = require('../helpers/teamPermissions');
 const {
   changeTeamMemberLoginEmail,
@@ -150,11 +154,13 @@ router.get('/members', wrapRoute(async (req, res) => {
     TeamMember.find({ clientID: req.clientID }).sort({ orgRole: 1, createdAt: 1 }),
     getTeamSeatUsage(req.clientID),
   ]);
+  const actorRole = actorOrgRoleFromSession(req.teamSession);
   res.json({
     success: true,
     clientID: req.clientID,
     members: members.map(sanitizeMember),
     seats,
+    assignableRoles: manageableRolesFor(actorRole),
   });
 }));
 
@@ -173,6 +179,7 @@ router.get('/me', wrapRoute(async (req, res) => {
     orgRole,
     permissions,
     canManageTeam: manageTeam,
+    assignableRoles: manageTeam ? manageableRolesFor(actorOrgRoleFromSession(req.teamSession)) : [],
   });
 }));
 
@@ -271,6 +278,7 @@ router.post('/members/invite', requireTeamManager(), wrapRoute(async (req, res) 
   } = req.body;
 
   try {
+    assertCanAssignOrgRole(req.teamSession, orgRole);
     const result = await issueTeamInvite({
       clientID: req.clientID,
       email,
@@ -300,6 +308,10 @@ router.post('/members/invite', requireTeamManager(), wrapRoute(async (req, res) 
 
 router.post('/members/:id/resend-invite', requireTeamManager(), wrapRoute(async (req, res) => {
   try {
+    const member = await TeamMember.findOne({ _id: req.params.id, clientID: req.clientID });
+    if (!member) return res.status(404).json({ error: 'Team member not found' });
+    assertCanManageTargetMember(req.teamSession, member);
+
     const result = await resendTeamInvite({
       clientID: req.clientID,
       memberId: req.params.id,
@@ -335,6 +347,12 @@ router.post('/members', requireTeamManager(), wrapRoute(async (req, res) => {
 
   if (orgRole === 'owner') {
     return res.status(400).json({ error: 'Cannot create another owner. Transfer ownership is not available in phase 1.' });
+  }
+
+  try {
+    assertCanAssignOrgRole(req.teamSession, orgRole);
+  } catch (err) {
+    return res.status(err.status || 403).json({ error: err.message });
   }
 
   const existing = await teamMemberEmailExists(req.clientID, normalizedEmail);
@@ -394,8 +412,10 @@ router.put('/members/:id', requireTeamManager(), wrapRoute(async (req, res) => {
   const member = await TeamMember.findOne({ _id: req.params.id, clientID: req.clientID });
   if (!member) return res.status(404).json({ error: 'Team member not found' });
 
-  if (member.orgRole === 'owner' && req.teamSession.member?.orgRole !== 'owner' && !req.teamSession.platformAdmin) {
-    return res.status(403).json({ error: 'Only the owner can update the owner account' });
+  try {
+    assertCanManageTargetMember(req.teamSession, member);
+  } catch (err) {
+    return res.status(err.status || 403).json({ error: err.message });
   }
 
   const { firstName, lastName, orgRole, status, password } = req.body;
@@ -406,6 +426,11 @@ router.put('/members/:id', requireTeamManager(), wrapRoute(async (req, res) => {
   if (orgRole && member.orgRole !== 'owner') {
     if (!['admin', 'manager', 'member'].includes(orgRole)) {
       return res.status(400).json({ error: 'Invalid org role' });
+    }
+    try {
+      assertCanAssignOrgRole(req.teamSession, orgRole);
+    } catch (err) {
+      return res.status(err.status || 403).json({ error: err.message });
     }
     member.orgRole = orgRole;
   }
@@ -429,8 +454,10 @@ router.put('/members/:id/permissions', requireTeamManager(), wrapRoute(async (re
   const member = await TeamMember.findOne({ _id: req.params.id, clientID: req.clientID });
   if (!member) return res.status(404).json({ error: 'Team member not found' });
 
-  if (member.orgRole === 'owner') {
-    return res.status(400).json({ error: 'Owner permissions cannot be changed' });
+  try {
+    assertCanManageTargetMember(req.teamSession, member);
+  } catch (err) {
+    return res.status(err.status || 403).json({ error: err.message });
   }
 
   const fromPreset = req.body.presetId ? permissionsFromPreset(req.body.presetId) : null;
@@ -467,8 +494,10 @@ router.delete('/members/:id', requireTeamManager(), wrapRoute(async (req, res) =
   const member = await TeamMember.findOne({ _id: req.params.id, clientID: req.clientID });
   if (!member) return res.status(404).json({ error: 'Team member not found' });
 
-  if (member.orgRole === 'owner') {
-    return res.status(400).json({ error: 'Cannot remove the organization owner' });
+  try {
+    assertCanManageTargetMember(req.teamSession, member);
+  } catch (err) {
+    return res.status(err.status || 403).json({ error: err.message });
   }
 
   if (String(req.teamSession.member?._id) === String(member._id)) {
