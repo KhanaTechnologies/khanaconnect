@@ -39,6 +39,16 @@ function buildLoginResponse(client, member, token) {
       ? fullPermissions()
       : permissionsFromClient(client);
 
+  // Client.role === 'admin' means the *tenant* is the Khana platform account.
+  // Only the org owner (or password-only platform login) should receive platform-admin FE powers.
+  // Other team members on that tenant must stay "client" or they can open Team / Permissions.
+  const platformAdminSession =
+    client.role === 'admin' && (!member || member.orgRole === 'owner');
+
+  const canManageTeam = member
+    ? ['owner', 'admin'].includes(member.orgRole) && !permissions.readOnly
+    : platformAdminSession;
+
   return {
     success: true,
     client: clientResponse,
@@ -48,14 +58,14 @@ function buildLoginResponse(client, member, token) {
       ...permissions,
       hasDashboardAccess: permissions.dashboard !== false,
     },
-    role: client.role,
+    role: platformAdminSession ? 'admin' : 'client',
     orgRole: member?.orgRole || null,
     tier: client.tier,
     email: member?.email || null,
     name: member?.displayName || client.companyName,
     companyName: client.companyName || client.clientID,
     dashboardThemeColor: client.dashboardThemeColor || '',
-    canManageTeam: member ? ['owner', 'admin'].includes(member.orgRole) : client.role === 'admin',
+    canManageTeam,
     hasAdPlatforms: client.hasEnabledAdPlatforms,
     enabledAdPlatforms: client.getEnabledAdPlatforms(),
     subscription: serializeSubscriptionSummary(client),

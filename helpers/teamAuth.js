@@ -31,13 +31,17 @@ async function resolveSessionFromToken(decoded) {
     if (!member || member.clientID !== client.clientID || member.status !== 'active') {
       return null;
     }
+    const permissions = applyClientFeatureAccess(member.permissions, client);
+    // Do NOT grant team management just because the tenant is the platform-admin client.
+    // Only owner/admin org roles can manage Team; view-only members never can.
+    const manageTeam = canManageTeam(member.orgRole) && !permissions.readOnly;
     return {
       client,
       member,
-      platformAdmin,
+      platformAdmin: platformAdmin && member.orgRole === 'owner',
       orgRole: member.orgRole,
-      permissions: applyClientFeatureAccess(member.permissions, client),
-      canManageTeam: canManageTeam(member.orgRole) || platformAdmin,
+      permissions,
+      canManageTeam: manageTeam,
     };
   }
 
@@ -99,6 +103,12 @@ function requireTeamManager() {
   return (req, res, next) => {
     if (!req.teamSession?.canManageTeam) {
       return res.status(403).json({ error: 'Team management access required' });
+    }
+    if (req.teamSession.permissions?.readOnly) {
+      return res.status(403).json({
+        error: 'This account is view-only. Team permissions can only be changed by an organization admin.',
+        code: 'READ_ONLY',
+      });
     }
     next();
   };
