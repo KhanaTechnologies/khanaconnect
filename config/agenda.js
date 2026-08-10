@@ -11,6 +11,7 @@ const JOB_NAMES = {
   WHATSAPP_BROADCAST: 'whatsapp-inbox:broadcast-send',
   PRODUCT_SALES_EXPIRE: 'products:expire-sales',
   CRM_TASK_REMINDERS: 'crm:task-reminders',
+  NEWSLETTER_CAMPAIGN: 'newsletter-campaign:send',
 };
 
 let agendaInstance = null;
@@ -111,6 +112,7 @@ function registerJobHandlers(agenda) {
   const { processWhatsAppBroadcast } = require('../jobs/handlers/processWhatsAppBroadcast');
   const { expireEndedProductSales } = require('../helpers/expireProductSales');
   const { processCrmTaskReminders } = require('../jobs/handlers/processCrmTaskReminders');
+  const { processNewsletterCampaign } = require('../jobs/handlers/processNewsletterCampaign');
 
   agenda.define(
     JOB_NAMES.EVENT_BATCH,
@@ -231,6 +233,34 @@ function registerJobHandlers(agenda) {
     JOB_NAMES.CRM_TASK_REMINDERS,
     { concurrency: 1, lockLifetime: 5 * 60 * 1000 },
     async () => processCrmTaskReminders()
+  );
+
+  agenda.define(
+    JOB_NAMES.NEWSLETTER_CAMPAIGN,
+    {
+      concurrency: Number(process.env.NEWSLETTER_CAMPAIGN_CONCURRENCY || 1),
+      lockLifetime: Number(process.env.AGENDA_LOCK_MS || 30 * 60 * 1000),
+    },
+    async (job) => {
+      const data = job.attrs.data || {};
+      const attempt = data._attempt || 1;
+      try {
+        return await processNewsletterCampaign(data);
+      } catch (err) {
+        const maxAttempts = 2;
+        if (attempt < maxAttempts) {
+          await scheduleRetry(agenda, JOB_NAMES.NEWSLETTER_CAMPAIGN, data, attempt, {
+            maxAttempts,
+            baseDelayMs: 60000,
+          });
+          console.warn(
+            `newsletter-campaign retry scheduled (${attempt}/${maxAttempts}) for draft ${data.draftId}`
+          );
+          return;
+        }
+        throw err;
+      }
+    }
   );
 
   agenda.on('start', (job) => {

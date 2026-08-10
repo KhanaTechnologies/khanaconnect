@@ -36,6 +36,32 @@ const newsletterDraftSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: {},
     },
+    status: {
+      type: String,
+      enum: ['draft', 'scheduled', 'sending', 'sent', 'failed'],
+      default: 'draft',
+      index: true,
+    },
+    scheduledFor: {
+      type: Date,
+      default: null,
+    },
+    sentAt: {
+      type: Date,
+      default: null,
+    },
+    recipientCount: {
+      type: Number,
+      default: 0,
+    },
+    lastSendError: {
+      type: String,
+      default: '',
+    },
+    agendaJobId: {
+      type: String,
+      default: '',
+    },
     isDeleted: {
       type: Boolean,
       default: false,
@@ -45,5 +71,6 @@ const newsletterDraftSchema = new mongoose.Schema(
 );
 
 newsletterDraftSchema.index({ clientID: 1, updatedAt: -1 });
+newsletterDraftSchema.index({ clientID: 1, status: 1, scheduledFor: 1 });
 
 module.exports = mongoose.model('NewsletterDraft', newsletterDraftSchema);

@@ -1534,8 +1534,11 @@ function mapDraftToCampaign(draft) {
         name: doc.name || 'Untitled campaign',
         subject: doc.subject || '',
         content: doc.html || doc.text || '',
-        status: 'draft',
-        recipientCount: 0,
+        status: doc.status || 'draft',
+        scheduledFor: doc.scheduledFor ? new Date(doc.scheduledFor).toISOString() : undefined,
+        sentAt: doc.sentAt ? new Date(doc.sentAt).toISOString() : undefined,
+        recipientCount: doc.recipientCount || 0,
+        lastSendError: doc.lastSendError || '',
     };
 }
 
@@ -1546,6 +1549,54 @@ function plainTextToHtml(text) {
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
         .replace(/\n/g, '<br/>');
+}
+
+async function cancelNewsletterAgendaJob(jobId) {
+    if (!jobId) return;
+    try {
+        const { getAgenda, isAgendaReady, JOB_NAMES } = require('../config/agenda');
+        if (!isAgendaReady()) return;
+        const agenda = getAgenda();
+        const jobs = await agenda.jobs({
+            name: JOB_NAMES.NEWSLETTER_CAMPAIGN,
+            _id: jobId,
+        });
+        // Agenda may store ObjectId — also match by attrs
+        if (jobs?.length) {
+            await Promise.all(jobs.map((j) => j.remove()));
+            return;
+        }
+        await agenda.cancel({
+            name: JOB_NAMES.NEWSLETTER_CAMPAIGN,
+            'data.draftId': String(jobId),
+        });
+    } catch (err) {
+        console.warn('[newsletter] cancel agenda job:', err.message);
+    }
+}
+
+async function scheduleNewsletterCampaignJob({ clientID, draftId, when }) {
+    const { getAgenda, isAgendaReady, isSchedulerDisabled, JOB_NAMES } = require('../config/agenda');
+    if (isSchedulerDisabled() || !isAgendaReady()) {
+        const err = new Error(
+            'Job scheduler is not running. Enable it on the server to schedule newsletters, or use Send Now.'
+        );
+        err.status = 503;
+        throw err;
+    }
+    const agenda = getAgenda();
+    await agenda.cancel({
+        name: JOB_NAMES.NEWSLETTER_CAMPAIGN,
+        'data.draftId': String(draftId),
+        'data.clientID': String(clientID),
+    });
+    const job = agenda.create(JOB_NAMES.NEWSLETTER_CAMPAIGN, {
+        clientID: String(clientID),
+        draftId: String(draftId),
+    });
+    job.schedule(when);
+    await job.save();
+    return String(job.attrs._id);
 }
 
 // SEND NEWSLETTER TO SUBSCRIBERS
@@ -2036,6 +2087,203 @@ router.put('/newsletter/campaigns/:id', validateClientNewsletter, wrapRoute(asyn
             error: error.message,
         });
     }
+}));
+
+/** Send a saved campaign now to all active subscribers. */
+router.post('/newsletter/campaigns/:id/send', validateClientNewsletter, wrapRoute(async (req, res) => {
+    const draft = await NewsletterDraft.findOne({
+        _id: req.params.id,
+        clientID: req.client.clientID,
+        isDeleted: false,
+    });
+    if (!draft) {
+        return res.status(404).json({ ok: false, message: 'Campaign not found' });
+    }
+    if (!draft.subject || !(draft.html || draft.text)) {
+        return res.status(400).json({
+            ok: false,
+            message: 'Campaign needs a subject and content before sending',
+        });
+    }
+
+    const estimate = await NewsletterService.getSubscriberCount(req.client.clientID, true);
+    if (!estimate) {
+        return res.status(400).json({
+            ok: false,
+            message: 'No active subscribers found. Add subscribers before sending.',
+        });
+    }
+
+    if (draft.agendaJobId || draft.status === 'scheduled') {
+        try {
+            const { getAgenda, isAgendaReady, JOB_NAMES } = require('../config/agenda');
+            if (isAgendaReady()) {
+                await getAgenda().cancel({
+                    name: JOB_NAMES.NEWSLETTER_CAMPAIGN,
+                    'data.draftId': String(draft._id),
+                    'data.clientID': req.client.clientID,
+                });
+            }
+        } catch (_) {
+            /* ignore */
+        }
+        draft.agendaJobId = '';
+        draft.scheduledFor = null;
+    }
+
+    draft.status = 'sending';
+    draft.lastSendError = '';
+    await draft.save();
+
+    const { batchSize, batchDelayMs, emailDelayMs } = NewsletterService.getDeliveryPacing();
+    const totalBatches = Math.max(1, Math.ceil(estimate / batchSize));
+    const estMs = estimate * emailDelayMs + Math.max(0, totalBatches - 1) * batchDelayMs;
+    const estMin = Math.max(1, Math.ceil(estMs / 60000));
+
+    res.json({
+        ok: true,
+        message: 'Newsletter sending started',
+        data: {
+            campaignId: String(draft._id),
+            status: 'sent',
+            recipients: estimate,
+            estimatedCompletion: `~${estMin} min`,
+            campaign: mapDraftToCampaign(draft),
+        },
+    });
+    recordTeamActivityFromRequest(req, {
+        category: 'email',
+        action: 'newsletter.sent',
+        summary: `Newsletter campaign sent: "${draft.subject}" to ${estimate} subscriber(s)`,
+        metadata: { campaignId: String(draft._id), recipientEstimate: estimate },
+    });
+
+    (async () => {
+        try {
+            const { processNewsletterCampaign } = require('../jobs/handlers/processNewsletterCampaign');
+            await processNewsletterCampaign({
+                clientID: req.client.clientID,
+                draftId: String(draft._id),
+            });
+        } catch (err) {
+            console.error('[newsletter] campaign send failed:', err.message);
+        }
+    })();
+}));
+
+/** Schedule a saved campaign for later (Agenda job). */
+router.post('/newsletter/campaigns/:id/schedule', validateClientNewsletter, wrapRoute(async (req, res) => {
+    const draft = await NewsletterDraft.findOne({
+        _id: req.params.id,
+        clientID: req.client.clientID,
+        isDeleted: false,
+    });
+    if (!draft) {
+        return res.status(404).json({ ok: false, message: 'Campaign not found' });
+    }
+    if (!draft.subject || !(draft.html || draft.text)) {
+        return res.status(400).json({
+            ok: false,
+            message: 'Campaign needs a subject and content before scheduling',
+        });
+    }
+
+    const whenRaw = req.body?.scheduledFor || req.body?.sendAt;
+    const when = whenRaw ? new Date(whenRaw) : null;
+    if (!when || Number.isNaN(when.getTime())) {
+        return res.status(400).json({
+            ok: false,
+            message: 'scheduledFor must be a valid date/time (ISO string)',
+        });
+    }
+    if (when.getTime() < Date.now() + 30 * 1000) {
+        return res.status(400).json({
+            ok: false,
+            message: 'Choose a time at least 30 seconds in the future, or use Send Now',
+        });
+    }
+
+    const estimate = await NewsletterService.getSubscriberCount(req.client.clientID, true);
+    if (!estimate) {
+        return res.status(400).json({
+            ok: false,
+            message: 'No active subscribers found. Add subscribers before scheduling.',
+        });
+    }
+
+    try {
+        const jobId = await scheduleNewsletterCampaignJob({
+            clientID: req.client.clientID,
+            draftId: String(draft._id),
+            when,
+        });
+        draft.status = 'scheduled';
+        draft.scheduledFor = when;
+        draft.agendaJobId = jobId;
+        draft.recipientCount = estimate;
+        draft.lastSendError = '';
+        await draft.save();
+
+        const campaign = mapDraftToCampaign(draft);
+        res.json({
+            ok: true,
+            message: `Newsletter scheduled for ${when.toISOString()}`,
+            data: {
+                campaignId: String(draft._id),
+                status: 'scheduled',
+                recipients: estimate,
+                scheduledFor: when.toISOString(),
+                campaign,
+            },
+        });
+        recordTeamActivityFromRequest(req, {
+            category: 'email',
+            action: 'newsletter.scheduled',
+            summary: `Newsletter scheduled: "${draft.subject}" for ${when.toISOString()}`,
+            metadata: { campaignId: String(draft._id), scheduledFor: when.toISOString() },
+        });
+    } catch (err) {
+        return res.status(err.status || 500).json({
+            ok: false,
+            message: err.message || 'Failed to schedule newsletter',
+        });
+    }
+}));
+
+/** Cancel a scheduled campaign. */
+router.delete('/newsletter/campaigns/:id/schedule', validateClientNewsletter, wrapRoute(async (req, res) => {
+    const draft = await NewsletterDraft.findOne({
+        _id: req.params.id,
+        clientID: req.client.clientID,
+        isDeleted: false,
+    });
+    if (!draft) {
+        return res.status(404).json({ ok: false, message: 'Campaign not found' });
+    }
+
+    try {
+        const { getAgenda, isAgendaReady, JOB_NAMES } = require('../config/agenda');
+        if (isAgendaReady()) {
+            await getAgenda().cancel({
+                name: JOB_NAMES.NEWSLETTER_CAMPAIGN,
+                'data.draftId': String(draft._id),
+                'data.clientID': req.client.clientID,
+            });
+        }
+    } catch (err) {
+        console.warn('[newsletter] cancel schedule:', err.message);
+    }
+
+    draft.status = 'draft';
+    draft.scheduledFor = null;
+    draft.agendaJobId = '';
+    await draft.save();
+
+    res.json({
+        ok: true,
+        message: 'Schedule cancelled',
+        data: { campaign: mapDraftToCampaign(draft) },
+    });
 }));
 
 // GET NEWSLETTER STATISTICS
