@@ -623,6 +623,40 @@ async function createCustomAudienceFromCustomers(
   };
 }
 
+/**
+ * Preview how many Khana customers would be uploaded for a preset (no Meta write).
+ */
+async function previewCustomAudienceFromCustomers(clientId, { preset = 'all' } = {}) {
+  const presetId = String(preset || 'all');
+  const presetMeta = AUDIENCE_PRESETS.find((p) => p.id === presetId) || {
+    id: presetId,
+    label: presetId,
+  };
+
+  const customers = await loadCustomersForAudience(clientId, { preset: presetId });
+  let withEmail = 0;
+  let withPhone = 0;
+  let uploadable = 0;
+
+  for (const c of customers) {
+    const email = normalizeEmail(c.emailAddress);
+    const phone = normalizePhone(c.phoneNumber);
+    if (email) withEmail += 1;
+    if (phone) withPhone += 1;
+    if (email || phone) uploadable += 1;
+  }
+
+  return {
+    preset: presetMeta.id,
+    label: presetMeta.label,
+    scanned: customers.length,
+    uploadable,
+    withEmail,
+    withPhone,
+    skipped: Math.max(0, customers.length - uploadable),
+  };
+}
+
 async function getInsightBreakdowns(clientId, { days = 30, breakdown = 'age' } = {}) {
   const client = await loadClientWithMeta(clientId);
   const adAccountId = normalizeAdAccountId(client.metaAds?.adAccountId);
@@ -1321,6 +1355,7 @@ module.exports = {
   updateCampaignStatus,
   updateCampaignBudget,
   createCustomAudienceFromCustomers,
+  previewCustomAudienceFromCustomers,
   getInsightBreakdowns,
   createClickToWhatsAppCampaign,
   uploadAdImage,

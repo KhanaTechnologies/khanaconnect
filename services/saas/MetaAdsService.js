@@ -636,7 +636,10 @@ function buildTargetingSpec(input = {}) {
   return targeting;
 }
 
-async function searchTargeting(clientId, { q, type = 'adinterest', limit = 15, locationTypes } = {}) {
+async function searchTargeting(
+  clientId,
+  { q, type = 'adinterest', limit = 15, locationTypes, countryCode } = {}
+) {
   const client = await loadClientWithMeta(clientId);
   const token = String(client.metaAds.accessToken);
   const query = String(q || '').trim();
@@ -662,11 +665,26 @@ async function searchTargeting(clientId, { q, type = 'adinterest', limit = 15, l
   };
 
   if (searchType === 'adgeolocation') {
-    params.location_types = JSON.stringify(
-      Array.isArray(locationTypes) && locationTypes.length
-        ? locationTypes
-        : ['city', 'region']
-    );
+    const allowedLocationTypes = new Set([
+      'country',
+      'region',
+      'city',
+      'zip',
+      'geo_market',
+      'electoral_district',
+    ]);
+    const types = (Array.isArray(locationTypes) && locationTypes.length
+      ? locationTypes
+      : ['city', 'region']
+    )
+      .map((t) => String(t || '').trim().toLowerCase())
+      .filter((t) => allowedLocationTypes.has(t));
+    params.location_types = JSON.stringify(types.length ? types : ['city', 'region']);
+
+    const cc = String(countryCode || '').trim().toUpperCase();
+    if (/^[A-Z]{2}$/.test(cc)) {
+      params.country_code = cc;
+    }
   }
 
   if (searchType === 'adTargetingCategory') {
@@ -677,22 +695,31 @@ async function searchTargeting(clientId, { q, type = 'adinterest', limit = 15, l
     const res = await graphGet('/search', token, params);
     const rows = Array.isArray(res?.data) ? res.data : [];
     return {
-      results: rows.map((r) => ({
-        id: String(r.id || r.key || ''),
-        key: r.key != null ? String(r.key) : undefined,
-        name: String(r.name || r.id || ''),
-        type: searchType,
-        path: Array.isArray(r.path) ? r.path.map(String) : undefined,
-        audienceSize: r.audience_size_lower_bound != null
-          ? {
-              lower: Number(r.audience_size_lower_bound) || 0,
-              upper: Number(r.audience_size_upper_bound) || 0,
-            }
-          : undefined,
-        countryCode: r.country_code ? String(r.country_code) : undefined,
-        region: r.region ? String(r.region) : undefined,
-        typeName: r.type ? String(r.type) : undefined,
-      })).filter((r) => r.id || r.key),
+      results: rows.map((r) => {
+        const lat = Number(r.latitude ?? r.center_lat);
+        const lng = Number(r.longitude ?? r.center_lng ?? r.center_lon);
+        return {
+          id: String(r.id || r.key || ''),
+          key: r.key != null ? String(r.key) : undefined,
+          name: String(r.name || r.id || ''),
+          type: searchType,
+          path: Array.isArray(r.path) ? r.path.map(String) : undefined,
+          audienceSize: r.audience_size_lower_bound != null
+            ? {
+                lower: Number(r.audience_size_lower_bound) || 0,
+                upper: Number(r.audience_size_upper_bound) || 0,
+              }
+            : undefined,
+          countryCode: r.country_code ? String(r.country_code) : undefined,
+          region: r.region ? String(r.region) : undefined,
+          regionId: r.region_id != null ? String(r.region_id) : undefined,
+          typeName: r.type ? String(r.type) : undefined,
+          latitude: Number.isFinite(lat) ? lat : undefined,
+          longitude: Number.isFinite(lng) ? lng : undefined,
+          supportsCity: r.supports_city != null ? Boolean(r.supports_city) : undefined,
+          supportsRegion: r.supports_region != null ? Boolean(r.supports_region) : undefined,
+        };
+      }).filter((r) => r.id || r.key),
     };
   } catch (err) {
     throw new Error(formatGraphError(err));
@@ -707,17 +734,51 @@ async function listCustomAudiences(clientId) {
   const token = String(client.metaAds.accessToken);
   try {
     const res = await graphGet(`/act_${adAccountId}/customaudiences`, token, {
-      fields: 'id,name,approximate_count,subtype,delivery_status',
+      fields:
+        'id,name,approximate_count,approximate_count_lower_bound,approximate_count_upper_bound,subtype,delivery_status,operation_status,time_updated',
       limit: 50,
     });
     const rows = Array.isArray(res?.data) ? res.data : [];
     return {
-      audiences: rows.map((a) => ({
-        id: String(a.id),
-        name: String(a.name || a.id),
-        approximateCount: Number(a.approximate_count) || null,
-        subtype: a.subtype ? String(a.subtype) : '',
-      })),
+      audiences: rows.map((a) => {
+        const delivery = a.delivery_status || {};
+        const operation = a.operation_status || {};
+        const lower =
+          a.approximate_count_lower_bound != null
+            ? Number(a.approximate_count_lower_bound)
+            : null;
+        const upper =
+          a.approximate_count_upper_bound != null
+            ? Number(a.approximate_count_upper_bound)
+            : null;
+        const legacy =
+          a.approximate_count != null && Number.isFinite(Number(a.approximate_count))
+            ? Number(a.approximate_count)
+            : null;
+        const approx =
+          lower != null && Number.isFinite(lower)
+            ? lower
+            : upper != null && Number.isFinite(upper)
+              ? upper
+              : legacy;
+        return {
+          id: String(a.id),
+          name: String(a.name || a.id),
+          approximateCount: approx != null && Number.isFinite(approx) ? approx : null,
+          approximateCountLower: Number.isFinite(lower) ? lower : null,
+          approximateCountUpper: Number.isFinite(upper) ? upper : null,
+          subtype: a.subtype ? String(a.subtype) : '',
+          deliveryStatus: {
+            code: delivery.code != null ? Number(delivery.code) : null,
+            description: delivery.description ? String(delivery.description) : null,
+          },
+          operationStatus: {
+            code: operation.code != null ? Number(operation.code) : null,
+            description: operation.description ? String(operation.description) : null,
+          },
+          timeUpdated: a.time_updated ? Number(a.time_updated) : null,
+        };
+      }),
     };
   } catch (err) {
     // Many accounts have no custom audiences or lack permission — soft-fail.

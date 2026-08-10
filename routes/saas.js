@@ -1182,7 +1182,7 @@ router.post('/meta/boost', requireRoles('owner', 'manager'), wrapRoute(async (re
 }));
 
 router.get('/meta/targeting/search', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
-  const { q, type, limit } = req.query || {};
+  const { q, type, limit, country_code: countryCode } = req.query || {};
   let locationTypes;
   if (req.query.location_types) {
     try {
@@ -1196,6 +1196,7 @@ router.get('/meta/targeting/search', requireRoles('owner', 'manager', 'operator'
     type,
     limit,
     locationTypes,
+    countryCode,
   });
   res.json({ ok: true, data });
 }));
@@ -1237,6 +1238,13 @@ router.post('/meta/campaigns/:id/budget', requireRoles('owner', 'manager'), wrap
 
 router.get('/meta/audience-presets', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
   res.json({ ok: true, data: { presets: MetaAdsAdvancedService.AUDIENCE_PRESETS } });
+}));
+
+router.get('/meta/custom-audiences/preview', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const data = await MetaAdsAdvancedService.previewCustomAudienceFromCustomers(req.tenant.clientId, {
+    preset: req.query.preset,
+  });
+  res.json({ ok: true, data });
 }));
 
 router.post('/meta/custom-audiences/from-customers', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
