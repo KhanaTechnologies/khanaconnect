@@ -12,6 +12,7 @@ const JOB_NAMES = {
   PRODUCT_SALES_EXPIRE: 'products:expire-sales',
   CRM_TASK_REMINDERS: 'crm:task-reminders',
   NEWSLETTER_CAMPAIGN: 'newsletter-campaign:send',
+  SOCIAL_POST: 'meta-social:publish',
 };
 
 let agendaInstance = null;
@@ -113,6 +114,7 @@ function registerJobHandlers(agenda) {
   const { expireEndedProductSales } = require('../helpers/expireProductSales');
   const { processCrmTaskReminders } = require('../jobs/handlers/processCrmTaskReminders');
   const { processNewsletterCampaign } = require('../jobs/handlers/processNewsletterCampaign');
+  const { processScheduledSocialPost } = require('../jobs/handlers/processScheduledSocialPost');
 
   agenda.define(
     JOB_NAMES.EVENT_BATCH,
@@ -256,6 +258,31 @@ function registerJobHandlers(agenda) {
           console.warn(
             `newsletter-campaign retry scheduled (${attempt}/${maxAttempts}) for draft ${data.draftId}`
           );
+          return;
+        }
+        throw err;
+      }
+    }
+  );
+
+  agenda.define(
+    JOB_NAMES.SOCIAL_POST,
+    {
+      concurrency: Number(process.env.SOCIAL_POST_CONCURRENCY || 1),
+      lockLifetime: Number(process.env.AGENDA_LOCK_MS || 30 * 60 * 1000),
+    },
+    async (job) => {
+      const data = job.attrs.data || {};
+      const attempt = data._attempt || 1;
+      try {
+        return await processScheduledSocialPost(data);
+      } catch (err) {
+        const maxAttempts = 2;
+        if (attempt < maxAttempts) {
+          await scheduleRetry(agenda, JOB_NAMES.SOCIAL_POST, data, attempt, {
+            maxAttempts,
+            baseDelayMs: 60000,
+          });
           return;
         }
         throw err;

@@ -976,6 +976,187 @@ router.get('/meta/posts', requireRoles('owner', 'manager', 'operator', 'viewer')
   res.json({ ok: true, data });
 }));
 
+router.get('/meta/organic-posts', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const limit = req.query.limit;
+  const data = await MetaAdsService.listOrganicPosts(req.tenant.clientId, { limit });
+  res.json({ ok: true, data });
+}));
+
+router.post('/meta/publish', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  try {
+    const body = req.body || {};
+    const mediaType = String(body.mediaType || body.media_type || 'IMAGE').toUpperCase();
+    const imageUrls = Array.isArray(body.imageUrls)
+      ? body.imageUrls
+      : Array.isArray(body.image_urls)
+        ? body.image_urls
+        : [];
+    const destinations = body.destinations || body.destination || ['instagram'];
+    const data = await MetaAdsService.publishSocialPost(req.tenant.clientId, {
+      destinations,
+      mediaType,
+      imageUrl: body.imageUrl || body.image_url || '',
+      videoUrl: body.videoUrl || body.video_url || '',
+      imageUrls,
+      caption: body.caption || '',
+    });
+    res.json({ ok: true, data });
+  } catch (err) {
+    res.status(400).json({ ok: false, message: err.message });
+  }
+}));
+
+router.post('/meta/facebook/publish', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  try {
+    const body = req.body || {};
+    const mediaType = String(body.mediaType || body.media_type || 'IMAGE').toUpperCase();
+    const imageUrls = Array.isArray(body.imageUrls)
+      ? body.imageUrls
+      : Array.isArray(body.image_urls)
+        ? body.image_urls
+        : [];
+    const data = await MetaAdsService.publishFacebookPagePost(req.tenant.clientId, {
+      mediaType,
+      imageUrl: body.imageUrl || body.image_url || '',
+      videoUrl: body.videoUrl || body.video_url || '',
+      imageUrls,
+      caption: body.caption || '',
+    });
+    res.json({ ok: true, data });
+  } catch (err) {
+    res.status(400).json({ ok: false, message: err.message });
+  }
+}));
+
+router.get('/meta/social-posts', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const SaasSocialPost = require('../models/SaasSocialPost');
+  const rows = await SaasSocialPost.find({ client_id: req.tenant.clientId })
+    .sort({ scheduledFor: -1, createdAt: -1 })
+    .limit(50)
+    .lean();
+  res.json({
+    ok: true,
+    data: {
+      posts: rows.map((p) => ({
+        id: String(p._id),
+        destinations: p.destinations,
+        mediaType: p.mediaType,
+        caption: p.caption,
+        imageUrls: p.imageUrls,
+        videoUrl: p.videoUrl,
+        status: p.status,
+        scheduledFor: p.scheduledFor,
+        publishedAt: p.publishedAt,
+        results: p.results,
+        lastError: p.lastError,
+        createdAt: p.createdAt,
+      })),
+    },
+  });
+}));
+
+router.post('/meta/social-posts/schedule', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const SaasSocialPost = require('../models/SaasSocialPost');
+  const body = req.body || {};
+  const when = body.scheduledFor ? new Date(body.scheduledFor) : null;
+  if (!when || Number.isNaN(when.getTime())) {
+    return res.status(400).json({ ok: false, message: 'scheduledFor must be a valid date/time' });
+  }
+  if (when.getTime() < Date.now() + 30 * 1000) {
+    return res.status(400).json({
+      ok: false,
+      message: 'Choose a time at least 30 seconds in the future, or publish now',
+    });
+  }
+
+  const destinationsRaw = body.destinations || body.destination || ['instagram'];
+  const destinations = (Array.isArray(destinationsRaw) ? destinationsRaw : [destinationsRaw])
+    .map((d) => String(d || '').toLowerCase())
+    .filter((d) => d === 'facebook' || d === 'instagram' || d === 'both');
+  const normalized = destinations.includes('both')
+    ? ['facebook', 'instagram']
+    : [...new Set(destinations.length ? destinations : ['instagram'])];
+
+  const imageUrls = Array.isArray(body.imageUrls)
+    ? body.imageUrls.map((u) => String(u || '').trim()).filter(Boolean)
+    : body.imageUrl
+      ? [String(body.imageUrl).trim()]
+      : [];
+
+  const post = await SaasSocialPost.create({
+    client_id: req.tenant.clientId,
+    destinations: normalized,
+    mediaType: String(body.mediaType || 'IMAGE').toUpperCase(),
+    caption: String(body.caption || ''),
+    imageUrls,
+    videoUrl: String(body.videoUrl || ''),
+    status: 'scheduled',
+    scheduledFor: when,
+  });
+
+  try {
+    const { getAgenda, isAgendaReady, isSchedulerDisabled, JOB_NAMES } = require('../config/agenda');
+    if (isSchedulerDisabled() || !isAgendaReady()) {
+      await SaasSocialPost.deleteOne({ _id: post._id });
+      return res.status(503).json({
+        ok: false,
+        message:
+          'Job scheduler is not running. Enable it on the server to schedule posts, or publish now.',
+      });
+    }
+    const agenda = getAgenda();
+    const job = agenda.create(JOB_NAMES.SOCIAL_POST, {
+      clientId: req.tenant.clientId,
+      postId: String(post._id),
+    });
+    job.schedule(when);
+    await job.save();
+    post.agendaJobId = String(job.attrs._id);
+    await post.save();
+  } catch (err) {
+    await SaasSocialPost.deleteOne({ _id: post._id });
+    return res.status(500).json({ ok: false, message: err.message || 'Failed to schedule post' });
+  }
+
+  res.status(201).json({
+    ok: true,
+    message: `Post scheduled for ${when.toISOString()}`,
+    data: {
+      id: String(post._id),
+      status: post.status,
+      scheduledFor: post.scheduledFor,
+      destinations: post.destinations,
+    },
+  });
+}));
+
+router.delete('/meta/social-posts/:id/schedule', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const SaasSocialPost = require('../models/SaasSocialPost');
+  const post = await SaasSocialPost.findOne({
+    _id: req.params.id,
+    client_id: req.tenant.clientId,
+  });
+  if (!post) return res.status(404).json({ ok: false, message: 'Scheduled post not found' });
+
+  try {
+    const { getAgenda, isAgendaReady, JOB_NAMES } = require('../config/agenda');
+    if (isAgendaReady()) {
+      await getAgenda().cancel({
+        name: JOB_NAMES.SOCIAL_POST,
+        'data.postId': String(post._id),
+        'data.clientId': req.tenant.clientId,
+      });
+    }
+  } catch (err) {
+    console.warn('[meta social] cancel schedule:', err.message);
+  }
+
+  post.status = 'cancelled';
+  post.agendaJobId = '';
+  await post.save();
+  res.json({ ok: true, message: 'Schedule cancelled', data: { id: String(post._id) } });
+}));
+
 router.get('/meta/instagram/media', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
   const limit = req.query.limit;
   const data = await MetaAdsService.listInstagramMedia(req.tenant.clientId, { limit });

@@ -277,6 +277,9 @@ function mapPagePosts(posts) {
     picture: p.full_picture || '',
     permalink: p.permalink_url || '',
     shares: Number(p.shares?.count) || 0,
+    likes: Number(p.reactions?.summary?.total_count) || Number(p.likes?.summary?.total_count) || 0,
+    comments: Number(p.comments?.summary?.total_count) || 0,
+    platform: 'facebook',
   }));
 }
 
@@ -319,7 +322,7 @@ async function listInstagramMedia(clientId, { limit = 20 } = {}) {
   try {
     const res = await graphGet(`/${igUserId}/media`, pageToken, {
       fields:
-        'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,boost_eligibility_info',
+        'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count,boost_eligibility_info',
       limit: cap,
     });
     const rows = Array.isArray(res?.data) ? res.data : [];
@@ -336,6 +339,9 @@ async function listInstagramMedia(clientId, { limit = 20 } = {}) {
         thumbnailUrl: m.thumbnail_url || m.media_url || '',
         permalink: m.permalink || '',
         timestamp: m.timestamp || null,
+        likes: Number(m.like_count) || 0,
+        comments: Number(m.comments_count) || 0,
+        platform: 'instagram',
         eligible,
         ineligibilityReason: eligible
           ? ''
@@ -370,7 +376,8 @@ async function listPagePosts(clientId, { limit = 20 } = {}) {
   if (!pageId) throw new Error('Select a Facebook Page first');
 
   const cap = Math.min(Math.max(Number(limit) || 20, 1), 50);
-  const fields = 'id,message,created_time,full_picture,permalink_url,shares';
+  const fields =
+    'id,message,created_time,full_picture,permalink_url,shares,reactions.summary(true),comments.summary(true)';
   const pageToken = await ensurePageAccessToken(client, pageId);
 
   // Prefer published_posts (Page's own posts). Fall back to posts / feed.
@@ -1302,6 +1309,241 @@ async function publishInstagramImage(clientId, { imageUrl, caption = '' } = {}) 
 }
 
 /**
+ * Publish to the selected Facebook Page (feed / photos / video).
+ * mediaType: 'IMAGE' | 'CAROUSEL' | 'VIDEO' | 'TEXT'
+ * Requires pages_manage_posts on the Page token (add in Login for Business config).
+ */
+async function publishFacebookPagePost(
+  clientId,
+  { mediaType = 'IMAGE', imageUrl = '', videoUrl = '', imageUrls = [], caption = '' } = {}
+) {
+  const client = await loadClientWithMeta(clientId);
+  const pageId = client.metaAds?.pageId;
+  if (!pageId) throw new Error('Select a Facebook Page first');
+
+  const pageToken = await ensurePageAccessToken(client, pageId);
+  const captionText = String(caption || '').slice(0, 63206);
+  const type = String(mediaType || 'IMAGE').toUpperCase();
+
+  const urls = Array.isArray(imageUrls)
+    ? imageUrls.map((u) => String(u || '').trim()).filter((u) => /^https?:\/\//i.test(u))
+    : [];
+  const singleImage = String(imageUrl || '').trim();
+  if (singleImage && /^https?:\/\//i.test(singleImage) && !urls.includes(singleImage)) {
+    urls.unshift(singleImage);
+  }
+  const video = String(videoUrl || '').trim();
+
+  const mapFbPermError = (err) => {
+    const msg = formatGraphError(err);
+    if (/permission|(#200)|(#10)|pages_manage_posts|OAuthException/i.test(msg)) {
+      return new Error(
+        `${msg} Reconnect Facebook after adding pages_manage_posts to the Login for Business configuration, and grant Page access.`
+      );
+    }
+    return new Error(msg);
+  };
+
+  try {
+    if (type === 'VIDEO' || type === 'REELS') {
+      if (!/^https?:\/\//i.test(video)) {
+        throw new Error('videoUrl must be a public http(s) URL Meta can fetch');
+      }
+      const created = await graphPost(`/${pageId}/videos`, pageToken, {
+        file_url: video,
+        description: captionText,
+        published: true,
+      });
+      const id = String(created?.id || '').trim();
+      if (!id) throw new Error('Meta did not return a Facebook video id');
+      return {
+        platform: 'facebook',
+        postId: id,
+        mediaType: 'VIDEO',
+        pageId: String(pageId),
+        pageName: client.metaAds.pageName || '',
+        caption: captionText,
+        videoUrl: video,
+      };
+    }
+
+    if (type === 'CAROUSEL' || (type === 'IMAGE' && urls.length > 1)) {
+      if (urls.length < 2) throw new Error('Facebook album posts need at least 2 image URLs');
+      const mediaFbids = [];
+      for (const url of urls.slice(0, 10)) {
+        const photo = await graphPost(`/${pageId}/photos`, pageToken, {
+          url,
+          published: false,
+        });
+        const pid = String(photo?.id || '').trim();
+        if (!pid) throw new Error('Meta did not return an unpublished photo id');
+        mediaFbids.push(pid);
+      }
+      const attached = mediaFbids.map((id) => ({ media_fbid: id }));
+      const feed = await graphPost(`/${pageId}/feed`, pageToken, {
+        message: captionText,
+        attached_media: JSON.stringify(attached),
+        published: true,
+      });
+      const id = String(feed?.id || '').trim();
+      if (!id) throw new Error('Meta did not return a Facebook album post id');
+      return {
+        platform: 'facebook',
+        postId: id,
+        mediaType: 'CAROUSEL',
+        pageId: String(pageId),
+        pageName: client.metaAds.pageName || '',
+        caption: captionText,
+        imageUrls: urls,
+      };
+    }
+
+    if (type === 'TEXT' || (!urls.length && !video)) {
+      if (!captionText.trim()) throw new Error('Add a caption/message for a text post');
+      const feed = await graphPost(`/${pageId}/feed`, pageToken, {
+        message: captionText,
+        published: true,
+      });
+      const id = String(feed?.id || '').trim();
+      if (!id) throw new Error('Meta did not return a Facebook post id');
+      return {
+        platform: 'facebook',
+        postId: id,
+        mediaType: 'TEXT',
+        pageId: String(pageId),
+        pageName: client.metaAds.pageName || '',
+        caption: captionText,
+      };
+    }
+
+    // Single IMAGE
+    const url = urls[0] || '';
+    if (!/^https?:\/\//i.test(url)) {
+      throw new Error('Upload an image on Khana or provide a public image URL');
+    }
+    const photo = await graphPost(`/${pageId}/photos`, pageToken, {
+      url,
+      caption: captionText,
+      published: true,
+    });
+    const id = String(photo?.id || photo?.post_id || '').trim();
+    if (!id) throw new Error('Meta did not return a Facebook photo id');
+    return {
+      platform: 'facebook',
+      postId: id,
+      mediaType: 'IMAGE',
+      pageId: String(pageId),
+      pageName: client.metaAds.pageName || '',
+      caption: captionText,
+      imageUrl: url,
+    };
+  } catch (err) {
+    if (
+      err.message?.includes('at least') ||
+      err.message?.includes('Upload') ||
+      err.message?.includes('videoUrl') ||
+      err.message?.includes('caption')
+    ) {
+      throw err;
+    }
+    throw mapFbPermError(err);
+  }
+}
+
+/**
+ * Publish to facebook, instagram, or both. Returns per-destination results.
+ * destinations: string[] e.g. ['facebook','instagram']
+ */
+async function publishSocialPost(clientId, payload = {}) {
+  const raw = payload.destinations || payload.destination || ['instagram'];
+  const list = (Array.isArray(raw) ? raw : [raw])
+    .map((d) => String(d || '').toLowerCase().trim())
+    .filter(Boolean);
+  const wantsFb = list.includes('facebook') || list.includes('fb') || list.includes('both');
+  const wantsIg =
+    list.includes('instagram') || list.includes('ig') || list.includes('both') || list.length === 0;
+
+  const results = { facebook: null, instagram: null, errors: [] };
+
+  if (wantsFb) {
+    try {
+      results.facebook = await publishFacebookPagePost(clientId, payload);
+    } catch (err) {
+      results.errors.push({ platform: 'facebook', message: err.message });
+    }
+  }
+
+  if (wantsIg) {
+    try {
+      const igType =
+        String(payload.mediaType || 'IMAGE').toUpperCase() === 'TEXT'
+          ? 'IMAGE'
+          : payload.mediaType || 'IMAGE';
+      if (igType === 'IMAGE' && !(payload.imageUrl || (payload.imageUrls && payload.imageUrls[0]))) {
+        throw new Error('Instagram posts need at least one image or video');
+      }
+      results.instagram = await publishInstagramMedia(clientId, {
+        ...payload,
+        mediaType: igType === 'TEXT' ? 'IMAGE' : igType,
+      });
+      if (results.instagram) results.instagram.platform = 'instagram';
+    } catch (err) {
+      results.errors.push({ platform: 'instagram', message: err.message });
+    }
+  }
+
+  if (!results.facebook && !results.instagram) {
+    throw new Error(
+      results.errors.map((e) => `${e.platform}: ${e.message}`).join(' | ') || 'Publish failed'
+    );
+  }
+
+  return results;
+}
+
+async function listOrganicPosts(clientId, { limit = 20 } = {}) {
+  const [fb, ig] = await Promise.allSettled([
+    listPagePosts(clientId, { limit }),
+    listInstagramMedia(clientId, { limit }),
+  ]);
+
+  const facebook = fb.status === 'fulfilled' ? fb.value : { posts: [], error: fb.reason?.message };
+  const instagram =
+    ig.status === 'fulfilled' ? ig.value : { media: [], error: ig.reason?.message, connected: false };
+
+  const items = [
+    ...(facebook.posts || []).map((p) => ({
+      ...p,
+      platform: 'facebook',
+      createdAt: p.createdTime,
+    })),
+    ...(instagram.media || []).map((m) => ({
+      id: m.id,
+      message: m.caption,
+      picture: m.thumbnailUrl || m.mediaUrl,
+      permalink: m.permalink,
+      likes: m.likes,
+      comments: m.comments,
+      shares: 0,
+      platform: 'instagram',
+      createdAt: m.timestamp,
+      mediaType: m.mediaType,
+    })),
+  ].sort((a, b) => {
+    const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return tb - ta;
+  });
+
+  return {
+    items,
+    facebookError: facebook.error || null,
+    instagramError: instagram.error || null,
+    instagramConnected: instagram.connected !== false,
+  };
+}
+
+/**
  * Send a single Conversions API test event to the client's Meta Pixel (Events Manager).
  */
 async function sendPixelTestEvent(clientId, { eventName = 'Lead', testEventCode = '' } = {}) {
@@ -1385,9 +1627,12 @@ module.exports = {
   updateSelection,
   listPagePosts,
   listInstagramMedia,
+  listOrganicPosts,
   publishInstagramImage,
   publishInstagramMedia,
   publishInstagramVideoBuffer,
+  publishFacebookPagePost,
+  publishSocialPost,
   sendPixelTestEvent,
   getInsights,
   boostPost,

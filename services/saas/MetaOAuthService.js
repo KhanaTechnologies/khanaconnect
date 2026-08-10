@@ -27,8 +27,9 @@ const META_OAUTH_REDIRECT_URI = resolveOAuthRedirectUri();
 const DASHBOARD_URL = (process.env.DASHBOARD_URL || 'https://khanatechnologies.co.za').replace(/\/$/, '');
 
 // Login for Business rejects many scopes on the OAuth `scope=` URL (same as `email`).
-// Page feed / manage-ads permissions belong in a Login for Business *configuration*
+// Page feed / manage-ads / pages_manage_posts belong in a Login for Business *configuration*
 // (config_id), not the authorize scope list — see META_LOGIN_CONFIG_ID.
+// Add pages_manage_posts (and ideally pages_manage_engagement) in that Meta config for Page publish.
 const OAUTH_SCOPES = [
   'public_profile',
   'pages_show_list',
