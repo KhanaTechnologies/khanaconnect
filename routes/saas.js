@@ -143,6 +143,7 @@ router.post('/meta/oauth/complete', wrapRoute(async (req, res) => {
 }));
 
 router.use(tenantResolver);
+router.use(require('../helpers/readOnlyAccess').enforceReadOnlyWrites);
 
 router.post('/whatsapp/accounts', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
   const { waba_id, phone_number_id, access_token, mode = 'embedded' } = req.body;

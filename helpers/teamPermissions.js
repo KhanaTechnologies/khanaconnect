@@ -13,6 +13,8 @@ const DEFAULT_PERMISSIONS = {
   email_center: false,
   email_builder: false,
   newsletter: false,
+  /** When true: can view modules, but Create / Edit / Delete are blocked. */
+  readOnly: false,
 };
 
 const MODULE_PERMISSION_KEYS = [
@@ -48,6 +50,7 @@ function fullPermissions() {
     email_center: true,
     email_builder: true,
     newsletter: true,
+    readOnly: false,
   };
 }
 
@@ -69,6 +72,7 @@ function permissionsFromClient(client) {
     email_center: !!p.email_center,
     email_builder: !!p.email_builder,
     newsletter: !!p.newsletter,
+    readOnly: !!p.readOnly,
   };
 }
 
@@ -88,6 +92,7 @@ function normalizePermissions(input = {}) {
     email_center: !!input.email_center,
     email_builder: !!input.email_builder,
     newsletter: !!input.newsletter,
+    readOnly: !!input.readOnly,
   };
 }
 
@@ -114,6 +119,9 @@ function applyClientFeatureAccess(memberPerms, client) {
   for (const key of FEATURE_ACCESS_KEYS) {
     merged[key] = dashboardOk && !!caps[key];
   }
+
+  // readOnly is member-controlled (not intersected with client caps)
+  merged.readOnly = !!member.readOnly;
 
   return merged;
 }

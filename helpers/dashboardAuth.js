@@ -5,6 +5,11 @@ const {
   isClientSubscriptionActive,
   subscriptionBlockedResponse,
 } = require('./clientSubscription');
+const {
+  isWriteMethod,
+  isReadOnlyWriteAllowed,
+  readOnlyBlockedResponse,
+} = require('./readOnlyAccess');
 
 /**
  * Dashboard API auth + team member permission enforcement.
@@ -78,6 +83,14 @@ function createDashboardAuth(moduleKey = null) {
         return res.status(403).json({
           error: `You do not have permission to access ${moduleKeys.join(' or ')}`,
         });
+      }
+
+      if (
+        permissions.readOnly &&
+        isWriteMethod(req.method) &&
+        !isReadOnlyWriteAllowed(req)
+      ) {
+        return readOnlyBlockedResponse(res);
       }
 
       return next();

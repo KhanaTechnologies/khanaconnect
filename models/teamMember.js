@@ -31,6 +31,7 @@ const permissionSchema = {
   email_center: { type: Boolean, default: false },
   email_builder: { type: Boolean, default: false },
   newsletter: { type: Boolean, default: false },
+  readOnly: { type: Boolean, default: false },
 };
 
 const teamMemberSchema = new mongoose.Schema(

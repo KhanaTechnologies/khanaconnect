@@ -13,6 +13,20 @@ const PERMISSION_KEYS = [
   'voting',
 ];
 
+const ALL_MODULES_VIEW = {
+  dashboard: true,
+  products: true,
+  orders: true,
+  bookings: true,
+  services: true,
+  staff: true,
+  categories: true,
+  sales: true,
+  preorder: true,
+  voting: true,
+  readOnly: true,
+};
+
 const ROLE_PRESETS = {
   manager: {
     id: 'manager',
@@ -29,6 +43,7 @@ const ROLE_PRESETS = {
       sales: true,
       preorder: true,
       voting: true,
+      readOnly: false,
     },
   },
   frontDesk: {
@@ -46,6 +61,7 @@ const ROLE_PRESETS = {
       sales: false,
       preorder: false,
       voting: false,
+      readOnly: false,
     },
   },
   marketing: {
@@ -63,6 +79,7 @@ const ROLE_PRESETS = {
       sales: true,
       preorder: true,
       voting: true,
+      readOnly: false,
     },
   },
   catalog: {
@@ -80,23 +97,24 @@ const ROLE_PRESETS = {
       sales: false,
       preorder: false,
       voting: false,
+      readOnly: false,
     },
   },
   viewOnly: {
     id: 'viewOnly',
     label: 'View only',
-    description: 'Dashboard access with read-only modules enabled',
+    description: 'Can open all modules, but cannot Create, Edit, or Delete',
     permissions: {
-      dashboard: true,
-      products: true,
-      orders: true,
-      bookings: true,
-      services: true,
-      staff: false,
-      categories: true,
-      sales: false,
-      preorder: false,
-      voting: false,
+      ...ALL_MODULES_VIEW,
+    },
+  },
+  /** App Review / external testers — same as view only (browse everything, no CUD). */
+  metaReviewer: {
+    id: 'metaReviewer',
+    label: 'Meta reviewer',
+    description: 'See all tabs for App Review; Create / Edit / Delete blocked (Meta test events still allowed)',
+    permissions: {
+      ...ALL_MODULES_VIEW,
     },
   },
 };

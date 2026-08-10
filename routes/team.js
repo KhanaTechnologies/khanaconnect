@@ -29,6 +29,7 @@ const {
 } = require('../helpers/teamInvite');
 const {
   listPermissionPresets,
+  permissionsFromPreset,
   resolveNewMemberPermissions,
 } = require('../helpers/teamPermissionPresets');
 const { getTeamSeatUsage, assertTeamSeatAvailable } = require('../helpers/teamSeats');
@@ -104,6 +105,7 @@ router.post('/accept-invite/:token', resetLimiter, wrapRoute(async (req, res) =>
 }));
 
 router.use(requireTeamSession());
+router.use(require('../helpers/readOnlyAccess').enforceReadOnlyWrites);
 
 router.get('/permission-presets', wrapRoute(async (req, res) => {
   res.json({ success: true, presets: listPermissionPresets() });
@@ -431,14 +433,21 @@ router.put('/members/:id/permissions', requireTeamManager(), wrapRoute(async (re
     return res.status(400).json({ error: 'Owner permissions cannot be changed' });
   }
 
-  if (!req.body.permissions || typeof req.body.permissions !== 'object') {
-    return res.status(400).json({ error: 'permissions object is required' });
+  const fromPreset = req.body.presetId ? permissionsFromPreset(req.body.presetId) : null;
+  if (req.body.presetId && !fromPreset) {
+    return res.status(400).json({ error: 'Invalid presetId' });
   }
 
-  member.permissions = normalizePermissions({
-    ...member.permissions?.toObject?.() || member.permissions,
-    ...req.body.permissions,
-  });
+  if (!fromPreset && (!req.body.permissions || typeof req.body.permissions !== 'object')) {
+    return res.status(400).json({ error: 'permissions object or presetId is required' });
+  }
+
+  member.permissions = fromPreset
+    ? fromPreset
+    : normalizePermissions({
+        ...member.permissions?.toObject?.() || member.permissions,
+        ...req.body.permissions,
+      });
   await member.save();
 
   res.json({
