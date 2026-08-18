@@ -31,6 +31,9 @@ const saasWhatsAppThreadSchema = new mongoose.Schema(
     /** Click-to-WhatsApp click id from inbound ad referral (Conversions API). */
     ctwa_clid: { type: String, default: '', trim: true },
     ctwa_clid_at: { type: Date, default: null },
+    /** Last inbound timestamp we emailed about for the 24h session window closing. */
+    window_close_alert_inbound_at: { type: Date, default: null },
+    window_close_alert_at: { type: Date, default: null },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );

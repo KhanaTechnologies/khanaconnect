@@ -566,6 +566,18 @@ router.get('/whatsapp/inbox/unread', requireRoles('owner', 'manager', 'operator'
   res.json({ ok: true, data });
 }));
 
+router.get('/whatsapp/inbox/window-alerts', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const { processWindowCloseAlertsForClient } = require('../helpers/whatsappWindowCloseAlerts');
+  const data = await processWindowCloseAlertsForClient(req.tenant.clientId, { dryRun: true });
+  res.json({ ok: true, data });
+}));
+
+router.post('/whatsapp/inbox/window-alerts/run', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const { processWindowCloseAlertsForClient } = require('../helpers/whatsappWindowCloseAlerts');
+  const data = await processWindowCloseAlertsForClient(req.tenant.clientId, { dryRun: false });
+  res.json({ ok: true, data });
+}));
+
 router.get('/whatsapp/inbox/assignees', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
   const assignees = await WhatsAppInboxService.listAssignees(req.tenant.clientId);
   res.json({ ok: true, data: { assignees } });
@@ -1713,6 +1725,13 @@ router.post('/admin/whatsapp/inbox/reprocess', adminOnly, wrapRoute(async (req, 
   const limit = Number(req.body?.limit) || 50;
   const onlyUnprocessed = req.body?.onlyUnprocessed !== false;
   const data = await WhatsAppInboxService.reprocessArchivedWebhooks({ limit, onlyUnprocessed });
+  res.json({ ok: true, data });
+}));
+
+router.post('/admin/whatsapp/inbox/window-alerts/run', adminOnly, wrapRoute(async (req, res) => {
+  const { processAllWhatsAppWindowCloseAlerts } = require('../helpers/whatsappWindowCloseAlerts');
+  const clientId = String(req.body?.clientId || req.body?.client_id || '').trim();
+  const data = await processAllWhatsAppWindowCloseAlerts({ clientId });
   res.json({ ok: true, data });
 }));
 

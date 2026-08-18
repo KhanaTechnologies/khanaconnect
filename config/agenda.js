@@ -13,6 +13,7 @@ const JOB_NAMES = {
   CRM_TASK_REMINDERS: 'crm:task-reminders',
   NEWSLETTER_CAMPAIGN: 'newsletter-campaign:send',
   SOCIAL_POST: 'meta-social:publish',
+  WHATSAPP_WINDOW_ALERT: 'whatsapp-inbox:window-close-alert',
 };
 
 let agendaInstance = null;
@@ -115,6 +116,7 @@ function registerJobHandlers(agenda) {
   const { processCrmTaskReminders } = require('../jobs/handlers/processCrmTaskReminders');
   const { processNewsletterCampaign } = require('../jobs/handlers/processNewsletterCampaign');
   const { processScheduledSocialPost } = require('../jobs/handlers/processScheduledSocialPost');
+  const { processWhatsAppWindowCloseAlerts } = require('../jobs/handlers/processWhatsAppWindowCloseAlerts');
 
   agenda.define(
     JOB_NAMES.EVENT_BATCH,
@@ -235,6 +237,12 @@ function registerJobHandlers(agenda) {
     JOB_NAMES.CRM_TASK_REMINDERS,
     { concurrency: 1, lockLifetime: 5 * 60 * 1000 },
     async () => processCrmTaskReminders()
+  );
+
+  agenda.define(
+    JOB_NAMES.WHATSAPP_WINDOW_ALERT,
+    { concurrency: 1, lockLifetime: 10 * 60 * 1000 },
+    async () => processWhatsAppWindowCloseAlerts()
   );
 
   agenda.define(
@@ -361,6 +369,10 @@ async function startJobScheduler() {
   const crmReminderInterval = process.env.CRM_TASK_REMINDER_INTERVAL || '15 minutes';
   await agendaInstance.every(crmReminderInterval, JOB_NAMES.CRM_TASK_REMINDERS, {});
   console.log(`🗂️ CRM reminder job scheduled every ${crmReminderInterval}`);
+
+  const waWindowAlertInterval = process.env.WHATSAPP_WINDOW_ALERT_INTERVAL || '15 minutes';
+  await agendaInstance.every(waWindowAlertInterval, JOB_NAMES.WHATSAPP_WINDOW_ALERT, {});
+  console.log(`📱 WhatsApp window-close alert job scheduled every ${waWindowAlertInterval}`);
 
   console.log('✅ MongoDB job scheduler (Agenda) started');
   return agendaInstance;
