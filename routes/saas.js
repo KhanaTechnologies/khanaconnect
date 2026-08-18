@@ -108,8 +108,13 @@ router.post('/webhooks/meta-ads', verifyMetaWebhookSignature('META_APP_SECRET'),
 
 // Public PayFast ITN endpoint (signature-verified) for credit topups.
 router.post('/billing/payfast/itn', wrapRoute(async (req, res) => {
-  const result = await PayFastCreditsService.handleTopupItn(req.body || {});
-  res.json({ ok: true, data: result });
+  try {
+    const result = await PayFastCreditsService.handleTopupItn(req.body || {});
+    res.status(200).json({ ok: true, data: result });
+  } catch (err) {
+    console.warn('[payfast credits itn]', err.message);
+    res.status(200).json({ ok: false, message: 'ITN rejected' });
+  }
 }));
 
 // Meta (Facebook) OAuth callback — public; secured via signed state JWT.
@@ -1603,9 +1608,13 @@ router.get('/billing', requireRoles('owner', 'manager', 'billing_admin', 'viewer
   });
 }));
 
-router.post('/billing/topup/manual', requireRoles('billing_admin', 'owner', 'manager'), wrapRoute(async (req, res) => {
-  const { client_id, credits, amount, reference } = req.body;
-  const targetClient = String(client_id || req.tenant.clientId);
+router.post('/billing/topup/manual', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const { credits, amount, reference, client_id } = req.body;
+  const requested = String(client_id || '').trim();
+  if (requested && requested !== String(req.tenant.clientId)) {
+    return res.status(403).json({ ok: false, message: 'Cannot credit another workspace' });
+  }
+  const targetClient = String(req.tenant.clientId);
   const result = await BillingService.topUpCredits({
     clientId: targetClient,
     credits: Number(credits || 0),

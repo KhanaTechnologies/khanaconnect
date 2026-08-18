@@ -1,5 +1,7 @@
 const crypto = require('crypto');
 const BillingService = require('./BillingService');
+const SaasTransaction = require('../../models/SaasTransaction');
+const { validateItnWithPayfast } = require('../../helpers/payfast');
 
 function verifyPayFastSignature(payload, passphrase = '') {
   const incomingSig = payload.signature || '';
@@ -16,18 +18,46 @@ function verifyPayFastSignature(payload, passphrase = '') {
 
 class PayFastCreditsService {
   static async handleTopupItn(payload) {
+    const body = payload || {};
     const passphrase = process.env.PAYFAST_PASSPHRASE || '';
-    if (!verifyPayFastSignature(payload, passphrase)) {
+    if (!passphrase) {
+      throw new Error('PAYFAST_PASSPHRASE is not configured');
+    }
+    if (!verifyPayFastSignature(body, passphrase)) {
       throw new Error('Invalid PayFast signature');
     }
 
-    const clientId = String(payload.custom_str1 || payload.name_first || '').trim();
+    const confirmed = await validateItnWithPayfast(body);
+    if (!confirmed) {
+      throw new Error('PayFast ITN did not validate');
+    }
+
+    if (String(body.payment_status || '').trim() !== 'COMPLETE') {
+      return { ignored: true, reason: body.payment_status || 'not_complete' };
+    }
+
+    const clientId = String(body.custom_str1 || '').trim();
     if (!clientId) throw new Error('Missing client identifier in PayFast ITN payload');
 
-    const amount = Number(payload.amount_gross || payload.amount_fee || 0);
+    const amount = Number(body.amount_gross || 0);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new Error('Invalid amount_gross');
+    }
+
     const creditsMultiplier = Number(process.env.CREDITS_PER_ZAR || 1);
     const credits = Number((amount * creditsMultiplier).toFixed(4));
-    const reference = payload.m_payment_id || payload.pf_payment_id || `pf-${Date.now()}`;
+    const reference = String(body.pf_payment_id || body.m_payment_id || '').trim();
+    if (!reference) throw new Error('Missing PayFast payment reference');
+
+    const existing = await SaasTransaction.findOne({
+      method: 'payfast',
+      type: 'topup',
+      reference,
+      status: 'success',
+    });
+    if (existing) {
+      return { alreadyProcessed: true, clientId: existing.client_id, reference };
+    }
 
     return BillingService.topUpCredits({
       clientId,
@@ -35,7 +65,11 @@ class PayFastCreditsService {
       amount,
       method: 'payfast',
       reference,
-      metadata: payload,
+      metadata: {
+        pf_payment_id: body.pf_payment_id,
+        m_payment_id: body.m_payment_id,
+        merchant_id: body.merchant_id,
+      },
     });
   }
 }

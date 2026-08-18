@@ -1957,7 +1957,7 @@ router.post('/:clientId/analytics/test-connection',
 // --------------------
 
 // Get client ad integration settings
-router.get('/:clientId/ad-integrations', authenticateToken, wrapRoute(async (req, res) => {
+router.get('/:clientId/ad-integrations', authenticateToken, requireSelfOrAdmin('clientId'), wrapRoute(async (req, res) => {
   const client = await Client.findOne({ clientID: req.params.clientId })
     .select('metaAds googleAds tiktokAds pinterestAds trackingSettings trackingStats')
     .lean({ getters: true });
@@ -2064,7 +2064,7 @@ router.get('/debug/decrypted-values/:clientId', requireAdmin, wrapRoute(async (r
 
 
 // Update Meta Ads configuration
-router.put('/:clientId/ad-integrations/meta', authenticateToken, wrapRoute(async (req, res) => {
+router.put('/:clientId/ad-integrations/meta', authenticateToken, requireSelfOrAdmin('clientId'), wrapRoute(async (req, res) => {
   const { 
     pixelId, 
     accessToken, 
@@ -2131,7 +2131,7 @@ router.put('/:clientId/ad-integrations/meta', authenticateToken, wrapRoute(async
 }));
 
 // Update Google Ads configuration
-router.put('/:clientId/ad-integrations/google', authenticateToken, wrapRoute(async (req, res) => {
+router.put('/:clientId/ad-integrations/google', authenticateToken, requireSelfOrAdmin('clientId'), wrapRoute(async (req, res) => {
   const { 
     conversionId,
     apiKey,
@@ -2189,7 +2189,7 @@ router.put('/:clientId/ad-integrations/google', authenticateToken, wrapRoute(asy
 }));
 
 // Update TikTok Ads configuration (for future expansion)
-router.put('/:clientId/ad-integrations/tiktok', authenticateToken, wrapRoute(async (req, res) => {
+router.put('/:clientId/ad-integrations/tiktok', authenticateToken, requireSelfOrAdmin('clientId'), wrapRoute(async (req, res) => {
   const { pixelId, accessToken, enabled } = req.body;
 
   const updateData = {
@@ -2214,7 +2214,7 @@ router.put('/:clientId/ad-integrations/tiktok', authenticateToken, wrapRoute(asy
 }));
 
 // Update Pinterest Ads configuration (for future expansion)
-router.put('/:clientId/ad-integrations/pinterest', authenticateToken, wrapRoute(async (req, res) => {
+router.put('/:clientId/ad-integrations/pinterest', authenticateToken, requireSelfOrAdmin('clientId'), wrapRoute(async (req, res) => {
   const { adAccountId, accessToken, enabled } = req.body;
 
   const updateData = {
@@ -2286,7 +2286,7 @@ router.put('/:clientId/tracking-settings', authenticateToken, wrapRoute(async (r
 }));
 
 // Test Meta connection
-router.post('/:clientId/ad-integrations/meta/test', authenticateToken, wrapRoute(async (req, res) => {
+router.post('/:clientId/ad-integrations/meta/test', authenticateToken, requireSelfOrAdmin('clientId'), wrapRoute(async (req, res) => {
   const { pixelId, accessToken } = req.body;
   
   if (!pixelId || !accessToken) {
@@ -2312,7 +2312,7 @@ router.post('/:clientId/ad-integrations/meta/test', authenticateToken, wrapRoute
 }));
 
 // Test Google connection
-router.post('/:clientId/ad-integrations/google/test', authenticateToken, wrapRoute(async (req, res) => {
+router.post('/:clientId/ad-integrations/google/test', authenticateToken, requireSelfOrAdmin('clientId'), wrapRoute(async (req, res) => {
   const { conversionId, apiKey } = req.body;
   
   if (!conversionId) {
@@ -2338,7 +2338,7 @@ router.post('/:clientId/ad-integrations/google/test', authenticateToken, wrapRou
 }));
 
 // Get ad integration stats and performance
-router.get('/:clientId/ad-integrations/stats', authenticateToken, wrapRoute(async (req, res) => {
+router.get('/:clientId/ad-integrations/stats', authenticateToken, requireSelfOrAdmin('clientId'), wrapRoute(async (req, res) => {
   const client = await Client.findOne({ clientID: req.params.clientId });
   if (!client) return res.status(404).json({ error: 'Client not found' });
 
@@ -2427,7 +2427,7 @@ router.get('/:clientId/ad-integrations/stats', authenticateToken, wrapRoute(asyn
 }));
 
 // Bulk enable/disable ad platforms
-router.post('/:clientId/ad-integrations/bulk-update', authenticateToken, wrapRoute(async (req, res) => {
+router.post('/:clientId/ad-integrations/bulk-update', authenticateToken, requireSelfOrAdmin('clientId'), wrapRoute(async (req, res) => {
   const { platforms } = req.body; // e.g., { meta: true, google: false }
 
   const updateData = {};

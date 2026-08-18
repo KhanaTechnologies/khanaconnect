@@ -28,22 +28,27 @@ router.post('/', validateClient, wrapRoute(async (req, res) => {
         return res.status(400).json({ error: 'Missing required fields' });
     }
 
+    const owned = await Product.find({
+      _id: { $in: selectedProductIds },
+      clientID: clientId,
+    }).select('_id');
+    if (owned.length !== selectedProductIds.length) {
+      return res.status(400).json({ error: 'One or more products do not belong to this store' });
+    }
+
     const salesItem = new SalesItem({
         itemType,
-        selectedProductIds,
+        selectedProductIds: owned.map((p) => p._id),
         discountPercentage,
         startDate,
         endDate,
         clientID: clientId
     });
 
-    // Update salePercentage of selected products
-    await Promise.all(selectedProductIds.map(async (productId) => {
-        const product = await Product.findById(productId);
-        if (product) {
-            await Product.findByIdAndUpdate(productId, { salePercentage: discountPercentage }, { new: true });
-        }
-    }));
+    await Product.updateMany(
+      { _id: { $in: owned.map((p) => p._id) }, clientID: clientId },
+      { salePercentage: discountPercentage }
+    );
 
     await salesItem.save();
     res.status(201).json(salesItem);
@@ -57,13 +62,10 @@ router.delete('/:id', validateClient, wrapRoute(async (req, res) => {
     const salesItem = await SalesItem.findOneAndDelete({ _id: id, clientID: clientId });
     if (!salesItem) return res.status(404).json({ error: 'Sales item not found or unauthorized' });
 
-    // Reset salePercentage for affected products
-    await Promise.all(salesItem.selectedProductIds.map(async (productId) => {
-        const product = await Product.findById(productId);
-        if (product) {
-            await Product.findByIdAndUpdate(productId, { salePercentage: 0 }, { new: true });
-        }
-    }));
+    await Product.updateMany(
+      { _id: { $in: salesItem.selectedProductIds }, clientID: clientId },
+      { salePercentage: 0 }
+    );
 
     res.json({ message: 'Sales item deleted successfully' });
 }));

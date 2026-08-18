@@ -61,7 +61,19 @@ function createDashboardAuth(moduleKey = null) {
       const permissions = session.permissions || {};
 
       if (!session.member) {
+        if (session.isCustomerToken || session.isBuyerToken || session.isPurposeToken) {
+          return res.status(403).json({
+            error: 'Team member sign-in required. Please log out and sign in with your email and password.',
+          });
+        }
+
         if (session.isApiToken) {
+          const method = String(req.method || '').toUpperCase();
+          if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+            return res.status(403).json({
+              error: 'Storefront tokens cannot create or change dashboard data.',
+            });
+          }
           if (moduleKeys.length && !hasModuleAccess(permissions)) {
             return res.status(403).json({
               error: `You do not have permission to access ${moduleKeys.join(' or ')}`,

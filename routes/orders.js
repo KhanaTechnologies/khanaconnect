@@ -22,7 +22,7 @@ const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const { createDashboardAuth } = require('../helpers/dashboardAuth');
 const { recordTeamActivityFromRequest } = require('../helpers/teamActivity');
 const { normalizeOrderStatus, generateOrderNumber } = require('../helpers/orderStatus');
-const { deductLineStock, restockLineStock } = require('../helpers/productInventory');
+const { catalogUnitPrice, parseVariantFields } = require('../helpers/productUnitPrice');
 const OrderReturn = require('../models/OrderReturn');
 
 const authenticateToken = createDashboardAuth('orders');
@@ -182,7 +182,6 @@ router.post('/', authenticateToken, [
     const city = String(req.body.city || '').trim();
     const province = String(req.body.province || '').trim();
     const country = String(req.body.country || 'ZA').trim() || 'ZA';
-    const markPaid = req.body.paid === true || req.body.paid === 'true';
 
     // Validate customer exists and belongs to client
     const customerDoc = await Customer.findOne({ _id: customer, clientID: req.clientId });
@@ -208,15 +207,19 @@ router.post('/', authenticateToken, [
         }
 
         for (const orderItem of orderItems) {
-            const product = await Product.findById(orderItem.product);
+            const product = await Product.findOne({
+              _id: orderItem.product,
+              clientID: req.clientId,
+              status: { $ne: 'archived' },
+            });
+            if (!product) {
+              return res.status(400).json({ error: 'One or more products are invalid for this store' });
+            }
+            const parsed = parseVariantFields(orderItem.variant);
+            const unit = catalogUnitPrice(product, parsed.name, parsed.value || String(orderItem.variant || ''));
             for (const item of code.appliesTo) {
                 if (product.id.toString() === item.toString()) {
-                    if (product.salePercentage > 0) {
-                        const productCurrentPrice = (product.price * product.salePercentage) / 100;
-                        discountAmount += (productCurrentPrice * code.discount) / 100;
-                    } else {
-                        discountAmount += (product.price * code.discount) / 100;
-                    }
+                    discountAmount += (unit * code.discount) / 100;
                     isUsed = true;
                 }
             }
@@ -230,19 +233,38 @@ router.post('/', authenticateToken, [
 
     // Create OrderItem documents
     const orderItemsIds = await Promise.all(orderItems.map(async (orderItem) => {
-        const newOrderItem = new OrderItem(orderItem);
+        const product = await Product.findOne({
+          _id: orderItem.product,
+          clientID: req.clientId,
+          status: { $ne: 'archived' },
+        });
+        if (!product) {
+          throw Object.assign(new Error('Invalid product for this store'), { status: 400 });
+        }
+        const parsed = parseVariantFields(orderItem.variant);
+        const variantLabel = parsed.value || (typeof orderItem.variant === 'string' ? orderItem.variant : '');
+        const unit = catalogUnitPrice(product, parsed.name, variantLabel);
+        const quantity = Math.max(1, Number(orderItem.quantity) || 1);
+        const newOrderItem = new OrderItem({
+          product: product._id,
+          quantity,
+          variant: variantLabel || parsed.name,
+          variantPrice: unit,
+        });
         await newOrderItem.save();
         return newOrderItem._id;
     }));
 
-    // Calculate total price
     const totalPrices = await Promise.all(orderItemsIds.map(async (orderItemId) => {
-        const orderItem = await OrderItem.findById(orderItemId).populate('product', 'price');
-        return (orderItem.variant && orderItem.variantPrice ? orderItem.variantPrice : orderItem.product.price) * orderItem.quantity;
+        const orderItem = await OrderItem.findById(orderItemId);
+        return Number(orderItem.variantPrice || 0) * Number(orderItem.quantity || 0);
     }));
 
     const totalPrice = totalPrices.reduce((a, b) => a + b, 0);
-    const finalPrice = Math.max(0, totalPrice - discountAmount) + deliveryPrice;
+    const shipping = Math.max(0, Number(deliveryPrice) || 0);
+    const finalPrice = Math.max(0, totalPrice - discountAmount) + shipping;
+    const allowPaid = !!(req.teamSession && req.teamSession.member);
+    const markPaid = allowPaid && (req.body.paid === true || req.body.paid === 'true');
 
     const order = new Order({
         orderItems: orderItemsIds,
@@ -259,7 +281,7 @@ router.post('/', authenticateToken, [
         discountAmount,
         checkoutCode: discountCode,
         customer,
-        deliveryPrice,
+        deliveryPrice: shipping,
         deliveryType,
         clientID: req.clientId,
         finalPrice,

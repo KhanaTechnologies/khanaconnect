@@ -42,7 +42,12 @@ const validateTokenAndExtractClientID = (req, res, next) => {
     const tokenValue = token.split(' ')[1];
     try {
       const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
+      if (!decoded?.clientID) {
+        return res.status(403).json({ error: 'Forbidden - Invalid token' });
+      }
       req.clientID = decoded.clientID;
+      req.authClaims = decoded;
+      req.customerID = decoded.customerID ? String(decoded.customerID) : '';
       next();
     } catch (err) {
       console.error('Token verification error:', err);
@@ -74,6 +79,28 @@ async function requireStorefrontSubscription(req, res, next) {
 }
 
 const validatePaidStorefrontToken = [validateTokenAndExtractClientID, requireStorefrontSubscription];
+
+function isStaffCustomerRequest(req) {
+  const claims = req.authClaims || {};
+  return !!(claims.memberId || claims.loginType === 'team');
+}
+
+function requireStaffOrSelfCustomer(req, res, next) {
+  if (isStaffCustomerRequest(req)) return next();
+  const selfId = String(req.customerID || '');
+  if (!selfId) {
+    return res.status(403).json({ error: 'Customer sign-in required' });
+  }
+  if (req.params.id && String(req.params.id) !== selfId) {
+    return res.status(403).json({ error: 'You can only access your own account' });
+  }
+  return next();
+}
+
+function requireStaffCustomerAccess(req, res, next) {
+  if (isStaffCustomerRequest(req)) return next();
+  return res.status(403).json({ error: 'Staff sign-in required' });
+}
 
 // Admin check middleware
 const requireAdmin = async (req, res, next) => {
@@ -136,7 +163,13 @@ const normalizeEmailDomain = (email) => {
  * Endpoint: GET /api/v1/customer/wishlists?customerID=<mongoId>
  */
 router.get('/wishlists', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
-  const customerID = String(req.query.customerID || '').trim();
+  let customerID = String(req.query.customerID || '').trim();
+  if (!isStaffCustomerRequest(req)) {
+    if (!req.customerID) {
+      return res.status(403).json({ error: 'Customer sign-in required' });
+    }
+    customerID = req.customerID;
+  }
   if (!customerID) {
     return res.status(400).json({ error: 'customerID query parameter is required' });
   }
@@ -425,7 +458,7 @@ router.post('/cart/sync-checkout', validatePaidStorefrontToken, wrapRoute(async 
 }));
 
 // ADD TO CART
-router.post('/:id/cart', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
+router.post('/:id/cart', validatePaidStorefrontToken, requireStaffOrSelfCustomer, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
@@ -470,21 +503,20 @@ router.post('/:id/cart', validatePaidStorefrontToken, wrapRoute(async (req, res)
       });
     }
 
-    // Calculate final price (considering variants and sales)
-    let finalPrice = product.price;
-    if (variant && variant.price) {
-      finalPrice = variant.price;
-    }
-    
-    // Apply sale percentage if exists
-    if (product.salePercentage > 0) {
-      finalPrice = finalPrice * (1 - product.salePercentage / 100);
-    }
+    const { catalogUnitPrice } = require('../helpers/productUnitPrice');
+    const parsed = variant && typeof variant === 'object' ? variant : {};
+    const finalPrice = catalogUnitPrice(product, parsed.name, parsed.value);
+    const safeVariant = {
+      name: String(parsed.name || ''),
+      value: String(parsed.value || ''),
+      price: finalPrice,
+    };
 
     // Find existing item in cart
-    const existingItemIndex = customer.cart.findIndex(item => 
-      item.productId.toString() === productId && 
-      JSON.stringify(item.variant) === JSON.stringify(variant)
+    const existingItemIndex = customer.cart.findIndex((item) =>
+      item.productId.toString() === productId &&
+      String(item.variant?.name || '') === safeVariant.name &&
+      String(item.variant?.value || '') === safeVariant.value
     );
     
     if (existingItemIndex > -1) {
@@ -498,6 +530,7 @@ router.post('/:id/cart', validatePaidStorefrontToken, wrapRoute(async (req, res)
       }
       customer.cart[existingItemIndex].quantity = newQuantity;
       customer.cart[existingItemIndex].lastAddedAt = new Date();
+      customer.cart[existingItemIndex].price = finalPrice;
     } else {
       // Add new item
       customer.cart.push({
@@ -507,7 +540,7 @@ router.post('/:id/cart', validatePaidStorefrontToken, wrapRoute(async (req, res)
         price: finalPrice,
         image: product.images && product.images[0] || '',
         category: product.category?.name || '',
-        variant: variant || {},
+        variant: safeVariant,
         addedAt: new Date(),
         lastAddedAt: new Date()
       });
@@ -548,7 +581,7 @@ router.post('/:id/cart', validatePaidStorefrontToken, wrapRoute(async (req, res)
 }));
 
 // UPDATE CART ITEM QUANTITY
-router.put('/:id/cart/:productId', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
+router.put('/:id/cart/:productId', validatePaidStorefrontToken, requireStaffOrSelfCustomer, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
@@ -617,7 +650,7 @@ router.put('/:id/cart/:productId', validatePaidStorefrontToken, wrapRoute(async 
 }));
 
 // REMOVE FROM CART
-router.delete('/:id/cart/:productId', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
+router.delete('/:id/cart/:productId', validatePaidStorefrontToken, requireStaffOrSelfCustomer, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
@@ -653,7 +686,7 @@ router.delete('/:id/cart/:productId', validatePaidStorefrontToken, wrapRoute(asy
 }));
 
 // CLEAR CART
-router.delete('/:id/cart', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
+router.delete('/:id/cart', validatePaidStorefrontToken, requireStaffOrSelfCustomer, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
@@ -673,7 +706,7 @@ router.delete('/:id/cart', validatePaidStorefrontToken, wrapRoute(async (req, re
 }));
 
 // GET CART
-router.get('/:id/cart', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
+router.get('/:id/cart', validatePaidStorefrontToken, requireStaffOrSelfCustomer, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
@@ -720,7 +753,7 @@ router.get('/:id/cart', validatePaidStorefrontToken, wrapRoute(async (req, res) 
 // --------------------
 
 // ADD ORDER TO HISTORY
-router.post('/:id/orders', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
+router.post('/:id/orders', validatePaidStorefrontToken, requireStaffOrSelfCustomer, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
@@ -821,7 +854,7 @@ router.post('/:id/orders', validatePaidStorefrontToken, wrapRoute(async (req, re
 }));
 
 // GET ORDER HISTORY
-router.get('/:id/orders', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
+router.get('/:id/orders', validatePaidStorefrontToken, requireStaffOrSelfCustomer, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
@@ -845,7 +878,7 @@ router.get('/:id/orders', validatePaidStorefrontToken, wrapRoute(async (req, res
 // --------------------
 
 // SET CART REMINDER
-router.post('/:id/cart-reminder', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
+router.post('/:id/cart-reminder', validatePaidStorefrontToken, requireStaffCustomerAccess, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
@@ -874,7 +907,7 @@ router.post('/:id/cart-reminder', validatePaidStorefrontToken, wrapRoute(async (
 }));
 
 // SEND CART REMINDER MANUALLY
-router.post('/:id/send-cart-reminder', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
+router.post('/:id/send-cart-reminder', validatePaidStorefrontToken, requireStaffCustomerAccess, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
@@ -911,7 +944,7 @@ router.post('/:id/send-cart-reminder', validatePaidStorefrontToken, wrapRoute(as
 // --------------------
 
 // GET CUSTOMER SHOPPING HABITS
-router.get('/:id/shopping-habits', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
+router.get('/:id/shopping-habits', validatePaidStorefrontToken, requireStaffOrSelfCustomer, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
@@ -929,7 +962,7 @@ router.get('/:id/shopping-habits', validatePaidStorefrontToken, wrapRoute(async 
 }));
 
 // GET CUSTOMER ANALYTICS OVERVIEW
-router.get('/:id/analytics', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
+router.get('/:id/analytics', validatePaidStorefrontToken, requireStaffOrSelfCustomer, wrapRoute(async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
@@ -951,7 +984,7 @@ router.get('/:id/analytics', validatePaidStorefrontToken, wrapRoute(async (req, 
 // --------------------
 
 // GET CUSTOMER BEHAVIOR INSIGHTS
-router.get('/analytics/behavior', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
+router.get('/analytics/behavior', validatePaidStorefrontToken, requireStaffCustomerAccess, wrapRoute(async (req, res) => {
   try {
     const { period = 'monthly' } = req.query; // weekly, monthly, yearly
     
@@ -970,7 +1003,7 @@ router.get('/analytics/behavior', validatePaidStorefrontToken, wrapRoute(async (
 }));
 
 // GET PRODUCT POPULARITY ANALYTICS
-router.get('/analytics/products/popular', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
+router.get('/analytics/products/popular', validatePaidStorefrontToken, requireStaffCustomerAccess, wrapRoute(async (req, res) => {
   try {
     const { limit = 10, period = 'all' } = req.query;
     
@@ -988,7 +1021,7 @@ router.get('/analytics/products/popular', validatePaidStorefrontToken, wrapRoute
 }));
 
 // GET CUSTOMER PURCHASE PATTERNS
-router.get('/analytics/purchase-patterns', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
+router.get('/analytics/purchase-patterns', validatePaidStorefrontToken, requireStaffCustomerAccess, wrapRoute(async (req, res) => {
   try {
     const customers = await Customer.find({ clientID: req.clientID });
     const patterns = analyzePurchasePatterns(customers);
@@ -1004,7 +1037,7 @@ router.get('/analytics/purchase-patterns', validatePaidStorefrontToken, wrapRout
 }));
 
 // GET CART ABANDONMENT ANALYTICS
-router.get('/analytics/cart-abandonment', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
+router.get('/analytics/cart-abandonment', validatePaidStorefrontToken, requireStaffCustomerAccess, wrapRoute(async (req, res) => {
   try {
     const customers = await Customer.find({ 
       clientID: req.clientID,
@@ -1202,6 +1235,7 @@ router.post('/login', loginLimiter, validatePaidStorefrontToken, async (req, res
     const token = jwt.sign({ 
       customerID: customer._id, 
       clientID: customer.clientID, 
+      loginType: 'customer',
       isActive: true 
     }, getJwtSecret(), { 
       expiresIn: '7d' 
@@ -1481,7 +1515,7 @@ router.post('/reset-password/:token', async (req, res) => {
 // --------------------
 
 // GET CUSTOMER BY ID
-router.get('/:id', validatePaidStorefrontToken, async (req, res) => {
+router.get('/:id', validatePaidStorefrontToken, requireStaffOrSelfCustomer, async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID })
       .select('-passwordHash -emailVerificationToken -resetPasswordToken');
@@ -1501,7 +1535,7 @@ router.get('/:id', validatePaidStorefrontToken, async (req, res) => {
 });
 
 // GET ALL CUSTOMERS
-router.get('/', validatePaidStorefrontToken, async (req, res) => {
+router.get('/', validatePaidStorefrontToken, requireStaffCustomerAccess, async (req, res) => {
   try {
     const customers = await Customer.find({ clientID: req.clientID })
       .select('-passwordHash -emailVerificationToken -resetPasswordToken');
@@ -1518,7 +1552,7 @@ router.get('/', validatePaidStorefrontToken, async (req, res) => {
 });
 
 // UPDATE CUSTOMER
-router.put('/:id', validatePaidStorefrontToken, async (req, res) => {
+router.put('/:id', validatePaidStorefrontToken, requireStaffOrSelfCustomer, async (req, res) => {
   try {
     const updates = { ...req.body };
     
@@ -1531,6 +1565,7 @@ router.put('/:id', validatePaidStorefrontToken, async (req, res) => {
     delete updates.totalOrders;
     delete updates.totalSpent;
     delete updates.customerSince;
+    delete updates.isVerified;
     
     // Handle email update specially (check for duplicates)
     if (updates.emailAddress) {
@@ -1579,7 +1614,7 @@ router.put('/:id', validatePaidStorefrontToken, async (req, res) => {
 });
 
 // DELETE CUSTOMER
-router.delete('/:id', validatePaidStorefrontToken, async (req, res) => {
+router.delete('/:id', validatePaidStorefrontToken, requireStaffOrSelfCustomer, async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, clientID: req.clientID });
     if (!customer) {
@@ -1599,7 +1634,7 @@ router.delete('/:id', validatePaidStorefrontToken, async (req, res) => {
 });
 
 // CUSTOMER COUNT
-router.get('/get/count', validatePaidStorefrontToken, async (req, res) => {
+router.get('/get/count', validatePaidStorefrontToken, requireStaffCustomerAccess, async (req, res) => {
   try {
     const customerCount = await Customer.countDocuments({ clientID: req.clientID });
     

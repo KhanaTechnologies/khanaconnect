@@ -61,7 +61,7 @@ router.post(
         const files = req.files;
         if (!files || files.length < 1) return res.status(400).json({ error: 'No images provided' });
 
-        const category = await Category.findById(req.body.category);
+        const category = await Category.findOne({ _id: req.body.category, clientID: req.clientId });
         if (!category) return res.status(400).json({ error: 'Invalid category ID' });
 
         // Parse variants
@@ -157,10 +157,12 @@ router.put(
         const errors = validationResult(req);
         if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-        const product = await Product.findById(req.params.id);
+        const product = await Product.findOne({ _id: req.params.id, clientID: req.clientId });
         if (!product) return res.status(404).json({ error: 'Product not found' });
 
-        const category = req.body.category ? await Category.findById(req.body.category) : product.category;
+        const category = req.body.category
+          ? await Category.findOne({ _id: req.body.category, clientID: req.clientId })
+          : product.category;
         if (!category) return res.status(400).json({ error: 'Invalid category ID' });
 
         let variants = product.variants || [];
@@ -208,7 +210,9 @@ router.put(
           }
         }
 
-        const updatedProduct = await Product.findByIdAndUpdate(req.params.id, {
+        const updatedProduct = await Product.findOneAndUpdate(
+          { _id: req.params.id, clientID: req.clientId },
+          {
             productName: req.body.productName || product.productName,
             description: req.body.description || product.description,
             richDescription: req.body.richDescription || product.richDescription,
@@ -491,7 +495,7 @@ router.get('/:id', validateClient, wrapRoute(async (req, res) => {
 
 // DELETE product by ID
 router.delete('/:id', validateClient, wrapRoute(async (req, res) => {
-    const product = await Product.findByIdAndDelete(req.params.id);
+    const product = await Product.findOneAndDelete({ _id: req.params.id, clientID: req.clientId });
     if (!product) return res.status(404).json({ error: 'Product not found' });
     res.json({ message: 'Product deleted successfully' });
     recordTeamActivityFromRequest(req, {

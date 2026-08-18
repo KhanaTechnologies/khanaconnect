@@ -22,11 +22,19 @@ let warnedBookingMisconfig = false;
 
 /**
  * Order payment callback (`POST .../orders/update-order-payment`).
- * When ORDER_PAYMENT_WEBHOOK_ENABLED is true, requires ORDER_PAYMENT_WEBHOOK_SECRET and matching
- * `x-webhook-secret` or `x-order-webhook-secret`. Otherwise optional (no check).
+ * Requires ORDER_PAYMENT_WEBHOOK_ENABLED=true and a matching webhook secret.
+ * PayFast ITN uses a separate signed route and does not go through this helper.
  */
 function orderPaymentWebhookOk(req) {
-  if (!truthyEnv(process.env.ORDER_PAYMENT_WEBHOOK_ENABLED)) return true;
+  if (!truthyEnv(process.env.ORDER_PAYMENT_WEBHOOK_ENABLED)) {
+    if (!warnedOrderMisconfig) {
+      console.warn(
+        'ORDER_PAYMENT_WEBHOOK_ENABLED is not set — rejecting /orders/update-order-payment (use PayFast ITN)'
+      );
+      warnedOrderMisconfig = true;
+    }
+    return false;
+  }
 
   const expected = process.env.ORDER_PAYMENT_WEBHOOK_SECRET;
   if (!expected) {
@@ -45,11 +53,18 @@ function orderPaymentWebhookOk(req) {
 
 /**
  * Booking payment confirmation (`POST .../bookings/:id/payment-confirmation`).
- * When BOOKING_PAYMENT_WEBHOOK_ENABLED is true, requires BOOKING_PAYMENT_WEBHOOK_SECRET and matching
- * `x-webhook-secret` or `x-booking-webhook-secret`. Otherwise optional (no check).
+ * Requires BOOKING_PAYMENT_WEBHOOK_ENABLED=true and a matching webhook secret.
  */
 function bookingPaymentWebhookOk(req) {
-  if (!truthyEnv(process.env.BOOKING_PAYMENT_WEBHOOK_ENABLED)) return true;
+  if (!truthyEnv(process.env.BOOKING_PAYMENT_WEBHOOK_ENABLED)) {
+    if (!warnedBookingMisconfig) {
+      console.warn(
+        'BOOKING_PAYMENT_WEBHOOK_ENABLED is not set — rejecting /bookings/:id/payment-confirmation'
+      );
+      warnedBookingMisconfig = true;
+    }
+    return false;
+  }
 
   const expected = process.env.BOOKING_PAYMENT_WEBHOOK_SECRET;
   if (!expected) {

@@ -19,8 +19,11 @@ function tenantResolver(req, res, next) {
 
     const headerClientId = String(req.headers['x-client-id'] || '').trim();
     const bodyClientId = String(req.body?.client_id || '').trim();
-    const tokenClientId = String(claims.clientID || claims.client_id || '').trim();
-    const clientId = tokenClientId || headerClientId || bodyClientId;
+    const tokenClientId = String(
+      claims.clientID || claims.client_id || claims.clientId || ''
+    ).trim();
+    // Never let a purpose/state JWT pick tenant from headers (OAuth state is not a session).
+    const clientId = tokenClientId || (claims.purpose ? '' : headerClientId || bodyClientId);
 
     if (!clientId) {
       return res.status(400).json({ ok: false, message: 'Missing tenant context (client_id)' });
@@ -30,23 +33,24 @@ function tenantResolver(req, res, next) {
       return res.status(403).json({ ok: false, message: 'Tenant mismatch' });
     }
 
-    const inferredRole = String(
-      claims.role ||
-        claims.userRole ||
-        claims.user_role ||
-        claims.accountRole ||
-        claims.account_role ||
-        (claims.isAdmin === true ? 'admin' : '') ||
-        (claims.isOwner === true ? 'owner' : '') ||
-        // Existing client JWTs in this codebase often carry only clientID.
-        // For tenant-scoped SaaS operations, treat them as tenant owners by default.
-        (tokenClientId ? 'owner' : 'user')
-    ).toLowerCase();
+    let inferredRole = 'user';
+    const orgRole = String(claims.orgRole || '').toLowerCase();
+    if (claims.customerID || claims.loginType === 'customer' || claims.buyerId || claims.role === 'b2b') {
+      inferredRole = 'user';
+    } else if (claims.purpose) {
+      inferredRole = 'user';
+    } else if (orgRole === 'admin') {
+      inferredRole = 'owner';
+    } else if (orgRole) {
+      inferredRole = orgRole;
+    } else if (claims.loginType === 'team' || claims.memberId) {
+      inferredRole = 'member';
+    }
 
     req.tenant = {
       clientId,
       role: inferredRole,
-      userId: claims.userId || claims.id || '',
+      userId: claims.userId || claims.id || claims.memberId || '',
     };
     next();
   } catch (e) {
@@ -86,14 +90,11 @@ function requireRoles(...allowed) {
   const normalizedAllowed = allowed.map((r) => String(r).toLowerCase());
   return function (req, res, next) {
     const role = String(req.tenant?.role || 'user').toLowerCase();
-    if (role === 'admin') return next();
-    if (!normalizedAllowed.includes(role)) {
-      return res.status(403).json({
-        ok: false,
-        message: `Role ${role} is not allowed. Required one of: ${normalizedAllowed.join(', ')}`,
-      });
-    }
-    return next();
+    if (normalizedAllowed.includes(role)) return next();
+    return res.status(403).json({
+      ok: false,
+      message: `Role ${role} is not allowed. Required one of: ${normalizedAllowed.join(', ')}`,
+    });
   };
 }
 

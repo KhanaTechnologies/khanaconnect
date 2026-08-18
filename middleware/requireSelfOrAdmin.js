@@ -51,6 +51,16 @@ function requireSelfOrAdmin(paramName = 'clientId') {
         req.teamSession = null;
       }
 
+      const session = req.teamSession;
+      const isTeamMember = !!(session && session.member);
+      const isPlatformOwner = !!(session && session.platformAdmin);
+      if (!isTeamMember && !isPlatformOwner) {
+        return res.status(403).json({
+          success: false,
+          error: 'Team member sign-in required',
+        });
+      }
+
       return next();
     } catch (_err) {
       return res.status(401).json({ success: false, error: 'Invalid or expired token' });

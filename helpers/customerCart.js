@@ -1,11 +1,11 @@
 const Product = require('../models/product');
+const { catalogUnitPrice } = require('./productUnitPrice');
 
 function normalizeVariant(variant) {
-  if (!variant || typeof variant !== 'object') return {};
+  if (!variant || typeof variant !== 'object') return { name: '', value: '' };
   return {
-    name: variant.name || '',
-    value: variant.value || '',
-    price: Number(variant.price) || 0,
+    name: String(variant.name || ''),
+    value: String(variant.value || ''),
   };
 }
 
@@ -35,20 +35,7 @@ async function computeCartLine(product, quantity, variant) {
     return { ok: false, error: 'Insufficient stock available', availableStock };
   }
 
-  let finalPrice = product.price;
-  if (v.price > 0) {
-    finalPrice = v.price;
-  } else if (v.name && product.variants && product.variants.length > 0) {
-    const variantOption = product.variants.find((opt) => opt.name === v.name);
-    if (variantOption) {
-      const specificVariant = variantOption.values.find((val) => val.value === v.value);
-      if (specificVariant?.price) finalPrice = specificVariant.price;
-    }
-  }
-
-  if (product.salePercentage > 0) {
-    finalPrice = finalPrice * (1 - product.salePercentage / 100);
-  }
+  let finalPrice = catalogUnitPrice(product, v.name, v.value);
 
   return {
     ok: true,
@@ -59,7 +46,7 @@ async function computeCartLine(product, quantity, variant) {
       price: finalPrice,
       image: (product.images && product.images[0]) || '',
       category: product.category?.name || '',
-      variant: v,
+      variant: { ...v, price: finalPrice },
       addedAt: new Date(),
       lastAddedAt: new Date(),
     },
@@ -74,11 +61,14 @@ async function upsertCartLine(customer, productId, quantity, variant, clientID) 
   const computed = await computeCartLine(product, quantity, v);
   if (!computed.ok) return computed;
 
-  const existingIndex = customer.cart.findIndex(
-    (item) =>
+  const existingIndex = customer.cart.findIndex((item) => {
+    const existing = normalizeVariant(item.variant);
+    return (
       item.productId.toString() === productId.toString() &&
-      JSON.stringify(normalizeVariant(item.variant)) === JSON.stringify(v)
-  );
+      existing.name === v.name &&
+      existing.value === v.value
+    );
+  });
 
   if (existingIndex > -1) {
     const newQuantity = customer.cart[existingIndex].quantity + quantity;

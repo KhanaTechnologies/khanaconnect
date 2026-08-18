@@ -2,7 +2,7 @@ const jwt = require('jsonwebtoken');
 const Client = require('../models/client');
 const TeamMember = require('../models/teamMember');
 const { verifyJwtWithAnySecret, getJwtSecret } = require('./jwtSecret');
-const { canManageTeam, fullPermissions, applyClientFeatureAccess } = require('./teamPermissions');
+const { canManageTeam, applyClientFeatureAccess } = require('./teamPermissions');
 
 function signTeamSessionToken(client, member, options = {}) {
   const payload = {
@@ -44,18 +44,44 @@ async function resolveSessionFromToken(decoded) {
     };
   }
 
-  if (platformAdmin) {
+  if (decoded.customerID || decoded.loginType === 'customer') {
     return {
       client,
       member: null,
-      platformAdmin: true,
-      orgRole: 'owner',
-      permissions: fullPermissions(),
-      canManageTeam: true,
+      platformAdmin: false,
+      orgRole: null,
+      permissions: {},
+      canManageTeam: false,
+      isCustomerToken: true,
     };
   }
 
-  // Storefront / integration JWT (client.token) — not a team member session
+  if (decoded.buyerId || decoded.role === 'b2b' || decoded.loginType === 'b2b') {
+    return {
+      client,
+      member: null,
+      platformAdmin: false,
+      orgRole: null,
+      permissions: {},
+      canManageTeam: false,
+      isBuyerToken: true,
+    };
+  }
+
+  if (decoded.purpose) {
+    return {
+      client,
+      member: null,
+      platformAdmin: false,
+      orgRole: null,
+      permissions: {},
+      canManageTeam: false,
+      isPurposeToken: true,
+    };
+  }
+
+  // Storefront / integration JWT (client.token) — catalog reads only, not dashboard writes.
+  // Platform admin must use a team member session (handled above via memberId).
   if (decoded.loginType !== 'team') {
     const { permissionsFromClient } = require('./teamPermissions');
     return {
