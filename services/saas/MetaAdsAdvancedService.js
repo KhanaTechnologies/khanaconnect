@@ -1085,6 +1085,31 @@ async function ensureProductCatalog(clientId, { name } = {}) {
   const catalogName =
     String(name || '').trim() || `${client.companyName || 'Khana'} Catalog`;
 
+  // Prefer an existing BM catalog when create is blocked (Missing Permission /
+  // Product Catalog ToS not yet accepted via Commerce Manager).
+  try {
+    const owned = await graphGet(`/${businessId}/owned_product_catalogs`, token, {
+      fields: 'id,name',
+      limit: 25,
+    });
+    const existing = (owned?.data || [])[0];
+    if (existing?.id) {
+      client.metaAds.catalogId = String(existing.id);
+      client.metaAds.catalogName = String(existing.name || catalogName);
+      client.metaAds.catalogSyncedAt = client.metaAds.catalogSyncedAt || new Date();
+      client.markModified('metaAds');
+      await client.save();
+      return {
+        catalogId: String(existing.id),
+        catalogName: client.metaAds.catalogName,
+        created: false,
+        reusedExisting: true,
+      };
+    }
+  } catch (err) {
+    console.warn('[meta ads] list owned_product_catalogs failed:', formatGraphError(err));
+  }
+
   let catalogId;
   try {
     const created = await graphPost(`/${businessId}/owned_product_catalogs`, token, {
@@ -1092,7 +1117,12 @@ async function ensureProductCatalog(clientId, { name } = {}) {
     });
     catalogId = created.id;
   } catch (err) {
-    throwMeta(err, 'Create product catalog failed');
+    const msg = formatGraphError(err);
+    console.error('[meta ads] Create product catalog failed:', msg, err?.response?.data || '');
+    throw httpError(
+      `${msg}. Fix: (1) In Meta Commerce Manager for this Business, create a product catalog once (accepts Catalog Terms). (2) Ensure your Facebook user is Business Admin. (3) In App → Login for Business config, include business_management (and catalog_management if available). (4) Disconnect + reconnect Facebook in KhanaConnect and accept all permissions. Then Sync again.`,
+      400
+    );
   }
 
   if (!catalogId) {
