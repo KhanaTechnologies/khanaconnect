@@ -1018,6 +1018,7 @@ router.get('/meta/app-permissions', requireRoles('owner', 'manager', 'operator',
       connection: status,
       metaBusinessAdminHelp: META_BUSINESS_ADMIN_HELP,
       monitor,
+      monitorUiUrl: `${(process.env.PUBLIC_API_URL || process.env.API_PUBLIC_URL || '').replace(/\/$/, '')}/public/admin/api-monitor.html`,
     },
   });
 }));

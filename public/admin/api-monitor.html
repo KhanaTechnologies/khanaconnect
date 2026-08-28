@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Khana API Monitor — Meta & WhatsApp</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --ok: #4ade80;
+      --warn: #fbbf24;
+      --err: #f87171;
+      --border: #334155;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.45;
+    }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 1.25rem; }
+    h1 { font-size: 1.35rem; margin: 0 0 0.25rem; }
+    .sub { color: var(--muted); font-size: 0.9rem; margin-bottom: 1rem; }
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+      margin-bottom: 1rem;
+    }
+    label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.25rem; }
+    input, select, button {
+      font: inherit;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0b1220;
+      color: var(--text);
+      padding: 0.5rem 0.65rem;
+    }
+    input { width: 100%; }
+    .row { display: grid; gap: 0.75rem; grid-template-columns: 1fr; }
+    @media (min-width: 720px) {
+      .row.cols-2 { grid-template-columns: 1fr 1fr; }
+      .row.cols-3 { grid-template-columns: 2fr 1fr 1fr; }
+    }
+    button {
+      cursor: pointer;
+      background: var(--accent);
+      color: #0f172a;
+      border: none;
+      font-weight: 600;
+    }
+    button.secondary { background: transparent; color: var(--text); border: 1px solid var(--border); }
+    .stats { display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+    .stat {
+      background: #0b1220;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem;
+    }
+    .stat .n { font-size: 1.5rem; font-weight: 700; }
+    .stat .l { font-size: 0.75rem; color: var(--muted); }
+    .issue {
+      border-left: 4px solid var(--warn);
+      padding: 0.75rem 1rem;
+      background: #0b1220;
+      border-radius: 0 8px 8px 0;
+      margin-top: 0.75rem;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; }
+    .pill {
+      display: inline-block;
+      padding: 0.15rem 0.45rem;
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 600;
+    }
+    .pill.success { background: rgba(74, 222, 128, 0.15); color: var(--ok); }
+    .pill.warning { background: rgba(251, 191, 36, 0.15); color: var(--warn); }
+    .pill.error { background: rgba(248, 113, 113, 0.15); color: var(--err); }
+    .errbox { color: var(--err); font-size: 0.9rem; }
+    .help { font-size: 0.8rem; color: var(--muted); margin-top: 0.5rem; }
+    code { background: #0b1220; padding: 0.1rem 0.35rem; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>API Monitor</h1>
+    <p class="sub">Meta OAuth, WhatsApp CAPI, and integration errors — tenant or platform admin view.</p>
+
+    <div class="panel">
+      <div class="row cols-3">
+        <div>
+          <label for="apiBase">API base URL</label>
+          <input id="apiBase" placeholder="https://khanaconnect.onrender.com/api/v1" />
+        </div>
+        <div>
+          <label for="days">Days</label>
+          <input id="days" type="number" min="1" max="90" value="7" />
+        </div>
+        <div>
+          <label for="mode">View</label>
+          <select id="mode">
+            <option value="tenant">My tenant (owner/manager)</option>
+            <option value="admin">Platform admin (all clients)</option>
+          </select>
+        </div>
+      </div>
+      <div class="row cols-2" style="margin-top:0.75rem">
+        <div>
+          <label for="token">Dashboard JWT (Bearer)</label>
+          <input id="token" type="password" placeholder="Paste token from dashboard login" />
+        </div>
+        <div>
+          <label for="clientId">Client ID (admin filter, optional)</label>
+          <input id="clientId" placeholder="e.g. Khana" />
+        </div>
+      </div>
+      <div style="margin-top:0.75rem; display:flex; gap:0.5rem; flex-wrap:wrap">
+        <button type="button" id="loadBtn">Refresh</button>
+        <button type="button" class="secondary" id="saveBtn">Save settings locally</button>
+      </div>
+      <p class="help">Token stays in your browser only. Use the same JWT as the Khana dashboard.</p>
+    </div>
+
+    <div id="error" class="errbox" hidden></div>
+
+    <div id="summary" class="panel" hidden>
+      <h2 style="margin:0 0 0.75rem;font-size:1rem">Summary</h2>
+      <div class="stats" id="stats"></div>
+      <div class="issue" id="likelyIssue"></div>
+      <h3 style="margin:1rem 0 0.5rem;font-size:0.9rem;color:var(--muted)">Top error causes</h3>
+      <div id="causes"></div>
+    </div>
+
+    <div id="permissions" class="panel" hidden>
+      <h2 style="margin:0 0 0.75rem;font-size:1rem">Meta App Review status</h2>
+      <div id="permBody"></div>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin:0 0 0.75rem;font-size:1rem">Recent events</h2>
+      <div class="row cols-3" style="margin-bottom:0.75rem">
+        <div>
+          <label for="filterIntegration">Integration</label>
+          <select id="filterIntegration">
+            <option value="">All</option>
+            <option value="meta_oauth">meta_oauth</option>
+            <option value="whatsapp_capi">whatsapp_capi</option>
+            <option value="meta_ads">meta_ads</option>
+            <option value="whatsapp_cloud">whatsapp_cloud</option>
+          </select>
+        </div>
+        <div>
+          <label for="filterOutcome">Outcome</label>
+          <select id="filterOutcome">
+            <option value="">All</option>
+            <option value="error">error</option>
+            <option value="warning">warning</option>
+            <option value="success">success</option>
+          </select>
+        </div>
+        <div>
+          <label for="filterCause">Cause</label>
+          <select id="filterCause">
+            <option value="">All</option>
+            <option value="permission_denied">permission_denied</option>
+            <option value="business_admin_required">business_admin_required</option>
+            <option value="auth_expired">auth_expired</option>
+            <option value="upstream_error">upstream_error</option>
+          </select>
+        </div>
+      </div>
+      <div style="overflow-x:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Integration</th>
+              <th>Operation</th>
+              <th>Outcome</th>
+              <th>Cause</th>
+              <th>Message</th>
+            </tr>
+          </thead>
+          <tbody id="events"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const STORAGE_KEY = 'khana_api_monitor_settings_v1';
+
+    function loadSettings() {
+      try {
+        const s = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+        if (s.apiBase) $('apiBase').value = s.apiBase;
+        if (s.days) $('days').value = s.days;
+        if (s.mode) $('mode').value = s.mode;
+        if (s.clientId) $('clientId').value = s.clientId;
+        if (s.token) $('token').value = s.token;
+      } catch (_) {}
+      if (!$('apiBase').value) {
+        $('apiBase').value = window.location.origin.replace(/\/$/, '') + '/api/v1';
+      }
+    }
+
+    function saveSettings() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        apiBase: $('apiBase').value.trim(),
+        days: $('days').value,
+        mode: $('mode').value,
+        clientId: $('clientId').value.trim(),
+        token: $('token').value.trim(),
+      }));
+    }
+
+    function pill(outcome) {
+      return '<span class="pill ' + outcome + '">' + outcome + '</span>';
+    }
+
+    function fmtDate(d) {
+      if (!d) return '—';
+      try { return new Date(d).toLocaleString(); } catch (_) { return d; }
+    }
+
+    async function apiGet(path) {
+      const base = $('apiBase').value.trim().replace(/\/$/, '');
+      const token = $('token').value.trim();
+      if (!token) throw new Error('Paste your dashboard JWT first.');
+      const res = await fetch(base + path, {
+        headers: { Authorization: 'Bearer ' + token },
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.message || json.error || ('HTTP ' + res.status));
+      return json.data;
+    }
+
+    function qs(params) {
+      const p = new URLSearchParams();
+      Object.entries(params).forEach(([k, v]) => { if (v) p.set(k, v); });
+      const s = p.toString();
+      return s ? '?' + s : '';
+    }
+
+    async function loadAll() {
+      $('error').hidden = true;
+      const days = $('days').value || '7';
+      const mode = $('mode').value;
+      const clientId = $('clientId').value.trim();
+      const prefix = mode === 'admin' ? '/saas/admin/api-monitor' : '/saas/api-monitor';
+      const clientQs = clientId ? { client_id: clientId } : {};
+
+      const summary = await apiGet(prefix + '/summary' + qs({ days, ...clientQs }));
+      renderSummary(summary);
+
+      if (mode === 'tenant') {
+        try {
+          const perms = await apiGet('/saas/meta/app-permissions');
+          renderPermissions(perms);
+        } catch (e) {
+          $('permissions').hidden = true;
+        }
+      } else {
+        $('permissions').hidden = true;
+      }
+
+      const events = await apiGet(prefix + '/events' + qs({
+        days,
+        integration: $('filterIntegration').value,
+        outcome: $('filterOutcome').value,
+        cause: $('filterCause').value,
+        limit: 100,
+        ...clientQs,
+      }));
+      renderEvents(events);
+    }
+
+    function renderSummary(s) {
+      $('summary').hidden = false;
+      const o = s.outcomes || {};
+      $('stats').innerHTML = [
+        ['Total', s.total || 0],
+        ['Success', o.success || 0],
+        ['Warnings', o.warning || 0],
+        ['Errors', o.error || 0],
+      ].map(([l, n]) => '<div class="stat"><div class="n">' + n + '</div><div class="l">' + l + '</div></div>').join('');
+      $('likelyIssue').textContent = 'Likely issue: ' + (s.likelyIssue || '—');
+      const causes = (s.topCauses || []).map((c) =>
+        '<div><strong>' + c.count + '×</strong> ' + (c.label || c.cause) + '</div>'
+      ).join('') || '<span class="help">No errors in this period.</span>';
+      $('causes').innerHTML = causes;
+    }
+
+    function renderPermissions(p) {
+      $('permissions').hidden = false;
+      const conn = p.connection || {};
+      const blocked = (conn.blockedFeatures || []).map((b) => '<li>' + b.label + ' — ' + b.blocks + '</li>').join('');
+      $('permBody').innerHTML =
+        '<p><strong>Facebook connected:</strong> ' + (conn.connected ? 'Yes' : 'No') +
+        (conn.connectedUserName ? ' (' + conn.connectedUserName + ')' : '') + '</p>' +
+        '<p><strong>Ads available:</strong> ' + (conn.adsAvailable ? 'Yes' : 'No — pending App Review') + '</p>' +
+        '<p><strong>Instagram available:</strong> ' + (conn.instagramAvailable ? 'Yes' : 'No — pending App Review') + '</p>' +
+        '<p><strong>WhatsApp conversions:</strong> ' + (conn.whatsappConversionsAvailable ? 'Yes' : 'No — whatsapp_business_manage_events not approved') + '</p>' +
+        (blocked ? '<ul>' + blocked + '</ul>' : '');
+    }
+
+    function renderEvents(rows) {
+      const tbody = $('events');
+      if (!rows || !rows.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="help">No events.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = rows.map((r) =>
+        '<tr>' +
+        '<td>' + fmtDate(r.created_at) + '</td>' +
+        '<td>' + (r.integration || '') + '</td>' +
+        '<td>' + (r.operation || '') + '</td>' +
+        '<td>' + pill(r.outcome || '') + '</td>' +
+        '<td><code>' + (r.cause || '') + '</code></td>' +
+        '<td>' + String(r.message || '').slice(0, 200) + '</td>' +
+        '</tr>'
+      ).join('');
+    }
+
+    $('loadBtn').addEventListener('click', () => {
+      saveSettings();
+      loadAll().catch((e) => {
+        $('error').textContent = e.message || String(e);
+        $('error').hidden = false;
+      });
+    });
+    $('saveBtn').addEventListener('click', saveSettings);
+    ['filterIntegration', 'filterOutcome', 'filterCause'].forEach((id) => {
+      $(id).addEventListener('change', () => $('loadBtn').click());
+    });
+
+    loadSettings();
+  </script>
+</body>
+</html>

@@ -227,6 +227,13 @@ app.use("/public/email", express.static(path.join(__dirname, "public/email"), {
   setHeaders: setPublicUploadHeaders,
 }));
 
+app.use('/public/admin', express.static(path.join(__dirname, 'public/admin'), {
+  setHeaders: (res) => {
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.set('Cache-Control', 'no-cache');
+  },
+}));
+
 // Legacy local campaign paths + GitHub-backed assets under /public/uploads
 app.use("/uploads", express.static(path.join(__dirname, "uploads"), {
   setHeaders: setPublicUploadHeaders,
