@@ -39,6 +39,9 @@ function tenantResolver(req, res, next) {
       inferredRole = 'user';
     } else if (claims.purpose) {
       inferredRole = 'user';
+    } else if (claims.loginType === 'platform_admin') {
+      // Khana platform tenant (client.role admin) signing in without a team member row.
+      inferredRole = 'owner';
     } else if (orgRole === 'admin') {
       inferredRole = 'owner';
     } else if (orgRole) {

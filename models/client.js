@@ -209,6 +209,9 @@ const clientSchema = new Schema({
     catalogId: { type: String, default: '' },
     catalogName: { type: String, default: '' },
     catalogSyncedAt: { type: Date, default: null },
+    /** OAuth granted permissions from /me/permissions (for App Review diagnostics). */
+    grantedPermissions: { type: Array, default: undefined },
+    permissionDiagnostics: { type: Object, default: undefined },
     campaigns: [metaCampaignSchema],
     enabled: { type: Boolean, default: false },
     lastSync: { type: Date },

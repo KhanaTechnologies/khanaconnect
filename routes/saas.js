@@ -119,9 +119,31 @@ router.post('/billing/payfast/itn', wrapRoute(async (req, res) => {
 
 // Meta (Facebook) OAuth callback — public; secured via signed state JWT.
 router.get('/meta/oauth/callback', wrapRoute(async (req, res) => {
+  const ApiMonitorService = require('../services/saas/ApiMonitorService');
   const { code, state, error, error_description: errorDescription } = req.query || {};
+  let clientId = '';
+  if (state) {
+    try {
+      clientId = MetaOAuthService.verifyState(state);
+    } catch {
+      clientId = '';
+    }
+  }
   if (error) {
-    const msg = encodeURIComponent(String(errorDescription || error));
+    const raw = String(errorDescription || error);
+    ApiMonitorService.recordEventSafe({
+      clientId,
+      integration: 'meta_oauth',
+      operation: 'callback_denied',
+      outcome: 'error',
+      message: raw,
+      meta: { error, errorDescription: errorDescription || '' },
+    });
+    const msg = encodeURIComponent(
+      MetaOAuthService.isMetaBusinessAdminError(raw)
+        ? MetaOAuthService.formatMetaBusinessAdminError(raw)
+        : raw
+    );
     return res.redirect(MetaOAuthService.dashboardReturnUrl(`meta=error&message=${msg}`));
   }
   try {
@@ -129,7 +151,12 @@ router.get('/meta/oauth/callback', wrapRoute(async (req, res) => {
     return res.redirect(MetaOAuthService.dashboardReturnUrl('meta=connected'));
   } catch (err) {
     console.error('[meta oauth] callback failed:', err.message);
-    const msg = encodeURIComponent(err.message || 'Facebook connection failed');
+    const raw = err.message || 'Facebook connection failed';
+    const msg = encodeURIComponent(
+      MetaOAuthService.isMetaBusinessAdminError(raw)
+        ? MetaOAuthService.formatMetaBusinessAdminError(raw)
+        : raw
+    );
     return res.redirect(MetaOAuthService.dashboardReturnUrl(`meta=error&message=${msg}`));
   }
 }));
@@ -138,13 +165,26 @@ router.get('/meta/oauth/callback', wrapRoute(async (req, res) => {
 router.post('/meta/oauth/complete', wrapRoute(async (req, res) => {
   const { code, state, error, error_description: errorDescription } = req.body || {};
   if (error) {
+    const raw = String(errorDescription || error || 'Facebook connection failed');
     return res.status(400).json({
       ok: false,
-      message: String(errorDescription || error || 'Facebook connection failed'),
+      message: MetaOAuthService.isMetaBusinessAdminError(raw)
+        ? MetaOAuthService.formatMetaBusinessAdminError(raw)
+        : raw,
     });
   }
-  const data = await MetaOAuthService.completeOAuth({ code, state });
-  res.json({ ok: true, data });
+  try {
+    const data = await MetaOAuthService.completeOAuth({ code, state });
+    res.json({ ok: true, data });
+  } catch (err) {
+    const raw = err.message || 'Facebook connection failed';
+    res.status(400).json({
+      ok: false,
+      message: MetaOAuthService.isMetaBusinessAdminError(raw)
+        ? MetaOAuthService.formatMetaBusinessAdminError(raw)
+        : raw,
+    });
+  }
 }));
 
 router.use(tenantResolver);
@@ -960,6 +1000,50 @@ router.get('/meta/oauth/start', requireRoles('owner', 'manager'), wrapRoute(asyn
 
 router.get('/meta/oauth/status', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
   const data = await MetaOAuthService.getConnectionStatus(req.tenant.clientId);
+  res.json({ ok: true, data });
+}));
+
+router.get('/meta/app-permissions', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const { APPROVED_PERMISSIONS, PENDING_PERMISSIONS, META_BUSINESS_ADMIN_HELP } = require('../helpers/metaAppPermissions');
+  const ApiMonitorService = require('../services/saas/ApiMonitorService');
+  const [status, monitor] = await Promise.all([
+    MetaOAuthService.getConnectionStatus(req.tenant.clientId),
+    ApiMonitorService.getSummary({ clientId: req.tenant.clientId, days: 7 }),
+  ]);
+  res.json({
+    ok: true,
+    data: {
+      approved: APPROVED_PERMISSIONS,
+      pending: PENDING_PERMISSIONS,
+      connection: status,
+      metaBusinessAdminHelp: META_BUSINESS_ADMIN_HELP,
+      monitor,
+    },
+  });
+}));
+
+router.get('/api-monitor/summary', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const ApiMonitorService = require('../services/saas/ApiMonitorService');
+  const days = req.query.days;
+  const data = await ApiMonitorService.getSummary({
+    clientId: req.tenant.clientId,
+    days,
+  });
+  res.json({ ok: true, data });
+}));
+
+router.get('/api-monitor/events', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const ApiMonitorService = require('../services/saas/ApiMonitorService');
+  const days = Math.min(Math.max(Number(req.query.days || 7), 1), 90);
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const data = await ApiMonitorService.listEvents({
+    clientId: req.tenant.clientId,
+    integration: req.query.integration,
+    outcome: req.query.outcome,
+    cause: req.query.cause,
+    limit: req.query.limit,
+    since,
+  });
   res.json({ ok: true, data });
 }));
 
@@ -1930,6 +2014,30 @@ router.get('/overview', requireRoles('owner', 'manager', 'billing_admin', 'viewe
       },
     },
   });
+}));
+
+router.get('/admin/api-monitor/summary', adminOnly, wrapRoute(async (req, res) => {
+  const ApiMonitorService = require('../services/saas/ApiMonitorService');
+  const data = await ApiMonitorService.getSummary({
+    clientId: req.query.client_id || req.query.clientId || '',
+    days: req.query.days,
+  });
+  res.json({ ok: true, data });
+}));
+
+router.get('/admin/api-monitor/events', adminOnly, wrapRoute(async (req, res) => {
+  const ApiMonitorService = require('../services/saas/ApiMonitorService');
+  const days = Math.min(Math.max(Number(req.query.days || 7), 1), 90);
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const data = await ApiMonitorService.listEvents({
+    clientId: req.query.client_id || req.query.clientId || '',
+    integration: req.query.integration,
+    outcome: req.query.outcome,
+    cause: req.query.cause,
+    limit: req.query.limit,
+    since,
+  });
+  res.json({ ok: true, data });
 }));
 
 module.exports = router;

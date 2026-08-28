@@ -26,23 +26,23 @@ function resolveOAuthRedirectUri() {
 const META_OAUTH_REDIRECT_URI = resolveOAuthRedirectUri();
 const DASHBOARD_URL = (process.env.DASHBOARD_URL || 'https://khanatechnologies.co.za').replace(/\/$/, '');
 
+const {
+  APPROVED_PERMISSIONS,
+  PENDING_PERMISSIONS,
+  buildPermissionDiagnostics,
+  isMetaBusinessAdminError,
+  formatMetaBusinessAdminError,
+} = require('../../helpers/metaAppPermissions');
+const { recordEventSafe } = require('./ApiMonitorService');
+
 // Login for Business rejects many scopes on the OAuth `scope=` URL (same as `email`).
-// Put ALL of these on the Login for Business *configuration* (META_LOGIN_CONFIG_ID),
-// then reconnect — the authorize `scope=` list below is only used when config_id is unset:
-//   public_profile, pages_show_list, pages_read_engagement, pages_read_user_content,
-//   pages_manage_posts, business_management, ads_read, ads_management,
-//   instagram_basic, instagram_content_publish
-// (Optional: pages_manage_engagement for comment moderation later.)
-const OAUTH_SCOPES = [
-  'public_profile',
-  'pages_show_list',
-  'pages_read_engagement',
-  'business_management',
-  'ads_read',
-  'ads_management',
-  'instagram_basic',
-  'instagram_content_publish',
-].join(',');
+// Put ONLY approved permissions on the Login for Business *configuration* (META_LOGIN_CONFIG_ID).
+// Remove denied scopes from the Meta config until App Review approves them:
+//   ads_read, ads_management, instagram_basic, instagram_content_publish,
+//   whatsapp_business_manage_events
+// Approved (Aug 2026): public_profile, pages_show_list, pages_read_engagement,
+//   business_management, whatsapp_business_management, whatsapp_business_messaging
+const OAUTH_SCOPES = APPROVED_PERMISSIONS.join(',');
 
 const META_LOGIN_CONFIG_ID = (process.env.META_LOGIN_CONFIG_ID || '').trim();
 
@@ -99,9 +99,21 @@ function getAuthorizeDebug() {
     mode: META_LOGIN_CONFIG_ID ? 'config_id' : 'scope',
     configId: META_LOGIN_CONFIG_ID || null,
     scopesWhenNoConfig: OAUTH_SCOPES.split(','),
+    approvedPermissions: APPROVED_PERMISSIONS,
+    pendingPermissions: PENDING_PERMISSIONS,
     redirectUri: META_OAUTH_REDIRECT_URI,
     appId: META_APP_ID || null,
   };
+}
+
+async function fetchGrantedPermissions(accessToken) {
+  try {
+    const res = await graphGet('/me/permissions', accessToken);
+    return Array.isArray(res?.data) ? res.data : [];
+  } catch (err) {
+    console.warn('[meta oauth] permissions fetch failed:', err.message);
+    return [];
+  }
 }
 
 async function graphGet(path, accessToken, params = {}) {
@@ -145,12 +157,17 @@ async function exchangeLongLivedToken(shortToken) {
 }
 
 async function completeOAuth({ code, state }) {
-  if (!code) throw new Error('Missing authorization code');
-  const clientId = verifyState(state);
+  const started = Date.now();
+  let clientId = '';
+  try {
+    if (!code) throw new Error('Missing authorization code');
+    clientId = verifyState(state);
   const shortToken = await exchangeCodeForToken(code);
   const { accessToken, expiresIn } = await exchangeLongLivedToken(shortToken);
 
   const me = await graphGet('/me', accessToken, { fields: 'id,name' });
+  const grantedPermissions = await fetchGrantedPermissions(accessToken);
+  const permissionDiagnostics = buildPermissionDiagnostics(grantedPermissions);
   const pagesRes = await graphGet('/me/accounts', accessToken, {
     fields: 'id,name,access_token,category',
     limit: 25,
@@ -160,23 +177,25 @@ async function completeOAuth({ code, state }) {
 
   let adAccountId = '';
   let adAccountName = '';
-  try {
-    const adRes = await graphGet('/me/adaccounts', accessToken, {
-      fields: 'id,name,account_id,account_status',
-      limit: 25,
-    });
-    const accounts = Array.isArray(adRes?.data) ? adRes.data : [];
-    const active = accounts.find((a) => Number(a.account_status) === 1) || accounts[0];
-    if (active) {
-      adAccountId = String(active.account_id || active.id || '').replace(/^act_/i, '');
-      adAccountName = active.name || '';
+  if (permissionDiagnostics.adsAvailable) {
+    try {
+      const adRes = await graphGet('/me/adaccounts', accessToken, {
+        fields: 'id,name,account_id,account_status',
+        limit: 25,
+      });
+      const accounts = Array.isArray(adRes?.data) ? adRes.data : [];
+      const active = accounts.find((a) => Number(a.account_status) === 1) || accounts[0];
+      if (active) {
+        adAccountId = String(active.account_id || active.id || '').replace(/^act_/i, '');
+        adAccountName = active.name || '';
+      }
+    } catch (err) {
+      console.warn('[meta oauth] ad accounts fetch failed:', err.message);
     }
-  } catch (err) {
-    console.warn('[meta oauth] ad accounts fetch failed:', err.message);
   }
 
   let pixelId = '';
-  if (adAccountId) {
+  if (adAccountId && permissionDiagnostics.adsAvailable) {
     try {
       const pixRes = await graphGet(`/act_${adAccountId}/adspixels`, accessToken, {
         fields: 'id,name',
@@ -205,6 +224,8 @@ async function completeOAuth({ code, state }) {
   client.metaAds.enabled = true;
   client.metaAds.status = 'active';
   client.metaAds.errorMessage = '';
+  client.metaAds.grantedPermissions = grantedPermissions;
+  client.metaAds.permissionDiagnostics = permissionDiagnostics;
   client.metaAds.lastSync = new Date();
   client.metaAds.tokenExpiresAt = expiresIn
     ? new Date(Date.now() + expiresIn * 1000)
@@ -214,16 +235,21 @@ async function completeOAuth({ code, state }) {
     client.metaAds.pageId = String(page.id);
     client.metaAds.pageName = String(page.name || '');
     client.metaAds.pageAccessToken = page.access_token ? String(page.access_token) : '';
-    try {
-      const MetaAdsService = require('./MetaAdsService');
-      const pageToken = client.metaAds.pageAccessToken
-        ? String(client.metaAds.pageAccessToken)
-        : accessToken;
-      const ig = await MetaAdsService.resolveInstagramFromPage(client.metaAds.pageId, pageToken);
-      client.metaAds.instagramUserId = ig.instagramUserId;
-      client.metaAds.instagramUsername = ig.instagramUsername;
-    } catch (err) {
-      console.warn('[meta oauth] instagram resolve failed:', err.message);
+    if (permissionDiagnostics.instagramAvailable) {
+      try {
+        const MetaAdsService = require('./MetaAdsService');
+        const pageToken = client.metaAds.pageAccessToken
+          ? String(client.metaAds.pageAccessToken)
+          : accessToken;
+        const ig = await MetaAdsService.resolveInstagramFromPage(client.metaAds.pageId, pageToken);
+        client.metaAds.instagramUserId = ig.instagramUserId;
+        client.metaAds.instagramUsername = ig.instagramUsername;
+      } catch (err) {
+        console.warn('[meta oauth] instagram resolve failed:', err.message);
+        client.metaAds.instagramUserId = '';
+        client.metaAds.instagramUsername = '';
+      }
+    } else {
       client.metaAds.instagramUserId = '';
       client.metaAds.instagramUsername = '';
     }
@@ -244,13 +270,46 @@ async function completeOAuth({ code, state }) {
   client.markModified('metaAds');
   await client.save();
 
-  return {
+  const result = {
     clientId,
     connectedUserName: client.metaAds.connectedUserName,
     pageName: client.metaAds.pageName,
     adAccountName: client.metaAds.adAccountName,
     hasPixel: !!pixelId,
+    permissions: permissionDiagnostics,
   };
+
+  recordEventSafe({
+    clientId,
+    integration: 'meta_oauth',
+    operation: 'complete',
+    outcome: permissionDiagnostics.approvedMissing?.length ? 'warning' : 'success',
+    message: permissionDiagnostics.approvedMissing?.length
+      ? `Connected but missing approved permissions: ${permissionDiagnostics.approvedMissing.join(', ')}`
+      : `Facebook connected as ${client.metaAds.connectedUserName || 'user'}`,
+    durationMs: Date.now() - started,
+    meta: {
+      pageId: client.metaAds.pageId || '',
+      adAccountId: client.metaAds.adAccountId || '',
+      approvedMissing: permissionDiagnostics.approvedMissing || [],
+      blockedFeatures: (permissionDiagnostics.blockedFeatures || []).map((b) => b.id),
+    },
+  });
+
+  return result;
+  } catch (err) {
+    recordEventSafe({
+      clientId,
+      integration: 'meta_oauth',
+      operation: 'complete',
+      outcome: 'error',
+      message: err.message || 'Meta OAuth failed',
+      durationMs: Date.now() - started,
+      httpStatus: err?.response?.status || null,
+      meta: err?.response?.data?.error || {},
+    });
+    throw err;
+  }
 }
 
 async function getConnectionStatus(clientId) {
@@ -260,6 +319,10 @@ async function getConnectionStatus(clientId) {
   }
   const m = client.metaAds;
   const connected = Boolean(m.connectionMethod === 'oauth' && m.connectedUserId && m.accessToken);
+  let permissionDiagnostics =
+    m.permissionDiagnostics && typeof m.permissionDiagnostics === 'object'
+      ? m.permissionDiagnostics
+      : buildPermissionDiagnostics(m.grantedPermissions || []);
 
   if (connected) {
     try {
@@ -270,6 +333,9 @@ async function getConnectionStatus(clientId) {
         const refreshed = await Client.findOne({ clientID: clientId }).select('metaAds').lean();
         if (refreshed?.metaAds) {
           Object.assign(m, refreshed.metaAds);
+          permissionDiagnostics =
+            refreshed.metaAds.permissionDiagnostics ||
+            buildPermissionDiagnostics(refreshed.metaAds.grantedPermissions || []);
         }
       }
     } catch (err) {
@@ -295,6 +361,11 @@ async function getConnectionStatus(clientId) {
     status: m.status || 'inactive',
     errorMessage: m.errorMessage || '',
     tokenExpiresAt: m.tokenExpiresAt || null,
+    permissions: permissionDiagnostics,
+    adsAvailable: !!permissionDiagnostics.adsAvailable,
+    instagramAvailable: !!permissionDiagnostics.instagramAvailable,
+    whatsappConversionsAvailable: !!permissionDiagnostics.whatsappConversionsAvailable,
+    blockedFeatures: permissionDiagnostics.blockedFeatures || [],
   };
 }
 
@@ -341,4 +412,7 @@ module.exports = {
   disconnect,
   dashboardReturnUrl,
   verifyState,
+  fetchGrantedPermissions,
+  formatMetaBusinessAdminError,
+  isMetaBusinessAdminError,
 };

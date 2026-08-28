@@ -56,7 +56,7 @@ function httpError(message, status = 400, extra = {}) {
   return err;
 }
 
-function formatMetaError(err) {
+function formatMetaError(err, logContext = {}) {
   const data = err?.response?.data;
   const fb = data?.error;
   const metaMsg =
@@ -70,6 +70,27 @@ function formatMetaError(err) {
   const bits = [metaMsg];
   if (code != null) bits.push(`(#${code}${sub != null ? `/${sub}` : ''})`);
   const status = err?.response?.status && err.response.status >= 400 ? err.response.status : 502;
+  const message = bits.join(' ');
+  const { recordEventSafe } = require('./ApiMonitorService');
+  recordEventSafe({
+    clientId: logContext.clientId || '',
+    integration: 'whatsapp_capi',
+    operation: logContext.operation || 'graph_request',
+    outcome: 'error',
+    message,
+    httpStatus: status,
+    meta: fb || data || {},
+  });
+  if (/manage_events|permission|not authorized|(#10)|(#200)|owner|admin/i.test(message)) {
+    const {
+      formatMetaBusinessAdminError,
+    } = require('../../helpers/metaAppPermissions');
+    return httpError(
+      `${message}\n\n${formatMetaBusinessAdminError()}\n\nNote: whatsapp_business_manage_events was not approved in App Review yet — WhatsApp conversion events are disabled until Meta approves that permission.`,
+      status >= 500 ? 502 : 400,
+      { meta: fb || data || null }
+    );
+  }
   return httpError(bits.join(' '), status >= 500 ? 502 : 400, {
     meta: fb || data || null,
   });
@@ -122,7 +143,7 @@ function isForbiddenSharedDataset(datasetId) {
  * GET existing → POST create if missing.
  * Requires whatsapp_business_management + whatsapp_business_manage_events.
  */
-async function fetchOrCreateWabaDatasetId(wabaId, token) {
+async function fetchOrCreateWabaDatasetId(wabaId, token, logContext = {}) {
   let datasetId = '';
 
   try {
@@ -137,7 +158,7 @@ async function fetchOrCreateWabaDatasetId(wabaId, token) {
       console.warn('[whatsapp capi] GET /{waba}/dataset:', err?.response?.data?.error?.message || err.message);
       // Permission / auth errors should surface — do not pretend create will work.
       if (status === 401 || status === 403 || err?.response?.data?.error?.code === 190) {
-        throw formatMetaError(err);
+        throw formatMetaError(err, { ...logContext, operation: 'get_waba_dataset' });
       }
     }
   }
@@ -150,7 +171,7 @@ async function fetchOrCreateWabaDatasetId(wabaId, token) {
       });
       datasetId = String(postRes.data?.id || '').trim();
     } catch (err) {
-      throw formatMetaError(err);
+      throw formatMetaError(err, { ...logContext, operation: 'create_waba_dataset' });
     }
   }
 
@@ -187,7 +208,10 @@ async function ensureDataset(clientId, opts = {}) {
     isForbiddenSharedDataset(datasetId);
 
   if (needsRefresh) {
-    datasetId = await fetchOrCreateWabaDatasetId(wabaId, token);
+    datasetId = await fetchOrCreateWabaDatasetId(wabaId, token, {
+      clientId,
+      operation: 'ensure_dataset',
+    });
   }
 
   account.dataset_id = datasetId;
@@ -399,7 +423,7 @@ async function sendConversionEvent(clientId, input = {}) {
       userMsg: fb?.error_user_msg,
       blame: fb?.error_data || fb?.fbtrace_id,
     });
-    throw formatMetaError(err);
+    throw formatMetaError(err, { clientId, operation: 'send_conversion_event' });
   }
 
   const fresh = await loadOwnAccount(clientId);
@@ -407,6 +431,16 @@ async function sendConversionEvent(clientId, input = {}) {
   fresh.last_conversion_at = new Date();
   fresh.last_conversion_error = '';
   await fresh.save();
+
+  const { recordEventSafe } = require('./ApiMonitorService');
+  recordEventSafe({
+    clientId,
+    integration: 'whatsapp_capi',
+    operation: 'send_conversion_event',
+    outcome: 'success',
+    message: `Sent ${eventName} to WABA dataset`,
+    meta: { eventName, datasetId, wabaId },
+  });
 
   return {
     ok: true,
