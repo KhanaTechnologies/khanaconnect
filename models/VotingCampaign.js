@@ -487,18 +487,40 @@ votingCampaignSchema.methods.removeVote = async function(itemId) {
 /**
  * Recompute totalVotes / item votesCount / uniqueVoters from the Vote collection.
  * Matches ballots by itemId, subdocument _id, or itemTitle (legacy votes).
- * Fixes dashboard totals when denormalized counters drifted or item ids mismatched.
+ * Always sets totalVotes from ballot count so Khana never shows voters without votes.
  */
 votingCampaignSchema.methods.syncVoteCountsFromBallots = async function(options = {}) {
   const Vote = mongoose.model('Vote');
   const persist = options.persist !== false;
   const healBallotIds = options.healBallotIds !== false;
 
-  const ballots = await Vote.find({
-    campaignId: this._id,
-    isDeleted: false,
-    status: { $in: ['active', 'changed'] },
-  }).select('itemId itemTitle customerId');
+  const campaignObjectId = this._id;
+  const clientId = this.clientId;
+
+  let ballots = await Vote.find({
+    campaignId: campaignObjectId,
+    isDeleted: { $ne: true },
+  }).select('itemId itemTitle customerId status campaignId');
+
+  // Fallback: legacy ballots may have a mismatched campaignId but matching titles.
+  if ((!ballots || ballots.length === 0) && clientId) {
+    const titles = this.items.map((i) => i.title).filter(Boolean);
+    if (titles.length) {
+      const byTitle = await Vote.find({
+        clientId,
+        isDeleted: { $ne: true },
+        itemTitle: { $in: titles },
+        status: { $nin: ['cancelled'] },
+      }).select('itemId itemTitle customerId status campaignId');
+
+      const campaignKey = String(campaignObjectId);
+      const exact = byTitle.filter((b) => String(b.campaignId) === campaignKey);
+      ballots = exact.length ? exact : byTitle;
+    }
+  }
+
+  // Ignore cancelled ballots
+  ballots = (ballots || []).filter((b) => b.status !== 'cancelled');
 
   for (const item of this.items) {
     item.votesCount = 0;
@@ -506,6 +528,13 @@ votingCampaignSchema.methods.syncVoteCountsFromBallots = async function(options 
 
   const uniqueVoters = new Set();
   const ballotHeals = [];
+  const unmatched = [];
+
+  const normalizeTitle = (value) =>
+    String(value || '')
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim();
 
   const findItemForBallot = (ballot) => {
     const key = String(ballot.itemId || '').trim();
@@ -515,12 +544,20 @@ votingCampaignSchema.methods.syncVoteCountsFromBallots = async function(options 
       );
       if (byId) return byId;
     }
-    const title = String(ballot.itemTitle || '').trim().toLowerCase();
+
+    const title = normalizeTitle(ballot.itemTitle);
     if (title) {
-      return this.items.find(
-        (i) => String(i.title || '').trim().toLowerCase() === title
-      );
+      const exact = this.items.find((i) => normalizeTitle(i.title) === title);
+      if (exact) return exact;
+
+      // Soft match: title contained either way (handles slight renames)
+      const soft = this.items.find((i) => {
+        const itemTitle = normalizeTitle(i.title);
+        return itemTitle.includes(title) || title.includes(itemTitle);
+      });
+      if (soft) return soft;
     }
+
     return null;
   };
 
@@ -528,7 +565,14 @@ votingCampaignSchema.methods.syncVoteCountsFromBallots = async function(options 
     if (ballot.customerId) uniqueVoters.add(String(ballot.customerId));
 
     const item = findItemForBallot(ballot);
-    if (!item) continue;
+    if (!item) {
+      unmatched.push({
+        itemId: ballot.itemId,
+        itemTitle: ballot.itemTitle,
+        status: ballot.status,
+      });
+      continue;
+    }
 
     item.votesCount = (item.votesCount || 0) + 1;
 
@@ -538,7 +582,16 @@ votingCampaignSchema.methods.syncVoteCountsFromBallots = async function(options 
     }
   }
 
-  this.totalVotes = ballots.length;
+  // If still unmatched and there is only one campaign item, assign remaining ballots there.
+  if (unmatched.length && this.items.length === 1) {
+    const only = this.items[0];
+    only.votesCount = (only.votesCount || 0) + unmatched.length;
+    unmatched.length = 0;
+  }
+
+  const attributed = this.items.reduce((sum, item) => sum + (item.votesCount || 0), 0);
+  // Always derive from ballots — never keep stale uniqueVoters with zero totals
+  this.totalVotes = Math.max(ballots.length, attributed);
   this.uniqueVoters = uniqueVoters.size;
 
   if (healBallotIds && ballotHeals.length) {
@@ -550,14 +603,23 @@ votingCampaignSchema.methods.syncVoteCountsFromBallots = async function(options 
   }
 
   if (persist) {
-    this.$locals = this.$locals || {};
-    this.$locals.skipStatusAutoUpdate = true;
-    await this.save();
+    try {
+      this.$locals = this.$locals || {};
+      this.$locals.skipStatusAutoUpdate = true;
+      await this.save();
+    } catch (err) {
+      console.error(
+        '[VotingCampaign] syncVoteCountsFromBallots save failed:',
+        err.message || err
+      );
+    }
   }
 
   return {
     totalVotes: this.totalVotes,
     uniqueVoters: this.uniqueVoters,
+    ballotCount: ballots.length,
+    unmatched,
     items: this.items.map((item) => ({
       itemId: item.itemId,
       title: item.title,
