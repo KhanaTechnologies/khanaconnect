@@ -239,8 +239,14 @@ voteSchema.methods.cancel = async function(reason) {
 
 // Static methods
 voteSchema.statics.getCampaignStats = async function(campaignId) {
+  const match = {
+    campaignId: new mongoose.Types.ObjectId(campaignId),
+    isDeleted: false,
+    status: { $in: ['active', 'changed'] },
+  };
+
   const stats = await this.aggregate([
-    { $match: { campaignId: new mongoose.Types.ObjectId(campaignId), isDeleted: false, status: 'active' } },
+    { $match: match },
     { $group: {
       _id: '$itemId',
       count: { $sum: 1 },
@@ -257,7 +263,7 @@ voteSchema.statics.getCampaignStats = async function(campaignId) {
   
   // Get vote timeline
   const timeline = await this.aggregate([
-    { $match: { campaignId: new mongoose.Types.ObjectId(campaignId), isDeleted: false, status: 'active' } },
+    { $match: match },
     { $group: {
       _id: {
         date: { $dateToString: { format: '%Y-%m-%d', date: '$votedAt' } },
@@ -271,9 +277,7 @@ voteSchema.statics.getCampaignStats = async function(campaignId) {
   // Get voter demographics (if location data exists)
   const demographics = await this.aggregate([
     { $match: { 
-      campaignId: new mongoose.Types.ObjectId(campaignId), 
-      isDeleted: false,
-      status: 'active',
+      ...match,
       'location.country': { $exists: true, $ne: null }
     }},
     { $group: {
@@ -291,7 +295,11 @@ voteSchema.statics.getCampaignStats = async function(campaignId) {
 };
 
 voteSchema.statics.getCustomerVotes = async function(customerId) {
-  return this.find({ customerId, isDeleted: false, status: 'active' })
+  return this.find({
+    customerId,
+    isDeleted: false,
+    status: { $in: ['active', 'changed'] },
+  })
     .populate('campaignId', 'title campaignType endDate media.coverImage')
     .sort({ votedAt: -1 });
 };

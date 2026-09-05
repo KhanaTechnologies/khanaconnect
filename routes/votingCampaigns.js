@@ -1166,6 +1166,9 @@ router.get('/', validateClient, wrapRoute(async (req, res) => {
 
   const total = await VotingCampaign.countDocuments(filter);
 
+  // Heal denormalized counters from ballots (in-memory for list speed)
+  await Promise.all(campaigns.map((c) => c.syncVoteCountsFromBallots({ persist: false })));
+
   // Add virtuals
   const campaignsWithVirtuals = campaigns.map(c => {
     const obj = c.toObject();
@@ -1230,6 +1233,8 @@ router.get('/active', validateClient, wrapRoute(async (req, res) => {
   const { type } = req.query;
   
   const campaigns = await VotingCampaign.findActiveByClient(req.clientId, type);
+
+  await Promise.all(campaigns.map((c) => c.syncVoteCountsFromBallots({ persist: false })));
   
   const campaignsWithVirtuals = campaigns.map(c => {
     const obj = c.toObject();
@@ -1261,6 +1266,8 @@ router.get('/:id', validateClient, wrapRoute(async (req, res) => {
       message: 'Voting campaign not found'
     });
   }
+
+  await campaign.syncVoteCountsFromBallots();
 
   // Increment view count
   await campaign.incrementView();
@@ -1489,6 +1496,9 @@ router.get('/:id/results', validateClient, wrapRoute(async (req, res) => {
     });
   }
 
+  // Rebuild denormalized counters from ballots so Khana shows live totals
+  await campaign.syncVoteCountsFromBallots();
+
   const results = campaign.getResults();
   if (Array.isArray(results.items)) {
     results.items = results.items.map((item) => ({
@@ -1533,6 +1543,8 @@ router.get('/:id/stats', validateClient, wrapRoute(async (req, res) => {
     });
   }
 
+  await campaign.syncVoteCountsFromBallots();
+
   // Get vote statistics
   const voteStats = await Vote.getCampaignStats(campaign._id);
 
@@ -1540,7 +1552,7 @@ router.get('/:id/stats', validateClient, wrapRoute(async (req, res) => {
   const voters = await Vote.find({ 
     campaignId: campaign._id,
     isDeleted: false,
-    status: 'active'
+    status: { $in: ['active', 'changed'] },
   })
     .populate('customerId', 'customerFirstName customerLastName emailAddress')
     .select('-__v')

@@ -452,6 +452,8 @@ votingCampaignSchema.methods.addVote = async function(itemId) {
   
   item.votesCount += 1;
   this.totalVotes += 1;
+  this.$locals = this.$locals || {};
+  this.$locals.skipStatusAutoUpdate = true;
   await this.save();
   
   return {
@@ -470,6 +472,8 @@ votingCampaignSchema.methods.removeVote = async function(itemId) {
   if (item.votesCount > 0) {
     item.votesCount -= 1;
     this.totalVotes -= 1;
+    this.$locals = this.$locals || {};
+    this.$locals.skipStatusAutoUpdate = true;
     await this.save();
   }
   
@@ -477,6 +481,57 @@ votingCampaignSchema.methods.removeVote = async function(itemId) {
     itemId: item.itemId || item._id,
     newCount: item.votesCount,
     totalVotes: this.totalVotes
+  };
+};
+
+/**
+ * Recompute totalVotes / item votesCount / uniqueVoters from the Vote collection.
+ * Fixes dashboard totals when denormalized counters drifted or failed to increment.
+ */
+votingCampaignSchema.methods.syncVoteCountsFromBallots = async function(options = {}) {
+  const Vote = mongoose.model('Vote');
+  const persist = options.persist !== false;
+
+  const ballots = await Vote.find({
+    campaignId: this._id,
+    isDeleted: false,
+    status: { $in: ['active', 'changed'] },
+  }).select('itemId customerId');
+
+  const countsByItem = new Map();
+  const uniqueVoters = new Set();
+
+  for (const ballot of ballots) {
+    const key = String(ballot.itemId);
+    countsByItem.set(key, (countsByItem.get(key) || 0) + 1);
+    if (ballot.customerId) uniqueVoters.add(String(ballot.customerId));
+  }
+
+  let totalVotes = 0;
+  for (const item of this.items) {
+    const byItemId = countsByItem.get(String(item.itemId)) || 0;
+    const byObjectId = countsByItem.get(String(item._id)) || 0;
+    const count = byItemId || byObjectId;
+    item.votesCount = count;
+    totalVotes += count;
+  }
+
+  this.totalVotes = totalVotes;
+  this.uniqueVoters = uniqueVoters.size;
+
+  if (persist) {
+    this.$locals = this.$locals || {};
+    this.$locals.skipStatusAutoUpdate = true;
+    await this.save();
+  }
+
+  return {
+    totalVotes: this.totalVotes,
+    uniqueVoters: this.uniqueVoters,
+    items: this.items.map((item) => ({
+      itemId: item.itemId,
+      votesCount: item.votesCount,
+    })),
   };
 };
 
@@ -723,15 +778,16 @@ votingCampaignSchema.statics.getCustomerVoteHistory = async function(customerId)
 // Pre-save middleware
 votingCampaignSchema.pre('save', function(next) {
   if (this.startDate && this.endDate && this.startDate >= this.endDate) {
-    next(new Error('End date must be after start date'));
+    return next(new Error('End date must be after start date'));
   }
   
   if (!this.items || this.items.length < 2) {
-    next(new Error('At least 2 voting items are required'));
+    return next(new Error('At least 2 voting items are required'));
   }
   
-  const now = new Date();
-  if (this.campaignStatus === 'active') {
+  // Vote count updates must not flip campaign status (timezone edge cases).
+  if (!this.$locals?.skipStatusAutoUpdate && this.campaignStatus === 'active') {
+    const now = new Date();
     if (this.endDate < now) {
       this.campaignStatus = 'ended';
     } else if (this.startDate > now) {
