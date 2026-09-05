@@ -2007,7 +2007,7 @@ router.delete('/public/:id/vote', validateCustomer, wrapRoute(async (req, res) =
     customerId: req.customerId,
     clientId: req.clientId,
     isDeleted: false,
-    status: 'active'
+    status: { $in: ['active', 'changed'] },
   });
 
   if (!vote) {
