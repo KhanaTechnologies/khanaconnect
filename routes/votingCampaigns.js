@@ -204,6 +204,14 @@ function parseCampaignCreateBodyMiddleware(req, res, next) {
     req.body = req.campaignPayload;
     return next();
   } catch (err) {
+    console.warn(
+      '🗳️ Voting campaign create body parse failed:',
+      JSON.stringify({
+        contentType: req.headers['content-type'] || null,
+        bodyKeys: req.body && typeof req.body === 'object' ? Object.keys(req.body) : [],
+        error: err.message,
+      })
+    );
     return res.status(400).json({ success: false, error: err.message });
   }
 }
@@ -379,6 +387,37 @@ const campaignValidation = [
 
 // ==================== VOTING CAMPAIGN MANAGEMENT ====================
 
+function summarizeVotingCreateRequest(req, payload) {
+  const items = Array.isArray(payload?.items) ? payload.items : null;
+  return {
+    contentType: req.headers['content-type'] || null,
+    method: req.method,
+    clientId: req.clientId || req.clientID || null,
+    keys: payload && typeof payload === 'object' ? Object.keys(payload) : [],
+    title: payload?.title ?? null,
+    descriptionPresent: Boolean(payload?.description),
+    campaignType: payload?.campaignType ?? null,
+    startDate: payload?.startDate ?? null,
+    endDate: payload?.endDate ?? null,
+    itemsType: items ? 'array' : typeof payload?.items,
+    itemsCount: items ? items.length : null,
+    itemTitles: items
+      ? items.slice(0, 10).map((item, i) => ({
+          index: i,
+          title: item?.title ?? null,
+          name: item?.name ?? null,
+          keys: item && typeof item === 'object' ? Object.keys(item) : [],
+        }))
+      : null,
+    hasOptions: payload?.options != null,
+    hasVotingItems: payload?.votingItems != null,
+    uploadedFileCount: Array.isArray(req.uploadedFiles) ? req.uploadedFiles.length : 0,
+    uploadedFields: Array.isArray(req.uploadedFiles)
+      ? req.uploadedFiles.map((f) => f.fieldname).slice(0, 20)
+      : [],
+  };
+}
+
 // Create a new voting campaign (JSON or multipart with images)
 router.post(
   '/',
@@ -387,16 +426,24 @@ router.post(
   parseCampaignCreateBodyMiddleware,
   campaignValidation,
   wrapRoute(async (req, res) => {
+    const payload = req.campaignPayload || req.body;
+    const summary = summarizeVotingCreateRequest(req, payload);
+    console.log('🗳️ Voting campaign create request:', JSON.stringify(summary));
+
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
+      const validationErrors = errors.array();
+      console.warn(
+        '🗳️ Voting campaign create validation failed:',
+        JSON.stringify({ summary, validationErrors })
+      );
       return res.status(400).json({
         success: false,
         error: 'Invalid voting campaign payload',
-        errors: errors.array(),
+        errors: validationErrors,
       });
     }
 
-    const payload = req.campaignPayload || req.body;
     payload.clientId = req.clientId;
     payload.createdBy = req.clientId;
 
@@ -431,6 +478,16 @@ router.post(
     }
 
     if (startDate >= endDate) {
+      console.warn(
+        '🗳️ Voting campaign create rejected: end before start',
+        JSON.stringify({
+          startDate: payload.startDate,
+          endDate: payload.endDate,
+          startMs: startDate.getTime(),
+          endMs: endDate.getTime(),
+          summary,
+        })
+      );
       return res.status(400).json({
         success: false,
         error: 'End date must be after start date',
