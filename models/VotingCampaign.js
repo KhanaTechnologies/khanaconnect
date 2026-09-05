@@ -376,18 +376,24 @@ votingCampaignSchema.virtual('itemsWithImages').get(function() {
       ? (item.images.find(img => img.isPrimary) || item.images[0])
       : null;
     
+    const fallback =
+      item.mainImage ||
+      (primaryImage ? (primaryImage.medium || primaryImage.url) : null) ||
+      (this.settings?.visualSettings?.defaultItemImage || null);
     return {
       itemId: item.itemId || item._id,
       title: item.title,
       description: item.description,
       // Full images array for gallery view
       images: item.images || [],
-      // Convenience fields for display
-      displayImage: primaryImage ? (primaryImage.medium || primaryImage.url) : (this.settings.visualSettings.defaultItemImage || null),
-      thumbnail: primaryImage ? primaryImage.thumbnail : null,
+      // Product-style convenience fields for storefronts
+      mainImage: fallback,
+      image: fallback,
+      displayImage: fallback,
+      thumbnail: primaryImage ? primaryImage.thumbnail : (item.thumbnail || null),
       // Fallback to icon if no images
       icon: item.icon,
-      hasImages: item.images && item.images.length > 0,
+      hasImages: (item.images && item.images.length > 0) || Boolean(fallback),
       votesCount: item.votesCount,
       goal: item.goal,
       displaySettings: item.displaySettings,

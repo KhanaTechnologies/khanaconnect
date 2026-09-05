@@ -18,6 +18,115 @@ const {
   FILE_TYPE_MAP,
 } = require('../helpers/votingImageStorage');
 
+function findPublicCampaignQuery(id, extra = {}) {
+  const filter = { isDeleted: false, ...extra };
+  if (mongoose.Types.ObjectId.isValid(String(id))) {
+    filter.$or = [{ _id: id }, { campaignId: id }];
+  } else {
+    filter.campaignId = id;
+  }
+  return filter;
+}
+
+function findActivePublicCampaignQuery(id) {
+  return findPublicCampaignQuery(id, { campaignStatus: 'active' });
+}
+
+function serializeItemImages(item, req) {
+  const images = Array.isArray(item.images)
+    ? item.images
+        .filter((img) => img && (img.url || img.thumbnail || img.medium))
+        .map((img) => ({
+          url: resolveLegacyVotingAssetUrl(img.url || img.medium || img.thumbnail, req),
+          thumbnail: resolveLegacyVotingAssetUrl(
+            img.thumbnail || img.medium || img.url,
+            req
+          ),
+          medium: resolveLegacyVotingAssetUrl(img.medium || img.url, req),
+          caption: img.caption || '',
+          isPrimary: !!img.isPrimary,
+        }))
+    : [];
+  const primary =
+    images.find((img) => img.isPrimary) ||
+    images[0] ||
+    null;
+  const mainImage = resolveLegacyVotingAssetUrl(
+    item.mainImage || item.displayImage || (primary && primary.url) || null,
+    req
+  );
+  const thumbnail = resolveLegacyVotingAssetUrl(
+    item.thumbnail || (primary && primary.thumbnail) || mainImage,
+    req
+  );
+  return {
+    images,
+    // Product-style fields storefronts already know how to render
+    image: mainImage,
+    mainImage,
+    displayImage: mainImage,
+    thumbnail,
+    hasImages: images.length > 0 || Boolean(mainImage),
+  };
+}
+
+function withResolvedCampaignImages(campaignLike, req) {
+  if (!campaignLike || typeof campaignLike !== 'object') return campaignLike;
+  const obj =
+    typeof campaignLike.toObject === 'function'
+      ? campaignLike.toObject()
+      : { ...campaignLike };
+
+  if (Array.isArray(obj.items)) {
+    obj.items = obj.items.map((item) => {
+      const imageFields = serializeItemImages(item, req);
+      return { ...item, ...imageFields };
+    });
+  }
+
+  if (Array.isArray(obj.itemsWithImages)) {
+    obj.itemsWithImages = obj.itemsWithImages.map((item) => {
+      const imageFields = serializeItemImages(item, req);
+      return { ...item, ...imageFields };
+    });
+  }
+
+  if (Array.isArray(obj.itemsWithStats)) {
+    obj.itemsWithStats = obj.itemsWithStats.map((item) => {
+      const imageFields = serializeItemImages(item, req);
+      return { ...item, ...imageFields };
+    });
+  }
+
+  if (obj.media) {
+    obj.media = {
+      ...obj.media,
+      coverImage: resolveLegacyVotingAssetUrl(obj.media.coverImage, req),
+      gallery: Array.isArray(obj.media.gallery)
+        ? obj.media.gallery.map((entry) => ({
+            ...entry,
+            url: resolveLegacyVotingAssetUrl(entry.url, req),
+          }))
+        : obj.media.gallery,
+    };
+  }
+
+  if (obj.settings?.visualSettings?.defaultItemImage) {
+    obj.settings = {
+      ...obj.settings,
+      visualSettings: {
+        ...obj.settings.visualSettings,
+        defaultItemImage: resolveLegacyVotingAssetUrl(
+          obj.settings.visualSettings.defaultItemImage,
+          req
+        ),
+      },
+    };
+  }
+
+  return obj;
+}
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
@@ -534,8 +643,13 @@ router.post(
     const campaign = new VotingCampaign(payload);
     await campaign.save();
 
-    const data = campaign.toObject();
-    data.itemsWithImages = campaign.itemsWithImages;
+    const data = withResolvedCampaignImages(
+      {
+        ...campaign.toObject(),
+        itemsWithImages: campaign.itemsWithImages,
+      },
+      req
+    );
 
   res.status(201).json({
     success: true,
@@ -1019,7 +1133,7 @@ router.get('/', validateClient, wrapRoute(async (req, res) => {
     obj.campaignActive = c.campaignActive;
     obj.itemsWithStats = c.itemsWithStats;
     obj.itemsWithImages = c.itemsWithImages;
-    return obj;
+    return withResolvedCampaignImages(obj, req);
   });
 
   res.json({
@@ -1051,10 +1165,15 @@ router.get('/type/:type', validateClient, wrapRoute(async (req, res) => {
     isDeleted: false
   }).sort({ createdAt: -1 });
 
-  const campaignsWithImages = campaigns.map(c => ({
-    ...c.toObject(),
-    itemsWithImages: c.itemsWithImages
-  }));
+  const campaignsWithImages = campaigns.map(c =>
+    withResolvedCampaignImages(
+      {
+        ...c.toObject(),
+        itemsWithImages: c.itemsWithImages,
+      },
+      req
+    )
+  );
 
   res.json({
     success: true,
@@ -1076,7 +1195,7 @@ router.get('/active', validateClient, wrapRoute(async (req, res) => {
     obj.hoursRemaining = c.hoursRemaining;
     obj.itemsWithStats = c.itemsWithStats;
     obj.itemsWithImages = c.itemsWithImages;
-    return obj;
+    return withResolvedCampaignImages(obj, req);
   });
 
   res.json({
@@ -1115,7 +1234,7 @@ router.get('/:id', validateClient, wrapRoute(async (req, res) => {
 
   res.json({
     success: true,
-    data: campaignObject
+    data: withResolvedCampaignImages(campaignObject, req)
   });
 }));
 
@@ -1493,14 +1612,7 @@ router.delete('/:id', validateClient, wrapRoute(async (req, res) => {
 
 // Get public campaign view
 router.get('/public/:id', wrapRoute(async (req, res) => {
-  const campaign = await VotingCampaign.findOne({
-    $or: [
-      { _id: req.params.id },
-      { campaignId: req.params.id }
-    ],
-    campaignStatus: 'active',
-    isDeleted: false
-  });
+  const campaign = await VotingCampaign.findOne(findActivePublicCampaignQuery(req.params.id));
 
   if (!campaign) {
     return res.status(404).json({
@@ -1511,7 +1623,7 @@ router.get('/public/:id', wrapRoute(async (req, res) => {
 
   await campaign.incrementView();
 
-  // Prepare public data with images
+  // Prepare public data with images (product-style: images[] + mainImage/image)
   const publicData = {
     id: campaign._id,
     campaignId: campaign.campaignId,
@@ -1519,25 +1631,20 @@ router.get('/public/:id', wrapRoute(async (req, res) => {
     description: campaign.description,
     shortDescription: campaign.shortDescription,
     campaignType: campaign.campaignType,
-    items: campaign.itemsWithImages.map(item => ({
-      itemId: item.itemId,
-      title: item.title,
-      description: item.description,
-      images: item.images.map(img => ({
-        url: resolveLegacyVotingAssetUrl(img.url, req),
-        thumbnail: resolveLegacyVotingAssetUrl(img.thumbnail, req),
-        caption: img.caption,
-        isPrimary: img.isPrimary
-      })),
-      mainImage: resolveLegacyVotingAssetUrl(item.mainImage, req),
-      thumbnail: resolveLegacyVotingAssetUrl(item.thumbnail, req),
-      hasImages: item.hasImages,
-      icon: item.icon,
-      votesCount: campaign.votingRules.resultsVisibility === 'public' ? item.votesCount : null,
-      percentage: campaign.votingRules.resultsVisibility === 'public' ? 
-        (campaign.totalVotes > 0 ? Math.round((item.votesCount / campaign.totalVotes) * 100) : 0) : null,
-      displaySettings: item.displaySettings
-    })),
+    items: campaign.itemsWithImages.map(item => {
+      const imageFields = serializeItemImages(item, req);
+      return {
+        itemId: item.itemId,
+        title: item.title,
+        description: item.description,
+        ...imageFields,
+        icon: item.icon,
+        votesCount: campaign.votingRules.resultsVisibility === 'public' ? item.votesCount : null,
+        percentage: campaign.votingRules.resultsVisibility === 'public' ? 
+          (campaign.totalVotes > 0 ? Math.round((item.votesCount / campaign.totalVotes) * 100) : 0) : null,
+        displaySettings: item.displaySettings
+      };
+    }),
     startDate: campaign.startDate,
     endDate: campaign.endDate,
     daysRemaining: campaign.daysRemaining,
@@ -1556,7 +1663,13 @@ router.get('/public/:id', wrapRoute(async (req, res) => {
       requireLogin: campaign.settings.requireLogin,
       showProgressBar: campaign.settings.showProgressBar,
       showLeaderboard: campaign.settings.showLeaderboard,
-      visualSettings: campaign.settings.visualSettings
+      visualSettings: {
+        ...(campaign.settings.visualSettings || {}),
+        defaultItemImage: resolveLegacyVotingAssetUrl(
+          campaign.settings?.visualSettings?.defaultItemImage,
+          req
+        ),
+      },
     },
     votingRules: {
       allowMultipleVotes: campaign.votingRules.allowMultipleVotes,
@@ -1584,15 +1697,12 @@ router.post('/public/:id/vote', validateCustomer, wrapRoute(async (req, res) => 
   }
 
   // Get campaign
-  const campaign = await VotingCampaign.findOne({
-    $or: [
-      { _id: req.params.id },
-      { campaignId: req.params.id }
-    ],
-    clientId: req.clientId,
-    campaignStatus: 'active',
-    isDeleted: false
-  });
+  const campaign = await VotingCampaign.findOne(
+    findPublicCampaignQuery(req.params.id, {
+      clientId: req.clientId,
+      campaignStatus: 'active',
+    })
+  );
 
   if (!campaign) {
     return res.status(404).json({
@@ -1699,8 +1809,16 @@ router.post('/public/:id/vote', validateCustomer, wrapRoute(async (req, res) => 
     }
   }
 
-  // Get item image for vote record
-  const itemImage = item.mainImage || item.thumbnail || null;
+  // Get item image for vote record (absolute URL, product-style)
+  const itemImage = resolveLegacyVotingAssetUrl(
+    item.mainImage ||
+      (Array.isArray(item.images) && item.images[0]
+        ? item.images[0].medium || item.images[0].url
+        : null) ||
+      item.thumbnail ||
+      null,
+    req
+  );
 
   // Create new vote
   const vote = new Vote({
@@ -1741,14 +1859,11 @@ router.post('/public/:id/vote', validateCustomer, wrapRoute(async (req, res) => 
 
 // Get customer's vote status
 router.get('/public/:id/my-vote', validateCustomer, wrapRoute(async (req, res) => {
-  const campaign = await VotingCampaign.findOne({
-    $or: [
-      { _id: req.params.id },
-      { campaignId: req.params.id }
-    ],
-    clientId: req.clientId,
-    isDeleted: false
-  });
+  const campaign = await VotingCampaign.findOne(
+    findPublicCampaignQuery(req.params.id, {
+      clientId: req.clientId,
+    })
+  );
 
   if (!campaign) {
     return res.status(404).json({
@@ -1825,15 +1940,12 @@ router.get('/customer/votes', validateCustomer, wrapRoute(async (req, res) => {
 router.delete('/public/:id/vote', validateCustomer, wrapRoute(async (req, res) => {
   const { reason } = req.body;
 
-  const campaign = await VotingCampaign.findOne({
-    $or: [
-      { _id: req.params.id },
-      { campaignId: req.params.id }
-    ],
-    clientId: req.clientId,
-    campaignStatus: 'active',
-    isDeleted: false
-  });
+  const campaign = await VotingCampaign.findOne(
+    findPublicCampaignQuery(req.params.id, {
+      clientId: req.clientId,
+      campaignStatus: 'active',
+    })
+  );
 
   if (!campaign) {
     return res.status(404).json({
