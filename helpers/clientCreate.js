@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const Client = require('../models/client');
 const { getJwtSecret } = require('./jwtSecret');
 const { defaultPaidUntilForNewClient, applyGracePeriod, DEFAULT_GRACE_DAYS } = require('./clientSubscription');
+const { applyLegalAcceptanceFromRequest, emptyLegalAcceptance } = require('./legalAcceptance');
 
 function generateToken(client) {
   const secret = getJwtSecret();
@@ -137,7 +138,7 @@ function defaultReturnUrl(clientID, return_url) {
   return `https://${slug || 'client'}.example.com`;
 }
 
-async function createClientRecord(body) {
+async function createClientRecord(body, extras = {}) {
   const {
     clientID,
     companyName,
@@ -211,6 +212,12 @@ async function createClientRecord(body) {
     tier: tier || 'bronze',
     role: role || 'client',
     permissions: permissions ? defaultPermissions(permissions) : defaultPermissions(),
+    legalAcceptance:
+      applyLegalAcceptanceFromRequest(body, extras.req, {
+        email: businessEmail,
+        name: companyName,
+        source: extras.source || 'admin',
+      }) || emptyLegalAcceptance(),
     ...buildClientDefaults(body),
   });
 

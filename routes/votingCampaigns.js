@@ -162,6 +162,8 @@ function parseCampaignCreateBody(req) {
   }
 
   const body = { ...raw };
+  if (body.items == null && body.options != null) body.items = body.options;
+  if (body.items == null && body.votingItems != null) body.items = body.votingItems;
   if (typeof body.items === 'string') body.items = parseJsonField(body.items, 'items');
   if (typeof body.votingRules === 'string') body.votingRules = parseJsonField(body.votingRules, 'votingRules');
   if (typeof body.settings === 'string') body.settings = parseJsonField(body.settings, 'settings');
@@ -169,15 +171,37 @@ function parseCampaignCreateBody(req) {
   if (typeof body.categories === 'string') body.categories = parseJsonField(body.categories, 'categories');
   if (typeof body.tags === 'string') body.tags = parseJsonField(body.tags, 'tags');
 
+  if (typeof body.campaignType === 'string') {
+    body.campaignType = body.campaignType.trim().toLowerCase();
+  }
+
+  if (Array.isArray(body.items)) {
+    body.items = body.items.map((item) => {
+      if (!item || typeof item !== 'object') return item;
+      const next = { ...item };
+      if ((next.title == null || next.title === '') && next.name != null) {
+        next.title = next.name;
+      }
+      return next;
+    });
+  }
+
+  for (const dateKey of ['startDate', 'endDate']) {
+    if (body[dateKey] == null || body[dateKey] === '') continue;
+    const d = new Date(body[dateKey]);
+    if (!Number.isNaN(d.getTime())) {
+      body[dateKey] = d.toISOString();
+    }
+  }
+
   return body;
 }
 
 function parseCampaignCreateBodyMiddleware(req, res, next) {
   try {
     req.campaignPayload = parseCampaignCreateBody(req);
-    if (isMultipartRequest(req)) {
-      req.body = req.campaignPayload;
-    }
+    // Always sync so express-validator sees parsed JSON fields (items/dates/etc).
+    req.body = req.campaignPayload;
     return next();
   } catch (err) {
     return res.status(400).json({ success: false, error: err.message });
@@ -346,9 +370,9 @@ const validateCustomer = (req, res, next) => {
 const campaignValidation = [
   body('title').notEmpty().withMessage('Campaign title is required'),
   body('description').notEmpty().withMessage('Description is required'),
-  body('campaignType').isIn(['campaign', 'poll']).withMessage('Valid campaign type required'),
-  body('startDate').isISO8601().withMessage('Valid start date is required'),
-  body('endDate').isISO8601().withMessage('Valid end date is required'),
+  body('campaignType').isIn(['campaign', 'poll']).withMessage('Valid campaign type required (campaign or poll)'),
+  body('startDate').isISO8601({ strict: false }).withMessage('Valid start date is required (ISO date)'),
+  body('endDate').isISO8601({ strict: false }).withMessage('Valid end date is required (ISO date)'),
   body('items').isArray({ min: 2 }).withMessage('At least 2 voting items are required'),
   body('items.*.title').notEmpty().withMessage('Each item must have a title')
 ];
@@ -365,7 +389,11 @@ router.post(
   wrapRoute(async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid voting campaign payload',
+        errors: errors.array(),
+      });
     }
 
     const payload = req.campaignPayload || req.body;

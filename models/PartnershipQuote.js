@@ -80,6 +80,13 @@ const partnershipQuoteSchema = new mongoose.Schema(
     prospectEmail: { type: String, default: '', trim: true, lowercase: true },
     prospectPhone: { type: String, default: '', trim: true },
     submittedAt: { type: Date, default: null },
+    legalAcceptance: {
+      accepted: { type: Boolean, default: false },
+      tosVersion: { type: String, default: '' },
+      aupVersion: { type: String, default: '' },
+      acceptedAt: { type: Date, default: null },
+      ip: { type: String, default: '' },
+    },
     validUntil: { type: Date, default: null },
     pricingConfigVersion: { type: Number, default: null },
     followUpEmails: [

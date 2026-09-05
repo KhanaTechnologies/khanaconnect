@@ -8,6 +8,7 @@ const {
   serializeSubscriptionSummary,
   isClientSubscriptionActive,
 } = require('./clientSubscription');
+const { serializeLegalStatus } = require('./legalAcceptance');
 
 async function ensureOwnerMember(client, email, passwordHash) {
   const existingOwner = await TeamMember.findOne({ clientID: client.clientID, orgRole: 'owner' });
@@ -70,6 +71,7 @@ function buildLoginResponse(client, member, token) {
     enabledAdPlatforms: client.getEnabledAdPlatforms(),
     subscription: serializeSubscriptionSummary(client),
     subscriptionActive: isClientSubscriptionActive(client),
+    legalAcceptance: serializeLegalStatus(client),
   };
 }
 

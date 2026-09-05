@@ -56,6 +56,7 @@ const authJwt = () => {
       { url: new RegExp(`^${apiEsc}/public/partnership-pricing/?$`), methods: ['GET', 'OPTIONS'] },
       { url: new RegExp(`^${apiEsc}/public/partnership-quote/[^/]+/?$`), methods: ['GET', 'PATCH', 'OPTIONS'] },
       { url: new RegExp(`^${apiEsc}/public/partnership-quote/[^/]+/submit/?$`), methods: ['POST', 'OPTIONS'] },
+      { url: new RegExp(`^${apiEsc}/legal/policies/?$`), methods: ['GET', 'OPTIONS'] },
 
       // Tracking ingest (no JWT; rate-limited separately)
       { url: new RegExp(`^${apiEsc}/events(/.*)?$`), methods: ['POST', 'OPTIONS'] },

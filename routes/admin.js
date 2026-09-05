@@ -148,7 +148,7 @@ router.get("/clients", requireAdmin, wrapRoute(async (req, res) => {
 // 🔹 CREATE a new client (admin dashboard)
 router.post("/clients", requireAdmin, wrapRoute(async (req, res) => {
   try {
-    const { client, token } = await createClientRecord(req.body);
+    const { client, token } = await createClientRecord(req.body, { req, source: 'admin' });
     res.status(201).json({ success: true, client, token });
   } catch (error) {
     const status = error.status && Number(error.status) >= 400 ? error.status : 500;

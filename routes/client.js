@@ -22,6 +22,14 @@ const { createDashboardAuth } = require('../helpers/dashboardAuth');
 const { requireSelfOrAdmin } = require('../middleware/requireSelfOrAdmin');
 const { requireAdmin: requirePlatformAdmin } = require('../middleware/requireAdmin');
 const { publicClientPayload, stripClientSecrets } = require('../helpers/publicClientPayload');
+const {
+  applyLegalAcceptanceFromRequest,
+  emptyLegalAcceptance,
+  isAcceptedLegalFlag,
+  missingLegalAcceptanceError,
+  recordLegalAcceptance,
+  serializeLegalStatus,
+} = require('../helpers/legalAcceptance');
 
 router.use(authJwt());
 
@@ -1492,7 +1500,13 @@ router.post('/', requirePlatformAdmin, wrapRoute(async (req, res) => {
       eventsFailed: 0,
       dailyQuota: 10000,
       monthlyQuota: 300000
-    }
+    },
+    legalAcceptance:
+      applyLegalAcceptanceFromRequest(req.body, req, {
+        email: businessEmail,
+        name: companyName,
+        source: 'admin',
+      }) || emptyLegalAcceptance(),
   });
 
   const savedClient = await newClient.save();
@@ -1510,6 +1524,39 @@ router.get('/', requirePlatformAdmin, wrapRoute(async (req, res) => {
     success: true,
     count: clients.length,
     clients: clients.map((c) => stripClientSecrets(c.toObject({ getters: true }))),
+  });
+}));
+
+// Merchant clickwrap — must be registered before /:clientId
+router.get('/legal-acceptance', requireTeamSession(), wrapRoute(async (req, res) => {
+  res.json({ success: true, legalAcceptance: serializeLegalStatus(req.teamSession.client) });
+}));
+
+router.post('/legal-acceptance', requireTeamSession(), wrapRoute(async (req, res) => {
+  const { client, member, platformAdmin, orgRole } = req.teamSession;
+  const canBind = platformAdmin || orgRole === 'owner' || orgRole === 'admin';
+  if (!canBind) {
+    return res.status(403).json({
+      success: false,
+      error: 'Only the business owner or an organisation admin can accept the Terms.',
+    });
+  }
+  if (!isAcceptedLegalFlag(req.body)) {
+    return res.status(400).json(missingLegalAcceptanceError());
+  }
+
+  client.legalAcceptance = recordLegalAcceptance({
+    email: member?.email || req.body.email || client.businessEmail,
+    name: member?.displayName || client.companyName,
+    ip: req.ip,
+    userAgent: req.headers['user-agent'] || '',
+    source: 'login',
+  });
+  await client.save();
+
+  res.json({
+    success: true,
+    legalAcceptance: serializeLegalStatus(client),
   });
 }));
 

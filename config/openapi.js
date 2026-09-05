@@ -211,6 +211,28 @@ function buildClientPaths(a, B, P, paramClientId) {
         },
       },
     },
+    [`${a}/legal/policies`]: {
+      get: {
+        tags: ['Legal'],
+        summary: 'Current ToS / AUP versions and take-down agent',
+        security: P,
+        responses: { 200: J.ok },
+      },
+    },
+    [`${a}/client/legal-acceptance`]: {
+      get: op('get', 'Client', 'Legal acceptance status', B),
+      post: {
+        tags: ['Client'],
+        summary: 'Accept current Merchant Terms and AUP',
+        security: B,
+        ...jsonBody('LegalAcceptanceBody', 'Clickwrap acceptance'),
+        responses: {
+          200: J.ok,
+          400: J.badRequest,
+          403: J.forbidden,
+        },
+      },
+    },
     [`${a}/client/login`]: {
       post: {
         tags: ['Client'],
@@ -1239,7 +1261,16 @@ function buildPaths(a) {
 
     [`${a}/votingcampaigns`]: {
       get: op('get', 'Voting campaigns', 'List voting campaigns', B),
-      post: op('post', 'Voting campaigns', 'Create voting campaign', B),
+      post: op('post', 'Voting campaigns', 'Create voting campaign', B, {
+        description:
+          'Create a poll/campaign. Accepts JSON or multipart. Required: `title`, `description`, `campaignType` (`campaign`|`poll`), ISO `startDate`/`endDate`, and at least 2 `items` each with `title`. Item alias `name` is accepted. Codes are one-time-usable per customer elsewhere; this endpoint is campaign creation only.',
+        ...jsonBody('VotingCampaignCreateBody', 'Voting campaign create payload'),
+        responses: {
+          201: jsonResponse('FlexibleJson', 'Created'),
+          400: J.badRequest,
+          403: J.forbidden,
+        },
+      }),
     },
     [`${a}/votingcampaigns/type/{type}`]: {
       get: op('get', 'Voting campaigns', 'By type', B, {
@@ -2024,6 +2055,11 @@ function spec() {
     tags: [
       { name: 'Meta', description: 'HTML home page served at `/` (Express view).' },
       { name: 'Auth', description: 'Reserved tag; primary auth flows live under **Client** and **Customer**.' },
+      {
+        name: 'Legal',
+        description:
+          'Public Merchant Terms, Acceptable Use Policy, and take-down pages at `/terms`, `/aup`, `/legal/takedown`. JSON versions at `/legal/policies.json` and `GET /legal/policies`.',
+      },
       {
         name: 'Client',
         description:
@@ -3169,6 +3205,18 @@ function spec() {
             imapPort: { type: 'integer' },
             smtpHost: { type: 'string' },
             smtpPort: { type: 'integer' },
+            acceptedLegalTerms: {
+              type: 'boolean',
+              description: 'Set true when the merchant accepted the current ToS and AUP (clickwrap).',
+            },
+          },
+        },
+        LegalAcceptanceBody: {
+          type: 'object',
+          required: ['acceptedLegalTerms'],
+          properties: {
+            acceptedLegalTerms: { type: 'boolean' },
+            email: { type: 'string', format: 'email' },
           },
         },
         ClientRegisterResponse: {
@@ -3205,6 +3253,7 @@ function spec() {
             tier: { type: 'string' },
             hasAdPlatforms: { type: 'boolean' },
             enabledAdPlatforms: { type: 'array', items: { type: 'string' } },
+            legalAcceptance: { type: 'object', additionalProperties: true },
           },
         },
         ClientLogoutResponse: {
@@ -3639,6 +3688,38 @@ function spec() {
           properties: {
             success: { type: 'boolean' },
             item: { $ref: '#/components/schemas/ServiceWishlistReminderItem' },
+          },
+        },
+        VotingCampaignCreateBody: {
+          type: 'object',
+          required: ['title', 'description', 'campaignType', 'startDate', 'endDate', 'items'],
+          properties: {
+            title: { type: 'string', example: 'Favorite scent' },
+            description: { type: 'string', example: 'Help us pick the next product' },
+            campaignType: { type: 'string', enum: ['campaign', 'poll'], example: 'poll' },
+            startDate: { type: 'string', format: 'date-time', example: '2026-09-05T00:00:00.000Z' },
+            endDate: { type: 'string', format: 'date-time', example: '2026-09-20T23:59:59.000Z' },
+            items: {
+              type: 'array',
+              minItems: 2,
+              description: 'At least 2 options. Each needs `title` (alias `name` accepted).',
+              items: {
+                type: 'object',
+                required: ['title'],
+                properties: {
+                  title: { type: 'string', example: 'Rose' },
+                  name: { type: 'string', description: 'Alias for title' },
+                  description: { type: 'string' },
+                  images: { type: 'array', items: { type: 'object' } },
+                },
+              },
+            },
+            shortDescription: { type: 'string' },
+            votingRules: { type: 'object' },
+            settings: { type: 'object' },
+            media: { type: 'object' },
+            categories: { type: 'array', items: { type: 'string' } },
+            tags: { type: 'array', items: { type: 'string' } },
           },
         },
         EmailSendBody: {

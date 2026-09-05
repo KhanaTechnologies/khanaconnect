@@ -114,6 +114,21 @@ const clientSchema = new Schema({
     required: true, 
     default: "client"
   },
+  /** Clickwrap: current ToS/AUP versions accepted by the merchant (or attested by admin). */
+  legalAcceptance: {
+    tosVersion: { type: String, default: '', trim: true },
+    aupVersion: { type: String, default: '', trim: true },
+    acceptedAt: { type: Date, default: null },
+    acceptedByEmail: { type: String, default: '', trim: true },
+    acceptedByName: { type: String, default: '', trim: true },
+    ip: { type: String, default: '', trim: true },
+    userAgent: { type: String, default: '', trim: true },
+    source: {
+      type: String,
+      enum: ['', 'signup', 'quote', 'login', 'admin'],
+      default: '',
+    },
+  },
   permissions: {
     bookings: { type: Boolean, default: false },
     orders: { type: Boolean, default: false },

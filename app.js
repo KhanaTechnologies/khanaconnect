@@ -284,6 +284,7 @@ var customerRoutes = require('./routes/customer');
 var clientRoutes = require('./routes/client');
 var productRoutes = require('./routes/product');
 var indexRouter = require('./routes/index');
+var legalRouter = require('./routes/legal');
 var sizeRoutes = require('./routes/sizes');
 var orderRoutes = require('./routes/orders');
 var emailSubscriptionsRoutes = require('./routes/emailSubscriptions');
@@ -312,6 +313,7 @@ const partnershipQuoteRouter = require('./routes/partnershipQuote');
 const teamRouter = require('./routes/team');
 const b2bRouter = require('./routes/b2b');
 
+app.use('/', legalRouter);
 app.use('/', indexRouter);
 
 const api = process.env.API_URL || '/api/v1';
@@ -351,6 +353,7 @@ app.use(`${api}/team`, teamRouter);
 app.use(`${api}/b2b`, b2bRouter);
 app.use(`${api}`, partnershipPricingRouter);
 app.use(`${api}`, partnershipQuoteRouter);
+app.use(api, legalRouter.apiRouter);
 
 
 /**

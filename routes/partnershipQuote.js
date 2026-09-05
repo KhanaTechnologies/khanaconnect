@@ -18,6 +18,12 @@ const { sendPlanQuoteEmails, sendPlanQuoteFollowUpEmail } = require('../utils/em
 const {
   listTemplatesForQuote,
 } = require('../helpers/planQuoteResponseTemplates');
+const { publicLegalMeta, currentPolicyVersions } = require('../helpers/legalPolicies');
+const {
+  isAcceptedLegalFlag,
+  missingLegalAcceptanceError,
+  requestClientIp,
+} = require('../helpers/legalAcceptance');
 
 const router = express.Router();
 
@@ -112,6 +118,7 @@ function serializeQuote(doc, { publicView = false } = {}) {
     followUpEmails: q.followUpEmails || [],
     createdAt: q.createdAt,
     updatedAt: q.updatedAt,
+    legalAccepted: Boolean(q.legalAcceptance?.accepted),
   };
   if (publicView) {
     delete payload.followUpEmails;
@@ -297,6 +304,7 @@ router.get('/public/partnership-quote/:quoteId', wrapRoute(async (req, res) => {
   res.json({
     success: true,
     quote: serializeQuote(quote, { publicView: true }),
+    legal: publicLegalMeta(),
     pricing: {
       currency: pricing.currency,
       currencySymbol: pricing.currencySymbol,
@@ -392,6 +400,10 @@ router.post('/public/partnership-quote/:quoteId/submit', quoteSubmitLimiter, wra
     });
   }
 
+  if (!isAcceptedLegalFlag(req.body)) {
+    return res.status(400).json(missingLegalAcceptanceError());
+  }
+
   if (req.body.selections) {
     const pricing = await getPricingConfig();
     quote.selections = normalizePlanSelections({
@@ -405,6 +417,14 @@ router.post('/public/partnership-quote/:quoteId/submit', quoteSubmitLimiter, wra
   quote.prospectPhone = String(req.body.phone || '').trim();
   quote.status = 'submitted';
   quote.submittedAt = new Date();
+  const versions = currentPolicyVersions();
+  quote.legalAcceptance = {
+    accepted: true,
+    tosVersion: versions.tos,
+    aupVersion: versions.aup,
+    acceptedAt: new Date(),
+    ip: requestClientIp(req),
+  };
   await quote.save();
 
   const khanaClient = await Client.findOne({ clientID: 'Khana' }).select(
