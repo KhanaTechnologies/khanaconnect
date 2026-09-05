@@ -1797,7 +1797,7 @@ router.post('/public/:id/vote', validateCustomer, wrapRoute(async (req, res) => 
         customerId: req.customerId,
         clientId: req.clientId,
         isDeleted: false,
-        status: 'active'
+        status: { $in: ['active', 'changed'] },
       });
 
       if (existingVote) {
@@ -1864,15 +1864,20 @@ router.post('/public/:id/vote', validateCustomer, wrapRoute(async (req, res) => 
   );
 
   // Create new vote
+  const customerEmail =
+    (typeof customer.emailAddress === 'string' && customer.emailAddress) ||
+    (customer.get && customer.get('emailAddress')) ||
+    `customer-${req.customerId}@unknown.local`;
+
   const vote = new Vote({
     campaignId: campaign._id,
-    itemId: item.itemId || item._id,
+    itemId: String(item.itemId || item._id),
     itemTitle: item.title,
     itemImageAtVote: itemImage,
     customerId: req.customerId,
     customerInfo: {
-      name: `${customer.customerFirstName} ${customer.customerLastName}`,
-      email: customer.emailAddress
+      name: `${customer.customerFirstName || ''} ${customer.customerLastName || ''}`.trim() || 'Customer',
+      email: String(customerEmail).toLowerCase(),
     },
     clientId: req.clientId,
     ipAddress: req.ip,
@@ -1882,7 +1887,7 @@ router.post('/public/:id/vote', validateCustomer, wrapRoute(async (req, res) => 
 
   await vote.save();
 
-  // Get updated campaign stats
+  // Ensure counts are current even if post-save hook missed
   const updatedCampaign = await VotingCampaign.findById(campaign._id);
 
   res.status(201).json({

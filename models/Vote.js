@@ -184,6 +184,8 @@ voteSchema.virtual('voteAgeHours').get(function() {
 
 // Methods
 voteSchema.methods.changeVote = async function(newItemId, newItemTitle, newItemImage = null) {
+  const previousItemId = this.itemId;
+
   // Record previous vote
   this.previousVotes.push({
     itemId: this.itemId,
@@ -193,11 +195,11 @@ voteSchema.methods.changeVote = async function(newItemId, newItemTitle, newItemI
     voteNumber: this.voteNumber
   });
   
-  // Update to new item
+  // Update to new item — stay active so my-vote / hasVoted still work
   this.itemId = newItemId;
   this.itemTitle = newItemTitle;
   this.itemImageAtVote = newItemImage;
-  this.status = 'changed';
+  this.status = 'active';
   this.lastUpdated = new Date();
   
   await this.save();
@@ -208,7 +210,7 @@ voteSchema.methods.changeVote = async function(newItemId, newItemTitle, newItemI
   
   if (campaign) {
     // Remove vote from old item
-    await campaign.removeVote(this.previousVotes[this.previousVotes.length - 1].itemId);
+    await campaign.removeVote(previousItemId);
     // Add vote to new item
     await campaign.addVote(newItemId);
   }
@@ -299,7 +301,7 @@ voteSchema.statics.hasVoted = async function(campaignId, customerId) {
     campaignId,
     customerId,
     isDeleted: false,
-    status: 'active'
+    status: { $in: ['active', 'changed'] },
   });
   return count > 0;
 };
@@ -309,12 +311,15 @@ voteSchema.statics.getVoteCount = async function(campaignId, customerId) {
     campaignId,
     customerId,
     isDeleted: false,
-    status: 'active'
+    status: { $in: ['active', 'changed'] },
   });
 };
 
 // Pre-save middleware
 voteSchema.pre('save', async function(next) {
+  this.$locals = this.$locals || {};
+  this.$locals.wasNew = this.isNew;
+
   if (this.isNew) {
     // Get campaign to check voting rules
     const VotingCampaign = mongoose.model('VotingCampaign');
@@ -326,7 +331,7 @@ voteSchema.pre('save', async function(next) {
         campaignId: this.campaignId,
         customerId: this.customerId,
         isDeleted: false,
-        status: 'active'
+        status: { $in: ['active', 'changed'] },
       });
       
       if (existingVote && !campaign.votingRules.allowMultipleVotes) {
@@ -339,7 +344,7 @@ voteSchema.pre('save', async function(next) {
           campaignId: this.campaignId,
           customerId: this.customerId,
           isDeleted: false,
-          status: 'active'
+          status: { $in: ['active', 'changed'] },
         });
         
         if (voteCount >= campaign.votingRules.maxVotesPerCustomer) {
@@ -379,23 +384,19 @@ voteSchema.pre('save', async function(next) {
   next();
 });
 
-// Post-save middleware
+// Post-save middleware — isNew is false after save, so use wasNew from pre-save
 voteSchema.post('save', async function(doc) {
-  if (doc.isNew && doc.status === 'active' && !doc.previousVotes.length) {
-    // Update campaign vote counts (only for new votes, not changes)
+  const wasNew = doc.$locals && doc.$locals.wasNew;
+  if (!wasNew || doc.status !== 'active') return;
+
+  try {
     const VotingCampaign = mongoose.model('VotingCampaign');
-    await VotingCampaign.findByIdAndUpdate(doc.campaignId, {
-      $inc: { totalVotes: 1 }
-    });
-    
-    // Update item vote count
-    await VotingCampaign.updateOne(
-      { 
-        _id: doc.campaignId,
-        'items.itemId': doc.itemId
-      },
-      { $inc: { 'items.$.votesCount': 1 } }
-    );
+    const campaign = await VotingCampaign.findById(doc.campaignId);
+    if (campaign) {
+      await campaign.addVote(String(doc.itemId));
+    }
+  } catch (err) {
+    console.error('[Vote] Failed to increment campaign vote counts:', err.message || err);
   }
 });
 

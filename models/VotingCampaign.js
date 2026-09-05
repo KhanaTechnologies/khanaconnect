@@ -697,8 +697,8 @@ votingCampaignSchema.statics.checkCustomerVote = async function(campaignId, cust
     campaignId,
     customerId,
     isDeleted: false,
-    status: 'active'
-  });
+    status: { $in: ['active', 'changed'] },
+  }).sort({ lastUpdated: -1, votedAt: -1 });
   
   return {
     hasVoted: !!vote,
