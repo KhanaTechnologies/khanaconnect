@@ -400,8 +400,35 @@ router.post(
     payload.clientId = req.clientId;
     payload.createdBy = req.clientId;
 
-    const startDate = new Date(payload.startDate);
-    const endDate = new Date(payload.endDate);
+    let startDate = new Date(payload.startDate);
+    let endDate = new Date(payload.endDate);
+
+    // Date-only pickers often send the same YYYY-MM-DD for start/end (both midnight UTC),
+    // which previously failed start >= end. Treat same-day as through end-of-day.
+    if (
+      !Number.isNaN(startDate.getTime()) &&
+      !Number.isNaN(endDate.getTime()) &&
+      startDate >= endDate
+    ) {
+      const sameUtcDay =
+        startDate.getUTCFullYear() === endDate.getUTCFullYear() &&
+        startDate.getUTCMonth() === endDate.getUTCMonth() &&
+        startDate.getUTCDate() === endDate.getUTCDate();
+      if (sameUtcDay) {
+        endDate = new Date(
+          Date.UTC(
+            startDate.getUTCFullYear(),
+            startDate.getUTCMonth(),
+            startDate.getUTCDate(),
+            23,
+            59,
+            59,
+            999
+          )
+        );
+        payload.endDate = endDate.toISOString();
+      }
+    }
 
     if (startDate >= endDate) {
       return res.status(400).json({
