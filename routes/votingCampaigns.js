@@ -485,20 +485,39 @@ const validateClient = createDashboardAuth('voting');
 const validateCustomer = (req, res, next) => {
   const token = req.headers.authorization;
   if (!token || !token.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized - Customer token missing' });
+    return res.status(401).json({
+      success: false,
+      error: 'Unauthorized - Customer token missing. Please sign in again.',
+    });
   }
 
   const tokenValue = token.split(' ')[1];
   try {
     const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
-    if (!decoded.customerID) {
-      return res.status(403).json({ error: 'Forbidden - Invalid customer token' });
+    const customerId = decoded.customerID || decoded.customerId;
+    if (!customerId) {
+      return res.status(403).json({
+        success: false,
+        error: 'Forbidden - Customer login required to vote',
+      });
     }
-    req.customerId = decoded.customerID;
-    req.clientId = decoded.clientID;
+    req.customerId = String(customerId);
+    req.clientId = decoded.clientID || decoded.clientId;
+    if (!req.clientId) {
+      return res.status(403).json({
+        success: false,
+        error: 'Forbidden - Invalid customer token (missing client)',
+      });
+    }
     next();
-  } catch (_err) {
-    return res.status(403).json({ error: 'Forbidden - Invalid customer token' });
+  } catch (err) {
+    const expired = err && err.name === 'TokenExpiredError';
+    return res.status(401).json({
+      success: false,
+      error: expired
+        ? 'Your session expired. Please sign in again to vote.'
+        : 'Unauthorized - Invalid customer token. Please sign in again.',
+    });
   }
 };
 
@@ -1658,6 +1677,7 @@ router.get('/public/:id', wrapRoute(async (req, res) => {
       const imageFields = serializeItemImages(item, req);
       return {
         itemId: item.itemId,
+        _id: item.itemId,
         title: item.title,
         description: item.description,
         ...imageFields,

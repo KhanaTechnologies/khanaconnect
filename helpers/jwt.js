@@ -1,20 +1,65 @@
-const { expressjwt } = require('express-jwt');
-const { getJwtSecret } = require('./jwtSecret');
+const jwt = require('jsonwebtoken');
+const { unless } = require('express-unless');
+const { verifyJwtWithAnySecret } = require('./jwtSecret');
 
 /**
  * Global JWT gate for /api/v1.
  * Only truly public paths are exempt. Everything else must present a valid Bearer JWT;
  * route-level middleware still enforces tenant ownership / admin / storefront rules.
+ *
+ * Verifies with any configured secret (JWT_SECRET / ENCRYPTION_KEY / secret) so
+ * storefront customer tokens keep working across secret rotation.
  */
 const authJwt = () => {
-  const secret = getJwtSecret();
   const api = process.env.API_URL || '/api/v1';
   const apiEsc = api.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return expressjwt({
-    secret,
-    algorithms: ['HS256'],
-    isRevoked: isRevoked,
-  }).unless({
+
+  const middleware = function authJwtMiddleware(req, res, next) {
+    const header = req.headers.authorization;
+    if (!header || !String(header).startsWith('Bearer ')) {
+      const err = new Error('No authorization token was found');
+      err.name = 'UnauthorizedError';
+      err.status = 401;
+      err.statusCode = 401;
+      return next(err);
+    }
+
+    const tokenValue = String(header).slice(7).trim();
+    if (!tokenValue) {
+      const err = new Error('No authorization token was found');
+      err.name = 'UnauthorizedError';
+      err.status = 401;
+      err.statusCode = 401;
+      return next(err);
+    }
+
+    try {
+      const { decoded } = verifyJwtWithAnySecret(jwt, tokenValue);
+      if (
+        Object.prototype.hasOwnProperty.call(decoded, 'isActive') &&
+        !decoded.isActive
+      ) {
+        const err = new Error('Token revoked');
+        err.name = 'UnauthorizedError';
+        err.status = 401;
+        err.statusCode = 401;
+        return next(err);
+      }
+      // Match express-jwt shape used elsewhere
+      req.auth = decoded;
+      return next();
+    } catch (e) {
+      const err = new Error(e.message || 'Invalid token');
+      err.name = 'UnauthorizedError';
+      err.status = 401;
+      err.statusCode = 401;
+      return next(err);
+    }
+  };
+
+  middleware.unless = unless;
+
+  return middleware.unless({
     path: [
       // Static uploads
       { url: /\/public\/uploads(.*)/, methods: ['GET', 'OPTIONS'] },
@@ -50,9 +95,12 @@ const authJwt = () => {
       { url: new RegExp(`^${apiEsc}/email/newsletter/open\\.gif`), methods: ['GET', 'OPTIONS'] },
       { url: new RegExp(`^${apiEsc}/email/newsletter/unsubscribe`), methods: ['GET', 'OPTIONS'] },
 
-      // Public campaigns / partnership
+      // Public campaigns / partnership / voting (route middleware still checks customer JWT for vote)
       { url: new RegExp(`^${apiEsc}/campaigns/public(/.*)?$`), methods: ['GET', 'OPTIONS'] },
-      { url: new RegExp(`^${apiEsc}/votingcampaigns/public`), methods: ['GET', 'POST', 'OPTIONS'] },
+      {
+        url: new RegExp(`^${apiEsc}/votingcampaigns/public`),
+        methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+      },
       { url: new RegExp(`^${apiEsc}/public/partnership-pricing/?$`), methods: ['GET', 'OPTIONS'] },
       { url: new RegExp(`^${apiEsc}/public/partnership-quote/[^/]+/?$`), methods: ['GET', 'PATCH', 'OPTIONS'] },
       { url: new RegExp(`^${apiEsc}/public/partnership-quote/[^/]+/submit/?$`), methods: ['POST', 'OPTIONS'] },
@@ -77,25 +125,5 @@ const authJwt = () => {
     ],
   });
 };
-
-async function isRevoked(req, token) {
-  // Skip revocation check for password reset routes
-  if (req.originalUrl.includes('/customer/reset-password/')) {
-    return false;
-  }
-  // Skip revocation check for verify routes
-  if (req.originalUrl.includes('/customer/verify/')) {
-    return false;
-  }
-  // Skip revocation check for verify routes
-  if (req.originalUrl.includes('/customer/login')) {
-    return false;
-  }
-
-  if (token.payload.hasOwnProperty('isActive') && !token.payload.isActive) {
-    return true;
-  }
-  return false;
-}
 
 module.exports = authJwt;
