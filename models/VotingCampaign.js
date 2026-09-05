@@ -486,38 +486,68 @@ votingCampaignSchema.methods.removeVote = async function(itemId) {
 
 /**
  * Recompute totalVotes / item votesCount / uniqueVoters from the Vote collection.
- * Fixes dashboard totals when denormalized counters drifted or failed to increment.
+ * Matches ballots by itemId, subdocument _id, or itemTitle (legacy votes).
+ * Fixes dashboard totals when denormalized counters drifted or item ids mismatched.
  */
 votingCampaignSchema.methods.syncVoteCountsFromBallots = async function(options = {}) {
   const Vote = mongoose.model('Vote');
   const persist = options.persist !== false;
+  const healBallotIds = options.healBallotIds !== false;
 
   const ballots = await Vote.find({
     campaignId: this._id,
     isDeleted: false,
     status: { $in: ['active', 'changed'] },
-  }).select('itemId customerId');
+  }).select('itemId itemTitle customerId');
 
-  const countsByItem = new Map();
+  for (const item of this.items) {
+    item.votesCount = 0;
+  }
+
   const uniqueVoters = new Set();
+  const ballotHeals = [];
+
+  const findItemForBallot = (ballot) => {
+    const key = String(ballot.itemId || '').trim();
+    if (key) {
+      const byId = this.items.find(
+        (i) => String(i.itemId) === key || String(i._id) === key
+      );
+      if (byId) return byId;
+    }
+    const title = String(ballot.itemTitle || '').trim().toLowerCase();
+    if (title) {
+      return this.items.find(
+        (i) => String(i.title || '').trim().toLowerCase() === title
+      );
+    }
+    return null;
+  };
 
   for (const ballot of ballots) {
-    const key = String(ballot.itemId);
-    countsByItem.set(key, (countsByItem.get(key) || 0) + 1);
     if (ballot.customerId) uniqueVoters.add(String(ballot.customerId));
+
+    const item = findItemForBallot(ballot);
+    if (!item) continue;
+
+    item.votesCount = (item.votesCount || 0) + 1;
+
+    const canonicalId = String(item.itemId || item._id);
+    if (healBallotIds && String(ballot.itemId) !== canonicalId) {
+      ballotHeals.push({ ballotId: ballot._id, itemId: canonicalId });
+    }
   }
 
-  let totalVotes = 0;
-  for (const item of this.items) {
-    const byItemId = countsByItem.get(String(item.itemId)) || 0;
-    const byObjectId = countsByItem.get(String(item._id)) || 0;
-    const count = byItemId || byObjectId;
-    item.votesCount = count;
-    totalVotes += count;
-  }
-
-  this.totalVotes = totalVotes;
+  this.totalVotes = ballots.length;
   this.uniqueVoters = uniqueVoters.size;
+
+  if (healBallotIds && ballotHeals.length) {
+    await Promise.all(
+      ballotHeals.map((heal) =>
+        Vote.updateOne({ _id: heal.ballotId }, { $set: { itemId: heal.itemId } })
+      )
+    );
+  }
 
   if (persist) {
     this.$locals = this.$locals || {};
@@ -530,6 +560,7 @@ votingCampaignSchema.methods.syncVoteCountsFromBallots = async function(options 
     uniqueVoters: this.uniqueVoters,
     items: this.items.map((item) => ({
       itemId: item.itemId,
+      title: item.title,
       votesCount: item.votesCount,
     })),
   };
@@ -556,9 +587,12 @@ votingCampaignSchema.methods.getResults = function() {
       
       return {
         ...item.toObject(),
+        itemId: item.itemId || item._id,
+        title: item.title,
+        votesCount: item.votesCount || 0,
         rank: index + 1,
-        percentage: this.totalVotes > 0 ? Math.round((item.votesCount / this.totalVotes) * 100) : 0,
-        isWinning: index === 0,
+        percentage: this.totalVotes > 0 ? Math.round(((item.votesCount || 0) / this.totalVotes) * 100) : 0,
+        isWinning: index === 0 && (item.votesCount || 0) > 0,
         displayImage: primaryImage ? (primaryImage.medium || primaryImage.url) : (this.settings.visualSettings.defaultItemImage || null),
         thumbnail: primaryImage ? primaryImage.thumbnail : null,
         hasImages: item.images && item.images.length > 0,

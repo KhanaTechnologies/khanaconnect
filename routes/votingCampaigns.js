@@ -1497,12 +1497,15 @@ router.get('/:id/results', validateClient, wrapRoute(async (req, res) => {
   }
 
   // Rebuild denormalized counters from ballots so Khana shows live totals
-  await campaign.syncVoteCountsFromBallots();
+  await campaign.syncVoteCountsFromBallots({ persist: true, healBallotIds: true });
 
   const results = campaign.getResults();
   if (Array.isArray(results.items)) {
     results.items = results.items.map((item) => ({
       ...item,
+      itemId: item.itemId,
+      title: item.title,
+      votesCount: item.votesCount || 0,
       displayImage: resolveLegacyVotingAssetUrl(item.displayImage, req),
       thumbnail: resolveLegacyVotingAssetUrl(item.thumbnail, req),
       mainImage: resolveLegacyVotingAssetUrl(item.mainImage, req),
@@ -1510,6 +1513,16 @@ router.get('/:id/results', validateClient, wrapRoute(async (req, res) => {
   }
   // Get detailed vote stats
   const voteStats = await Vote.getCampaignStats(campaign._id);
+
+  // Recent ballots with titles so Khana can show what was voted for
+  const recentVotes = await Vote.find({
+    campaignId: campaign._id,
+    isDeleted: false,
+    status: { $in: ['active', 'changed'] },
+  })
+    .select('itemId itemTitle itemImageAtVote votedAt customerInfo status')
+    .sort({ votedAt: -1 })
+    .limit(50);
 
   res.json({
     success: true,
@@ -1523,7 +1536,8 @@ router.get('/:id/results', validateClient, wrapRoute(async (req, res) => {
         uniqueVoters: campaign.uniqueVoters
       },
       results,
-      voteStats
+      voteStats,
+      recentVotes,
     }
   });
 }));
