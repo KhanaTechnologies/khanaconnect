@@ -32,20 +32,39 @@ function findActivePublicCampaignQuery(id) {
   return findPublicCampaignQuery(id, { campaignStatus: 'active' });
 }
 
+function plainVotingImage(img) {
+  if (!img) return null;
+  if (typeof img.toObject === 'function') return img.toObject();
+  if (typeof img.toJSON === 'function') return img.toJSON();
+  return { ...img };
+}
+
+/** Serialize one stored voting image for API/dashboard (absolute URLs + isPrimary). */
+function serializeStoredVotingImage(img, req) {
+  const plain = plainVotingImage(img);
+  if (!plain) return null;
+  const url = resolveLegacyVotingAssetUrl(plain.url || plain.medium || plain.thumbnail, req);
+  const thumbnail = resolveLegacyVotingAssetUrl(
+    plain.thumbnail || plain.medium || plain.url,
+    req
+  );
+  const medium = resolveLegacyVotingAssetUrl(plain.medium || plain.url, req);
+  return {
+    ...plain,
+    url,
+    thumbnail,
+    medium,
+    original: resolveLegacyVotingAssetUrl(plain.original || plain.url, req),
+    caption: plain.caption || '',
+    isPrimary: !!plain.isPrimary,
+  };
+}
+
 function serializeItemImages(item, req) {
   const images = Array.isArray(item.images)
     ? item.images
+        .map((img) => serializeStoredVotingImage(img, req))
         .filter((img) => img && (img.url || img.thumbnail || img.medium))
-        .map((img) => ({
-          url: resolveLegacyVotingAssetUrl(img.url || img.medium || img.thumbnail, req),
-          thumbnail: resolveLegacyVotingAssetUrl(
-            img.thumbnail || img.medium || img.url,
-            req
-          ),
-          medium: resolveLegacyVotingAssetUrl(img.medium || img.url, req),
-          caption: img.caption || '',
-          isPrimary: !!img.isPrimary,
-        }))
     : [];
   const primary =
     images.find((img) => img.isPrimary) ||
@@ -773,18 +792,21 @@ router.post('/:id/items/:itemId/images', validateClient, uploadItemImage, proces
 
   // Get updated item with images
   const updatedItem = campaign.getItemWithImages(item.itemId || item._id);
+  const imageFields = serializeItemImages(updatedItem, req);
+  const serializedUpload = serializeStoredVotingImage(imageData, req);
 
   res.status(201).json({
     success: true,
     data: {
-      image: imageData,
+      image: serializedUpload,
       item: {
         itemId: updatedItem.itemId,
         title: updatedItem.title,
-        imageCount: updatedItem.images.length,
-        mainImage: updatedItem.mainImage,
-        thumbnail: updatedItem.thumbnail,
-        hasImages: updatedItem.hasImages
+        imageCount: imageFields.images.length,
+        mainImage: imageFields.mainImage,
+        thumbnail: imageFields.thumbnail,
+        images: imageFields.images,
+        hasImages: imageFields.hasImages
       }
     },
     message: 'Image uploaded successfully'
@@ -901,19 +923,20 @@ router.get('/:id/items/:itemId/images', validateClient, wrapRoute(async (req, re
     });
   }
 
+  const imageFields = serializeItemImages(item, req);
+
   res.json({
     success: true,
     data: {
       itemId: item.itemId,
       title: item.title,
-      images: item.images.map(img => ({
-        ...img,
-        isPrimary: img.isPrimary
-      })),
-      mainImage: item.mainImage,
-      thumbnail: item.thumbnail,
-      imageCount: item.images.length,
-      hasImages: item.hasImages
+      images: imageFields.images,
+      mainImage: imageFields.mainImage,
+      image: imageFields.image,
+      displayImage: imageFields.displayImage,
+      thumbnail: imageFields.thumbnail,
+      imageCount: imageFields.images.length,
+      hasImages: imageFields.hasImages,
     }
   });
 }));
@@ -956,15 +979,18 @@ router.patch('/:id/items/:itemId/images/primary', validateClient, wrapRoute(asyn
   await campaign.setPrimaryImage(item.itemId || item._id, imageUrl);
 
   const updatedItem = campaign.getItemWithImages(item.itemId || item._id);
+  const imageFields = serializeItemImages(updatedItem, req);
 
   res.json({
     success: true,
     message: 'Primary image set successfully',
     data: {
       itemId: updatedItem.itemId,
-      primaryImage: updatedItem.mainImage,
-      thumbnail: updatedItem.thumbnail,
-      hasImages: updatedItem.hasImages
+      primaryImage: imageFields.mainImage,
+      mainImage: imageFields.mainImage,
+      thumbnail: imageFields.thumbnail,
+      images: imageFields.images,
+      hasImages: imageFields.hasImages,
     }
   });
 }));
@@ -1062,17 +1088,14 @@ router.patch('/:id/items/:itemId/images/reorder', validateClient, wrapRoute(asyn
 
   const updatedItem = campaign.getItemWithImages(item.itemId || item._id);
 
+  const imageFields = serializeItemImages(updatedItem, req);
+
   res.json({
     success: true,
     message: 'Images reordered successfully',
     data: {
       itemId: updatedItem.itemId,
-      images: updatedItem.images.map(img => ({
-        url: img.url,
-        thumbnail: img.thumbnail,
-        order: img.order,
-        isPrimary: img.isPrimary
-      }))
+      images: imageFields.images,
     }
   });
 }));
