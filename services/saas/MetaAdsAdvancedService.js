@@ -659,13 +659,13 @@ async function previewCustomAudienceFromCustomers(clientId, { preset = 'all' } =
   };
 }
 
-async function getInsightBreakdowns(clientId, { days = 30, month = '', breakdown = 'age' } = {}) {
+async function getInsightBreakdowns(clientId, { days = 30, month = '', preset = '', breakdown = 'age' } = {}) {
   const client = await loadClientWithMeta(clientId);
   const adAccountId = normalizeAdAccountId(client.metaAds?.adAccountId);
   if (!adAccountId) throw new Error('Select an ad account first');
 
   const token = String(client.metaAds.accessToken);
-  const window = resolveInsightsWindow({ days, month });
+  const window = resolveInsightsWindow({ days, month, preset });
   const dateParams = insightsGraphDateParams(window);
 
   const allowed = new Set(['age', 'gender', 'age,gender', 'publisher_platform', 'impression_device', 'country']);

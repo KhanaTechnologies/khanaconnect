@@ -547,17 +547,20 @@ async function listInstagramMedia(clientId, { limit = 20 } = {}) {
   }
 }
 
-async function getInsights(clientId, { days = 30, month = '' } = {}) {
+async function getInsights(clientId, { days = 30, month = '', preset = '' } = {}) {
   const client = await loadClientWithMeta(clientId);
   const adAccountId = normalizeAdAccountId(client.metaAds?.adAccountId);
-  if (!adAccountId) throw new Error('Select an ad account first');
+  if (!adAccountId) throw metaClientError('Select an ad account first');
+
+  assertAdsPermissions(client);
 
   const token = String(client.metaAds.accessToken);
-  const window = resolveInsightsWindow({ days, month });
+  const window = resolveInsightsWindow({ days, month, preset });
   const dateParams = insightsGraphDateParams(window);
 
   let accountInsights = null;
   let campaignRows = [];
+  const warnings = [];
 
   try {
     const accRes = await graphGet(`/act_${adAccountId}/insights`, token, {
@@ -578,29 +581,46 @@ async function getInsights(clientId, { days = 30, month = '' } = {}) {
         dateStart: row.date_start || window.since || null,
         dateStop: row.date_stop || window.until || null,
       };
+    } else {
+      // Meta returns data: [] when there was no delivery in the window — not an API failure.
+      accountInsights = {
+        spend: 0,
+        impressions: 0,
+        clicks: 0,
+        reach: 0,
+        ctr: 0,
+        cpc: 0,
+        cpm: 0,
+        dateStart: window.since || null,
+        dateStop: window.until || null,
+      };
+      warnings.push(
+        `No delivery in ${window.label}. Meta only returns rows for periods with impressions. Pick the month the ad actually ran, and confirm the correct ad account is selected.`
+      );
     }
   } catch (err) {
-    console.warn('[meta ads] account insights failed:', err.message);
+    const msg = formatGraphError(err);
+    console.warn('[meta ads] account insights failed:', msg);
+    warnings.push(`Account insights failed: ${msg}`);
   }
 
   try {
-    const campRes = await graphGet(`/act_${adAccountId}/insights`, token, {
-      fields: 'campaign_name,spend,impressions,clicks,reach,ctr',
-      ...dateParams,
-      level: 'campaign',
-      limit: 10,
-    });
     const rows = Array.isArray(campRes?.data) ? campRes.data : [];
-    campaignRows = rows.map((r) => ({
-      name: String(r.campaign_name || 'Campaign'),
-      spend: Number(r.spend) || 0,
-      impressions: Number(r.impressions) || 0,
-      clicks: Number(r.clicks) || 0,
-      reach: Number(r.reach) || 0,
-      ctr: Number(r.ctr) || 0,
-    }));
+    campaignRows = rows
+      .map((r) => ({
+        name: String(r.campaign_name || 'Campaign'),
+        campaignId: r.campaign_id ? String(r.campaign_id) : '',
+        spend: Number(r.spend) || 0,
+        impressions: Number(r.impressions) || 0,
+        clicks: Number(r.clicks) || 0,
+        reach: Number(r.reach) || 0,
+        ctr: Number(r.ctr) || 0,
+      }))
+      .sort((a, b) => b.spend - a.spend);
   } catch (err) {
-    console.warn('[meta ads] campaign insights failed:', err.message);
+    const msg = formatGraphError(err);
+    console.warn('[meta ads] campaign insights failed:', msg);
+    warnings.push(`Campaign insights failed: ${msg}`);
   }
 
   client.metaAds.lastSync = new Date();
@@ -618,14 +638,16 @@ async function getInsights(clientId, { days = 30, month = '' } = {}) {
     label: window.label,
     account: accountInsights,
     campaigns: campaignRows,
+    warning: warnings[0] || '',
+    warnings,
   };
 }
 
 /**
- * Resolve rolling days or a calendar month (YYYY-MM) for Meta insights.
+ * Resolve rolling days, Meta date_preset, or a calendar month (YYYY-MM) for insights.
  * Meta accepts either date_preset or time_range (not both).
  */
-function resolveInsightsWindow({ days = 30, month = '' } = {}) {
+function resolveInsightsWindow({ days = 30, month = '', preset = '' } = {}) {
   const monthKey = String(month || '').trim();
   if (/^\d{4}-\d{2}$/.test(monthKey)) {
     const [y, m] = monthKey.split('-').map((n) => Number(n));
@@ -634,14 +656,13 @@ function resolveInsightsWindow({ days = 30, month = '' } = {}) {
       const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
       let until = `${monthKey}-${String(lastDay).padStart(2, '0')}`;
       const today = new Date();
-      const todayStr = `${today.getUTCFullYear()}-${String(today.getUTCMonth() + 1).padStart(2, '0')}-${String(
-        today.getUTCDate()
+      const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(
+        today.getDate()
       ).padStart(2, '0')}`;
       if (until > todayStr) until = todayStr;
-      const label = new Date(Date.UTC(y, m - 1, 1)).toLocaleString('en-ZA', {
+      const label = new Date(y, m - 1, 1).toLocaleString('en-ZA', {
         month: 'long',
         year: 'numeric',
-        timeZone: 'UTC',
       });
       return {
         datePreset: null,
@@ -654,10 +675,46 @@ function resolveInsightsWindow({ days = 30, month = '' } = {}) {
     }
   }
 
+  const presetRaw = String(preset || '').trim().toLowerCase();
+  const allowedPresets = new Set([
+    'last_7d',
+    'last_14d',
+    'last_30d',
+    'last_90d',
+    'last_month',
+    'this_month',
+    'maximum',
+  ]);
+  if (allowedPresets.has(presetRaw)) {
+    const labels = {
+      last_7d: 'Last 7 days',
+      last_14d: 'Last 14 days',
+      last_30d: 'Last 30 days',
+      last_90d: 'Last 90 days',
+      last_month: 'Last calendar month',
+      this_month: 'This month',
+      maximum: 'All available (up to ~37 months)',
+    };
+    return {
+      datePreset: presetRaw,
+      days: null,
+      month: null,
+      since: null,
+      until: null,
+      label: labels[presetRaw] || presetRaw,
+    };
+  }
+
   const dayNum = Math.min(Math.max(Number(days) || 30, 1), 90);
-  const datePreset = dayNum <= 7 ? 'last_7d' : dayNum <= 14 ? 'last_14d' : 'last_30d';
+  const datePreset = dayNum <= 7 ? 'last_7d' : dayNum <= 14 ? 'last_14d' : dayNum <= 30 ? 'last_30d' : 'last_90d';
   const label =
-    datePreset === 'last_7d' ? 'Last 7 days' : datePreset === 'last_14d' ? 'Last 14 days' : 'Last 30 days';
+    datePreset === 'last_7d'
+      ? 'Last 7 days'
+      : datePreset === 'last_14d'
+        ? 'Last 14 days'
+        : datePreset === 'last_90d'
+          ? 'Last 90 days'
+          : 'Last 30 days';
   return {
     datePreset,
     days: dayNum,

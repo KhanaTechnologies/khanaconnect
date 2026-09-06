@@ -1433,11 +1433,17 @@ router.post('/meta/pixel/test-event', requireRoles('owner', 'manager', 'operator
 }));
 
 router.get('/meta/insights', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
-  const data = await MetaAdsService.getInsights(req.tenant.clientId, {
-    days: req.query.days,
-    month: req.query.month,
-  });
-  res.json({ ok: true, data });
+  try {
+    const data = await MetaAdsService.getInsights(req.tenant.clientId, {
+      days: req.query.days,
+      month: req.query.month,
+      preset: req.query.preset,
+    });
+    res.json({ ok: true, data });
+  } catch (err) {
+    const statusCode = Number(err?.status) >= 400 ? Number(err.status) : 400;
+    res.status(statusCode).json({ ok: false, message: err.message || 'Insights failed' });
+  }
 }));
 
 router.post('/meta/boost', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
@@ -1551,12 +1557,18 @@ router.post('/meta/custom-audiences/from-customers', requireRoles('owner', 'mana
 }));
 
 router.get('/meta/insights/breakdowns', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
-  const data = await MetaAdsAdvancedService.getInsightBreakdowns(req.tenant.clientId, {
-    days: req.query.days,
-    month: req.query.month,
-    breakdown: req.query.breakdown,
-  });
-  res.json({ ok: true, data });
+  try {
+    const data = await MetaAdsAdvancedService.getInsightBreakdowns(req.tenant.clientId, {
+      days: req.query.days,
+      month: req.query.month,
+      preset: req.query.preset,
+      breakdown: req.query.breakdown,
+    });
+    res.json({ ok: true, data });
+  } catch (err) {
+    const statusCode = Number(err?.status) >= 400 ? Number(err.status) : 400;
+    res.status(statusCode).json({ ok: false, message: err.message || 'Insights breakdown failed' });
+  }
 }));
 
 router.post(
