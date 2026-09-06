@@ -755,6 +755,24 @@ function buildTargetingSpec(input = {}) {
     }
   }
 
+  // Meta Marketing API v23+: new ad sets must set advantage_audience (0|1) when
+  // age/gender/detailed targeting is not purely default/relaxed — we always set age_min/max.
+  // @see https://developers.facebook.com/docs/marketing-api/audiences/reference/targeting-expansion/advantage-audience/
+  const existingAutomation =
+    input.targeting_automation && typeof input.targeting_automation === 'object'
+      ? { ...input.targeting_automation }
+      : {};
+  const advantageRaw =
+    input.advantage_audience ??
+    input.advantageAudience ??
+    existingAutomation.advantage_audience ??
+    1;
+  const advantageAudience = Number(advantageRaw) === 0 ? 0 : 1;
+  targeting.targeting_automation = {
+    ...existingAutomation,
+    advantage_audience: advantageAudience,
+  };
+
   return targeting;
 }
 
