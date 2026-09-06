@@ -817,7 +817,12 @@ async function createClickToWhatsAppCampaign(
     });
     adId = ad.id;
   } catch (err) {
-    // Fallback: traffic objective to wa.me if conversations/WhatsApp destination not available
+    // Do not silently fall back to OUTCOME_TRAFFIC / wa.me — that path does not produce
+    // ctwa_clid and breaks WhatsApp Conversions / App Review demos.
+    // Opt-in only: META_WHATSAPP_TRAFFIC_FALLBACK=1
+    if (String(process.env.META_WHATSAPP_TRAFFIC_FALLBACK || '').trim() !== '1') {
+      throw new Error(formatGraphError(err));
+    }
     try {
       const campaign = await graphPost(`/act_${adAccountId}/campaigns`, token, {
         name: campaignName,

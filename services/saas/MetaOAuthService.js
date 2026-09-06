@@ -91,7 +91,9 @@ function buildAuthorizeUrl(clientId) {
   } else {
     params.set('scope', OAUTH_SCOPES);
   }
-  return `https://www.facebook.com/v25.0/dialog/oauth?${params.toString()}`;
+  const dialogVersionMatch = String(META_GRAPH_BASE).match(/\/(v\d+\.\d+)\/?$/i);
+  const dialogVersion = dialogVersionMatch?.[1] || 'v25.0';
+  return `https://www.facebook.com/${dialogVersion}/dialog/oauth?${params.toString()}`;
 }
 
 function getAuthorizeDebug() {
@@ -364,6 +366,7 @@ async function getConnectionStatus(clientId) {
     permissions: permissionDiagnostics,
     adsAvailable: !!permissionDiagnostics.adsAvailable,
     instagramAvailable: !!permissionDiagnostics.instagramAvailable,
+    instagramPublishAvailable: !!permissionDiagnostics.instagramPublishAvailable,
     whatsappConversionsAvailable: !!permissionDiagnostics.whatsappConversionsAvailable,
     blockedFeatures: permissionDiagnostics.blockedFeatures || [],
   };

@@ -346,6 +346,11 @@ router.post('/whatsapp/conversions/test-event', requireRoles('owner', 'manager',
       contactWaId: req.body?.contactWaId || req.body?.contact_wa_id || '',
       currency: req.body?.currency || 'ZAR',
       value: req.body?.value,
+      testEventCode:
+        req.body?.testEventCode ||
+        req.body?.test_event_code ||
+        process.env.WHATSAPP_CAPI_TEST_EVENT_CODE ||
+        '',
     });
     res.json({ ok: true, data });
   } catch (err) {
@@ -376,16 +381,9 @@ router.get('/whatsapp/status', requireRoles('owner', 'manager', 'operator', 'vie
     .sort({ updated_at: -1 })
     .lean();
 
-  const khanaAccount =
-    clientId === 'Khana'
-      ? ownAccount
-      : await SaasWhatsAppAccount.findOne({ client_id: 'Khana', status: 'active' })
-          .sort({ updated_at: -1 })
-          .lean();
-
+  // Sends never fall back to Khana's WABA — status must match that (App Review screencasts).
   const usingOwnAccount = !!ownAccount;
-  const usingKhanaFallback = !usingOwnAccount && !!khanaAccount;
-  const hasSender = usingOwnAccount || usingKhanaFallback;
+  const hasSender = usingOwnAccount;
 
   const billing = await BillingService.ensureAccount(clientId);
   const creditBalance = Number(billing.credit_balance || 0);
@@ -399,7 +397,7 @@ router.get('/whatsapp/status', requireRoles('owner', 'manager', 'operator', 'vie
       notificationsEnabled,
       hasSender,
       usingOwnAccount,
-      usingKhanaFallback,
+      usingKhanaFallback: false,
       creditBalance,
       creditsOk,
       ready,
@@ -409,13 +407,7 @@ router.get('/whatsapp/status', requireRoles('owner', 'manager', 'operator', 'vie
             phone_number_id: ownAccount.phone_number_id,
             waba_id: ownAccount.waba_id,
           }
-        : usingKhanaFallback
-          ? {
-              source: 'khana',
-              phone_number_id: khanaAccount.phone_number_id,
-              waba_id: khanaAccount.waba_id,
-            }
-          : null,
+        : null,
       checklist: [
         {
           id: 'notifications',
@@ -424,11 +416,9 @@ router.get('/whatsapp/status', requireRoles('owner', 'manager', 'operator', 'vie
         },
         {
           id: 'sender',
-          label: usingKhanaFallback
-            ? 'Sender ready (Khana platform WhatsApp)'
-            : usingOwnAccount
-              ? 'Sender ready (your Cloud API number)'
-              : 'Cloud API sender configured',
+          label: usingOwnAccount
+            ? 'Sender ready (your Cloud API number)'
+            : 'Save this client’s own WhatsApp Cloud API credentials',
           ok: hasSender,
         },
         {

@@ -403,6 +403,11 @@ async function sendConversionEvent(clientId, input = {}) {
     };
   }
 
+  const testEventCode = String(input.testEventCode || input.test_event_code || '').trim();
+  if (testEventCode) {
+    payload.test_event_code = testEventCode;
+  }
+
   let response;
   try {
     const { data } = await axios.post(`${WA_API_BASE}/${datasetId}/events`, payload, {

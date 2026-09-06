@@ -9,7 +9,7 @@ const BillingService = require('./BillingService');
 const PricingService = require('./PricingService');
 
 const WA_API_BASE = process.env.WHATSAPP_GRAPH_BASE || 'https://graph.facebook.com/v25.0';
-const TEMPLATE_LANG = process.env.WHATSAPP_TEMPLATE_LANG || 'en';
+const TEMPLATE_LANG = process.env.WHATSAPP_TEMPLATE_LANG || 'en_US';
 
 function bodyTextParams(values) {
   return {
@@ -115,6 +115,9 @@ class WhatsAppService {
       return { ok: false, skipped: true, reason: 'missing waba_id or token' };
     }
 
+    const ourAppId = String(
+      process.env.WHATSAPP_APP_ID || process.env.META_APP_ID || process.env.FACEBOOK_APP_ID || ''
+    ).trim();
     const url = `${WA_API_BASE}/${waba_id}/subscribed_apps`;
     try {
       const existing = await axios.get(url, {
@@ -122,9 +125,22 @@ class WhatsAppService {
         headers: { Authorization: `Bearer ${token}` },
       });
       const apps = existing.data?.data || [];
-      if (apps.length > 0) {
-        console.log(`[whatsapp] WABA ${waba_id} already has ${apps.length} subscribed app(s)`);
+      const alreadyOurs = ourAppId
+        ? apps.some((a) => String(a.id || a) === ourAppId)
+        : false;
+      if (alreadyOurs) {
+        console.log(`[whatsapp] WABA ${waba_id} already subscribed to app ${ourAppId}`);
         return { ok: true, alreadySubscribed: true, apps };
+      }
+      if (apps.length > 0 && !ourAppId) {
+        // Without our app id we cannot tell if *this* app is subscribed — still POST.
+        console.warn(
+          `[whatsapp] WABA ${waba_id} has ${apps.length} subscribed app(s) but WHATSAPP_APP_ID/META_APP_ID is unset; attempting subscribe`
+        );
+      } else if (apps.length > 0) {
+        console.log(
+          `[whatsapp] WABA ${waba_id} has ${apps.length} subscribed app(s); our app ${ourAppId} missing — subscribing`
+        );
       }
     } catch (e) {
       console.warn(
