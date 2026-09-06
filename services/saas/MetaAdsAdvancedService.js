@@ -11,6 +11,8 @@ const {
   loadClientWithMeta,
   normalizeAdAccountId,
   buildTargetingSpec,
+  resolveInsightsWindow,
+  insightsGraphDateParams,
 } = require('./MetaAdsService');
 
 const META_GRAPH_BASE = process.env.META_GRAPH_BASE || 'https://graph.facebook.com/v25.0';
@@ -657,14 +659,14 @@ async function previewCustomAudienceFromCustomers(clientId, { preset = 'all' } =
   };
 }
 
-async function getInsightBreakdowns(clientId, { days = 30, breakdown = 'age' } = {}) {
+async function getInsightBreakdowns(clientId, { days = 30, month = '', breakdown = 'age' } = {}) {
   const client = await loadClientWithMeta(clientId);
   const adAccountId = normalizeAdAccountId(client.metaAds?.adAccountId);
   if (!adAccountId) throw new Error('Select an ad account first');
 
   const token = String(client.metaAds.accessToken);
-  const dayNum = Math.min(Math.max(Number(days) || 30, 1), 90);
-  const datePreset = dayNum <= 7 ? 'last_7d' : dayNum <= 14 ? 'last_14d' : 'last_30d';
+  const window = resolveInsightsWindow({ days, month });
+  const dateParams = insightsGraphDateParams(window);
 
   const allowed = new Set(['age', 'gender', 'age,gender', 'publisher_platform', 'impression_device', 'country']);
   const breakdownKey = allowed.has(String(breakdown)) ? String(breakdown) : 'age';
@@ -672,7 +674,7 @@ async function getInsightBreakdowns(clientId, { days = 30, breakdown = 'age' } =
   try {
     const res = await graphGet(`/act_${adAccountId}/insights`, token, {
       fields: 'spend,impressions,clicks,reach,ctr',
-      date_preset: datePreset,
+      ...dateParams,
       breakdowns: breakdownKey,
       level: 'account',
       limit: 50,
@@ -680,7 +682,11 @@ async function getInsightBreakdowns(clientId, { days = 30, breakdown = 'age' } =
     const rows = Array.isArray(res?.data) ? res.data : [];
     return {
       breakdown: breakdownKey,
-      datePreset,
+      datePreset: window.datePreset,
+      month: window.month,
+      since: window.since,
+      until: window.until,
+      label: window.label,
       rows: rows.map((r) => ({
         age: r.age || null,
         gender: r.gender || null,

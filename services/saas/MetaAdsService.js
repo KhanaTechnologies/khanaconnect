@@ -547,14 +547,14 @@ async function listInstagramMedia(clientId, { limit = 20 } = {}) {
   }
 }
 
-async function getInsights(clientId, { days = 30 } = {}) {
+async function getInsights(clientId, { days = 30, month = '' } = {}) {
   const client = await loadClientWithMeta(clientId);
   const adAccountId = normalizeAdAccountId(client.metaAds?.adAccountId);
   if (!adAccountId) throw new Error('Select an ad account first');
 
   const token = String(client.metaAds.accessToken);
-  const dayNum = Math.min(Math.max(Number(days) || 30, 1), 90);
-  const datePreset = dayNum <= 7 ? 'last_7d' : dayNum <= 14 ? 'last_14d' : 'last_30d';
+  const window = resolveInsightsWindow({ days, month });
+  const dateParams = insightsGraphDateParams(window);
 
   let accountInsights = null;
   let campaignRows = [];
@@ -562,7 +562,7 @@ async function getInsights(clientId, { days = 30 } = {}) {
   try {
     const accRes = await graphGet(`/act_${adAccountId}/insights`, token, {
       fields: 'spend,impressions,clicks,reach,ctr,cpc,cpm,actions',
-      date_preset: datePreset,
+      ...dateParams,
       level: 'account',
     });
     const row = Array.isArray(accRes?.data) ? accRes.data[0] : null;
@@ -575,8 +575,8 @@ async function getInsights(clientId, { days = 30 } = {}) {
         ctr: Number(row.ctr) || 0,
         cpc: Number(row.cpc) || 0,
         cpm: Number(row.cpm) || 0,
-        dateStart: row.date_start || null,
-        dateStop: row.date_stop || null,
+        dateStart: row.date_start || window.since || null,
+        dateStop: row.date_stop || window.until || null,
       };
     }
   } catch (err) {
@@ -586,7 +586,7 @@ async function getInsights(clientId, { days = 30 } = {}) {
   try {
     const campRes = await graphGet(`/act_${adAccountId}/insights`, token, {
       fields: 'campaign_name,spend,impressions,clicks,reach,ctr',
-      date_preset: datePreset,
+      ...dateParams,
       level: 'campaign',
       limit: 10,
     });
@@ -610,11 +610,71 @@ async function getInsights(clientId, { days = 30 } = {}) {
   return {
     adAccountId,
     adAccountName: client.metaAds.adAccountName || '',
-    datePreset,
-    days: dayNum,
+    datePreset: window.datePreset,
+    days: window.days,
+    month: window.month,
+    since: window.since,
+    until: window.until,
+    label: window.label,
     account: accountInsights,
     campaigns: campaignRows,
   };
+}
+
+/**
+ * Resolve rolling days or a calendar month (YYYY-MM) for Meta insights.
+ * Meta accepts either date_preset or time_range (not both).
+ */
+function resolveInsightsWindow({ days = 30, month = '' } = {}) {
+  const monthKey = String(month || '').trim();
+  if (/^\d{4}-\d{2}$/.test(monthKey)) {
+    const [y, m] = monthKey.split('-').map((n) => Number(n));
+    if (y >= 2010 && m >= 1 && m <= 12) {
+      const since = `${monthKey}-01`;
+      const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+      let until = `${monthKey}-${String(lastDay).padStart(2, '0')}`;
+      const today = new Date();
+      const todayStr = `${today.getUTCFullYear()}-${String(today.getUTCMonth() + 1).padStart(2, '0')}-${String(
+        today.getUTCDate()
+      ).padStart(2, '0')}`;
+      if (until > todayStr) until = todayStr;
+      const label = new Date(Date.UTC(y, m - 1, 1)).toLocaleString('en-ZA', {
+        month: 'long',
+        year: 'numeric',
+        timeZone: 'UTC',
+      });
+      return {
+        datePreset: null,
+        days: null,
+        month: monthKey,
+        since,
+        until,
+        label,
+      };
+    }
+  }
+
+  const dayNum = Math.min(Math.max(Number(days) || 30, 1), 90);
+  const datePreset = dayNum <= 7 ? 'last_7d' : dayNum <= 14 ? 'last_14d' : 'last_30d';
+  const label =
+    datePreset === 'last_7d' ? 'Last 7 days' : datePreset === 'last_14d' ? 'Last 14 days' : 'Last 30 days';
+  return {
+    datePreset,
+    days: dayNum,
+    month: null,
+    since: null,
+    until: null,
+    label,
+  };
+}
+
+function insightsGraphDateParams(window) {
+  if (window?.month && window.since && window.until) {
+    return {
+      time_range: JSON.stringify({ since: window.since, until: window.until }),
+    };
+  }
+  return { date_preset: window?.datePreset || 'last_30d' };
 }
 
 function clampAge(value, fallback, { min = 18, max = 65 } = {}) {
@@ -1821,6 +1881,8 @@ module.exports = {
   publishSocialPost,
   sendPixelTestEvent,
   getInsights,
+  resolveInsightsWindow,
+  insightsGraphDateParams,
   boostPost,
   buildTargetingSpec,
   searchTargeting,

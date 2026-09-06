@@ -1433,8 +1433,10 @@ router.post('/meta/pixel/test-event', requireRoles('owner', 'manager', 'operator
 }));
 
 router.get('/meta/insights', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
-  const days = req.query.days;
-  const data = await MetaAdsService.getInsights(req.tenant.clientId, { days });
+  const data = await MetaAdsService.getInsights(req.tenant.clientId, {
+    days: req.query.days,
+    month: req.query.month,
+  });
   res.json({ ok: true, data });
 }));
 
@@ -1551,6 +1553,7 @@ router.post('/meta/custom-audiences/from-customers', requireRoles('owner', 'mana
 router.get('/meta/insights/breakdowns', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
   const data = await MetaAdsAdvancedService.getInsightBreakdowns(req.tenant.clientId, {
     days: req.query.days,
+    month: req.query.month,
     breakdown: req.query.breakdown,
   });
   res.json({ ok: true, data });
