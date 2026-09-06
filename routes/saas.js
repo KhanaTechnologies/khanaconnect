@@ -232,11 +232,13 @@ router.post('/whatsapp/accounts', requireRoles('owner', 'manager', 'operator'), 
   });
 
   let dataset = null;
+  let datasetError = '';
   try {
     const WhatsAppConversionsService = require('../services/saas/WhatsAppConversionsService');
     dataset = await WhatsAppConversionsService.ensureDataset(req.tenant.clientId, { force: true });
   } catch (e) {
-    console.warn('[whatsapp] dataset link on account save:', e.message);
+    datasetError = String(e?.message || e).slice(0, 500);
+    console.warn('[whatsapp] dataset link on account save:', datasetError);
   }
 
   res.status(201).json({
@@ -249,8 +251,10 @@ router.post('/whatsapp/accounts', requireRoles('owner', 'manager', 'operator'), 
       status: doc.status,
       has_token: true,
       webhook_subscribed: subscribe?.ok === true,
+      webhook_subscribe_error: subscribe?.ok ? '' : String(subscribe?.error || subscribe?.reason || '').slice(0, 300),
       dataset_id: dataset?.datasetId || '',
       dataset_source: dataset?.source || doc.dataset_source || '',
+      dataset_error: datasetError,
     },
   });
 }));
