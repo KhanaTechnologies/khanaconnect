@@ -1461,16 +1461,25 @@ router.post('/meta/boost', requireRoles('owner', 'manager'), wrapRoute(async (re
   if (!postId || dailyBudget == null) {
     return res.status(400).json({ ok: false, message: 'post_id and daily_budget are required' });
   }
-  const data = await MetaAdsService.boostPost(req.tenant.clientId, {
-    postId,
-    dailyBudget,
-    days,
-    country,
-    status,
-    source,
-    targeting: targeting && typeof targeting === 'object' ? targeting : {},
-  });
-  res.status(201).json({ ok: true, data });
+  try {
+    const data = await MetaAdsService.boostPost(req.tenant.clientId, {
+      postId,
+      dailyBudget,
+      days,
+      country,
+      status,
+      source,
+      targeting: targeting && typeof targeting === 'object' ? targeting : {},
+    });
+    res.status(201).json({ ok: true, data });
+  } catch (err) {
+    const statusCode = Number(err?.status) >= 400 ? Number(err.status) : 400;
+    return res.status(statusCode).json({
+      ok: false,
+      success: false,
+      message: err.message || 'Boost failed',
+    });
+  }
 }));
 
 router.get('/meta/targeting/search', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {

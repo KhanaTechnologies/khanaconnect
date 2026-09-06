@@ -40,6 +40,37 @@ function formatGraphError(err) {
   return err?.message || 'Meta API request failed';
 }
 
+/** Errors that should show to the dashboard (not generic 500). */
+function metaClientError(message, status = 400) {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+}
+
+function assertAdsPermissions(client) {
+  const diagnostics = client?.metaAds?.permissionDiagnostics;
+  const granted = Array.isArray(client?.metaAds?.grantedPermissions)
+    ? client.metaAds.grantedPermissions
+    : [];
+  const names = new Set(
+    granted
+      .map((row) => String(row?.permission || row || '').trim())
+      .filter(Boolean)
+  );
+  const adsOk =
+    diagnostics?.adsAvailable === true ||
+    (names.has('ads_read') && names.has('ads_management'));
+
+  if (adsOk) return;
+
+  throw metaClientError(
+    'Your Facebook connection does not include ads permissions yet (ads_read / ads_management). ' +
+      'For App Review demos: Meta App in Development mode → Login for Business config must list those permissions → ' +
+      'Disconnect Facebook in Khana → Connect again and accept all prompts → then retry boost. ' +
+      'Until Meta approves them in Live mode, only app admins/testers can use boost.'
+  );
+}
+
 async function exchangeLongLivedToken(shortToken) {
   const { data } = await axios.get(`${META_GRAPH_BASE}/oauth/access_token`, {
     params: {
@@ -58,11 +89,13 @@ async function exchangeLongLivedToken(shortToken) {
 
 async function loadClientWithMeta(clientId, { refreshToken = true } = {}) {
   const client = await Client.findOne({ clientID: clientId });
-  if (!client) throw new Error('Client not found');
+  if (!client) throw metaClientError('Client not found', 404);
 
   const token = client.metaAds?.accessToken ? String(client.metaAds.accessToken) : '';
   if (!token) {
-    throw new Error('Facebook is not connected. Connect your account in Account settings.');
+    throw metaClientError(
+      'Facebook is not connected. Connect your account in Meta Ads settings.'
+    );
   }
 
   if (refreshToken) {
@@ -889,6 +922,7 @@ async function boostPost(
   }
 ) {
   const client = await loadClientWithMeta(clientId);
+  assertAdsPermissions(client);
   const token = String(client.metaAds.accessToken);
   const pageId = client.metaAds?.pageId;
   const adAccountId = normalizeAdAccountId(client.metaAds?.adAccountId);
@@ -896,23 +930,23 @@ async function boostPost(
     ? 'instagram'
     : 'facebook';
 
-  if (!pageId) throw new Error('Select a Facebook Page first');
-  if (!adAccountId) throw new Error('Select an ad account first');
-  if (!postId) throw new Error('post_id is required');
+  if (!pageId) throw metaClientError('Select a Facebook Page first');
+  if (!adAccountId) throw metaClientError('Select an ad account first');
+  if (!postId) throw metaClientError('post_id is required');
 
   const dailyBudgetNum = Number(dailyBudget);
   if (!Number.isFinite(dailyBudgetNum) || dailyBudgetNum <= 0) {
-    throw new Error('daily_budget must be a positive number (account currency)');
+    throw metaClientError('daily_budget must be a positive number (account currency)');
   }
 
   const dailyBudgetCents = Math.round(dailyBudgetNum * 100);
   if (dailyBudgetCents < 100) {
-    throw new Error('Minimum daily budget is 1.00 in your ad account currency');
+    throw metaClientError('Minimum daily budget is 1.00 in your ad account currency');
   }
   // Meta enforces a higher per-account floor (often ~R15–R20 for ZAR). Prefer at least 20
   // in major currencies so App Review demos do not fail after campaign create.
   if (dailyBudgetNum < 20) {
-    throw new Error(
+    throw metaClientError(
       'Daily budget is below Meta’s typical account minimum. Try at least 20 in your ad account currency (e.g. R20 ZAR).'
     );
   }
@@ -939,7 +973,7 @@ async function boostPost(
       }
     }
     if (!igUserId) {
-      throw new Error(
+      throw metaClientError(
         'No Instagram account linked to this Facebook Page. Link Instagram Professional to the Page in Meta, then reconnect.'
       );
     }
@@ -1012,7 +1046,7 @@ async function boostPost(
     });
     adId = ad.id;
   } catch (err) {
-    throw new Error(formatGraphError(err));
+    throw metaClientError(formatGraphError(err));
   }
 
   const campaignDoc = {

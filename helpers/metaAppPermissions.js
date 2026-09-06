@@ -88,7 +88,7 @@ const META_BUSINESS_ADMIN_HELP = [
   'Sign in to Facebook with the personal profile that is Admin on the Meta Business Portfolio (not only Page Editor).',
   'Meta Business Settings → People → your name must show Full control (Admin).',
   'The WhatsApp Business Account must live under that same Business Portfolio.',
-  'In Developers → App → Login for Business configuration, include only approved permissions (remove denied scopes until re-approved).',
+  'In Developers → App → Login for Business configuration: for App Review demos / Development mode, temporarily include ads_read, ads_management, instagram_basic, and instagram_content_publish so testers can grant them; remove denied scopes again before relying on Live mode for customers.',
   'Disconnect → Connect Facebook in Khana after changing the Login for Business config.',
 ];
 
