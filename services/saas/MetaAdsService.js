@@ -605,6 +605,12 @@ async function getInsights(clientId, { days = 30, month = '', preset = '' } = {}
   }
 
   try {
+    const campRes = await graphGet(`/act_${adAccountId}/insights`, token, {
+      fields: 'campaign_name,campaign_id,spend,impressions,clicks,reach,ctr',
+      ...dateParams,
+      level: 'campaign',
+      limit: 50,
+    });
     const rows = Array.isArray(campRes?.data) ? campRes.data : [];
     campaignRows = rows
       .map((r) => ({
