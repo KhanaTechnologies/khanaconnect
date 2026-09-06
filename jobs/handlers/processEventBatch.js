@@ -76,7 +76,7 @@ async function processEventBatch({ events, clientId }) {
 }
 
 const MIN_GRAPH_VERSION = 19;
-const DEFAULT_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v21.0';
+const DEFAULT_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v25.0';
 
 // Clients saved before the Graph upgrade still carry a hard-coded v18.0, which Meta
 // no longer serves. Anything below the supported floor falls back to the current version.

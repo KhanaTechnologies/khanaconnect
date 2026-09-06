@@ -8,7 +8,7 @@ require('dotenv').config();
 const mongoose = require('mongoose');
 const { decrypt } = require('../helpers/encryption');
 
-const GRAPH = 'https://graph.facebook.com/v21.0';
+const GRAPH = 'https://graph.facebook.com/v25.0';
 
 async function graph(path, params) {
   const url = new URL(`${GRAPH}/${path}`);

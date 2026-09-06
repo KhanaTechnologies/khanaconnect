@@ -3,7 +3,7 @@ const Client = require('../../models/client');
 const SaasUsageEvent = require('../../models/SaasUsageEvent');
 const { usageBillingQueue } = require('../../queues/saasQueues');
 
-const META_GRAPH_BASE = process.env.META_GRAPH_BASE || 'https://graph.facebook.com/v21.0';
+const META_GRAPH_BASE = process.env.META_GRAPH_BASE || 'https://graph.facebook.com/v25.0';
 const DEFAULT_AGENCY_BM_ID = process.env.AGENCY_META_BUSINESS_ID || '';
 const DEFAULT_OWNERSHIP = process.env.DEFAULT_AD_OWNERSHIP_TYPE === 'client' ? 'client' : 'agency';
 

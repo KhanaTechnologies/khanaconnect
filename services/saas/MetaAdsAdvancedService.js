@@ -13,7 +13,7 @@ const {
   buildTargetingSpec,
 } = require('./MetaAdsService');
 
-const META_GRAPH_BASE = process.env.META_GRAPH_BASE || 'https://graph.facebook.com/v21.0';
+const META_GRAPH_BASE = process.env.META_GRAPH_BASE || 'https://graph.facebook.com/v25.0';
 
 function formatGraphError(err) {
   const fb = err?.response?.data?.error;
@@ -836,6 +836,8 @@ async function createClickToWhatsAppCampaign(
         optimization_goal: 'LINK_CLICKS',
         bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
         targeting: JSON.stringify(targeting),
+        promoted_object: JSON.stringify({ page_id: pageId }),
+        destination_type: 'WEBSITE',
         start_time: startTime,
         end_time: startTime + durationDays * 86400,
         status: adStatus,
@@ -1005,7 +1007,7 @@ async function createLeadAd(
       optimization_goal: 'LEAD_GENERATION',
       bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
       targeting: JSON.stringify(targeting),
-      promoted_object: JSON.stringify({ page_id: pageId }),
+      promoted_object: JSON.stringify({ page_id: pageId, lead_gen_form_id: formId }),
       destination_type: 'ON_AD',
       start_time: startTime,
       end_time: startTime + durationDays * 86400,
@@ -1246,6 +1248,11 @@ async function createCatalogSalesCampaign(
   const campaignName =
     String(name || '').trim() || `Khana Catalog ${new Date().toISOString().slice(0, 10)}`;
   const pixelId = client.metaAds.pixelId ? String(client.metaAds.pixelId) : '';
+  if (!pixelId) {
+    throw new Error(
+      'Connect a Meta Pixel on your ad account (Meta Ads → Setup) before creating catalog sales campaigns'
+    );
+  }
   const targeting = buildTargetingSpec({
     country,
     ...targetingInput,
@@ -1274,8 +1281,7 @@ async function createCatalogSalesCampaign(
     });
     campaignId = campaign.id;
 
-    const promotedObject = { product_set_id: productSetId };
-    if (pixelId) promotedObject.pixel_id = pixelId;
+    const promotedObject = { product_set_id: productSetId, pixel_id: pixelId };
 
     const startTime = Math.floor(Date.now() / 1000);
     const adSet = await graphPost(`/act_${adAccountId}/adsets`, token, {
@@ -1285,11 +1291,9 @@ async function createCatalogSalesCampaign(
       billing_event: 'IMPRESSIONS',
       optimization_goal: 'OFFSITE_CONVERSIONS',
       bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
-      targeting: JSON.stringify({
-        ...targeting,
-        product_audience_specs: undefined,
-      }),
+      targeting: JSON.stringify(targeting),
       promoted_object: JSON.stringify(promotedObject),
+      destination_type: 'WEBSITE',
       start_time: startTime,
       end_time: startTime + durationDays * 86400,
       status: adStatus,

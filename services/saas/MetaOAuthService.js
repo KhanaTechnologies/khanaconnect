@@ -3,7 +3,7 @@ const jwt = require('jsonwebtoken');
 const Client = require('../../models/client');
 const { getJwtSecret } = require('../../helpers/jwtSecret');
 
-const META_GRAPH_BASE = process.env.META_GRAPH_BASE || 'https://graph.facebook.com/v21.0';
+const META_GRAPH_BASE = process.env.META_GRAPH_BASE || 'https://graph.facebook.com/v25.0';
 const META_APP_ID = process.env.META_APP_ID || process.env.FACEBOOK_APP_ID || '';
 const META_APP_SECRET = process.env.META_APP_SECRET || process.env.FACEBOOK_APP_SECRET || '';
 
@@ -91,7 +91,7 @@ function buildAuthorizeUrl(clientId) {
   } else {
     params.set('scope', OAUTH_SCOPES);
   }
-  return `https://www.facebook.com/v21.0/dialog/oauth?${params.toString()}`;
+  return `https://www.facebook.com/v25.0/dialog/oauth?${params.toString()}`;
 }
 
 function getAuthorizeDebug() {

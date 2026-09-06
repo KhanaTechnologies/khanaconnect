@@ -2,7 +2,7 @@ const axios = require('axios');
 const Client = require('../../models/client');
 const SaasUsageEvent = require('../../models/SaasUsageEvent');
 const { usageBillingQueue } = require('../../queues/saasQueues');
-const META_GRAPH_BASE = process.env.META_GRAPH_BASE || 'https://graph.facebook.com/v21.0';
+const META_GRAPH_BASE = process.env.META_GRAPH_BASE || 'https://graph.facebook.com/v25.0';
 const META_APP_ID = process.env.META_APP_ID || process.env.FACEBOOK_APP_ID || '';
 const META_APP_SECRET = process.env.META_APP_SECRET || process.env.FACEBOOK_APP_SECRET || '';
 
@@ -568,14 +568,16 @@ async function getInsights(clientId, { days = 30 } = {}) {
   };
 }
 
-function clampAge(value, fallback) {
+function clampAge(value, fallback, { min = 18, max = 65 } = {}) {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
-  return Math.min(65, Math.max(13, Math.round(n)));
+  return Math.min(max, Math.max(min, Math.round(n)));
 }
 
 /**
  * Build a Meta Marketing API targeting object from dashboard options.
+ * Advantage+ audience (v23+): when enabled, only age_min 18–25 may be set; age_max must be omitted (fixed at 65).
+ * @see https://developers.facebook.com/docs/marketing-api/audiences/reference/targeting-expansion/advantage-audience/
  * @see https://developers.facebook.com/docs/marketing-api/audiences/reference/basic-targeting
  */
 function buildTargetingSpec(input = {}) {
@@ -655,16 +657,48 @@ function buildTargetingSpec(input = {}) {
     geo_locations.custom_locations = custom_locations;
   }
 
-  const age_min = clampAge(input.age_min ?? input.ageMin, 18);
-  const age_max = clampAge(input.age_max ?? input.ageMax, 65);
-  if (age_min > age_max) {
-    throw new Error('age_min cannot be greater than age_max');
+  const existingAutomation =
+    input.targeting_automation && typeof input.targeting_automation === 'object'
+      ? { ...input.targeting_automation }
+      : {};
+  const advantageRaw =
+    input.advantage_audience ??
+    input.advantageAudience ??
+    existingAutomation.advantage_audience;
+  // Default ON (Meta v23+ recommended). Callers can pass 0 for a strict manual audience.
+  let advantageAudience = advantageRaw == null ? 1 : Number(advantageRaw) === 0 ? 0 : 1;
+
+  const requestedMin = input.age_min ?? input.ageMin;
+  const requestedMax = input.age_max ?? input.ageMax;
+  const strictAgeRequested =
+    (requestedMin != null && Number(requestedMin) > 25) ||
+    (requestedMax != null && Number(requestedMax) < 65);
+
+  // Narrow age bands are incompatible with Advantage+ audience — switch to manual.
+  if (advantageAudience === 1 && strictAgeRequested) {
+    advantageAudience = 0;
   }
 
   const targeting = {
     geo_locations,
-    age_min,
-    age_max,
+  };
+
+  if (advantageAudience === 1) {
+    // Advantage+: age_min 18–25 only; do not send age_max (Meta fixes at 65).
+    targeting.age_min = clampAge(requestedMin ?? 18, 18, { min: 18, max: 25 });
+  } else {
+    const age_min = clampAge(requestedMin ?? 18, 18, { min: 18, max: 65 });
+    const age_max = clampAge(requestedMax ?? 65, 65, { min: 18, max: 65 });
+    if (age_min > age_max) {
+      throw new Error('age_min cannot be greater than age_max');
+    }
+    targeting.age_min = age_min;
+    targeting.age_max = age_max;
+  }
+
+  targeting.targeting_automation = {
+    ...existingAutomation,
+    advantage_audience: advantageAudience,
   };
 
   // Meta: 1 = male, 2 = female. Omit for all genders.
@@ -747,6 +781,7 @@ function buildTargetingSpec(input = {}) {
     if (Array.isArray(input.instagram_positions) && input.instagram_positions.length) {
       targeting.instagram_positions = input.instagram_positions.map((p) => String(p));
     } else if (platforms.includes('instagram')) {
+      // Avoid explore (removed in Marketing API v26).
       targeting.instagram_positions = ['stream', 'story', 'reels'];
     }
 
@@ -754,24 +789,6 @@ function buildTargetingSpec(input = {}) {
       targeting.device_platforms = input.device_platforms.map((p) => String(p));
     }
   }
-
-  // Meta Marketing API v23+: new ad sets must set advantage_audience (0|1) when
-  // age/gender/detailed targeting is not purely default/relaxed — we always set age_min/max.
-  // @see https://developers.facebook.com/docs/marketing-api/audiences/reference/targeting-expansion/advantage-audience/
-  const existingAutomation =
-    input.targeting_automation && typeof input.targeting_automation === 'object'
-      ? { ...input.targeting_automation }
-      : {};
-  const advantageRaw =
-    input.advantage_audience ??
-    input.advantageAudience ??
-    existingAutomation.advantage_audience ??
-    1;
-  const advantageAudience = Number(advantageRaw) === 0 ? 0 : 1;
-  targeting.targeting_automation = {
-    ...existingAutomation,
-    advantage_audience: advantageAudience,
-  };
 
   return targeting;
 }
@@ -1357,7 +1374,7 @@ async function publishInstagramVideoBuffer(
   if (!containerId) throw new Error('Meta did not return a resumable media container id');
 
   const versionMatch = String(META_GRAPH_BASE).match(/\/(v\d+\.\d+)\/?$/i);
-  const apiVersion = versionMatch?.[1] || 'v21.0';
+  const apiVersion = versionMatch?.[1] || 'v25.0';
   try {
     await axios.post(
       `https://rupload.facebook.com/ig-api-upload/${apiVersion}/${containerId}`,
