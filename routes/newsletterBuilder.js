@@ -146,19 +146,18 @@ router.get('/drafts', wrapRoute(async (req, res) => {
     isDeleted: false,
   })
     .sort({ updatedAt: -1 })
-    .select('name templateId subject updatedAt createdAt')
+    .select('name templateId subject status updatedAt createdAt')
     .lean();
 
   res.json({ ok: true, data: drafts });
 }));
 
-/** POST /newsletter/drafts */
+/** POST /newsletter/drafts — save in-progress builder layout (blocks live in payload) */
 router.post('/drafts', wrapRoute(async (req, res) => {
   const { name, templateId, subject, html, text, payload } = req.body || {};
 
-  if (templateId && !isKnownTemplateId(templateId)) {
-    return res.status(400).json({ ok: false, message: 'Unknown templateId' });
-  }
+  // Allow any templateId string for drafts so clients can save progress even with new starters.
+  const safeTemplateId = templateId != null ? String(templateId).trim().slice(0, 120) : '';
 
   let safeHtml = html || '';
   let safeText = text || '';
@@ -174,11 +173,12 @@ router.post('/drafts', wrapRoute(async (req, res) => {
   const draft = await NewsletterDraft.create({
     clientID: req.client.clientID,
     name: name || 'Untitled draft',
-    templateId: templateId || '',
+    templateId: safeTemplateId,
     subject: subject || '',
     html: safeHtml,
     text: safeText,
     payload: parseJsonBody(payload, {}),
+    status: 'draft',
   });
 
   res.status(201).json({ ok: true, data: draft });
@@ -213,12 +213,8 @@ router.put('/drafts/:id', wrapRoute(async (req, res) => {
 
   const { name, templateId, subject, html, text, payload } = req.body || {};
 
-  if (templateId && !isKnownTemplateId(templateId)) {
-    return res.status(400).json({ ok: false, message: 'Unknown templateId' });
-  }
-
   if (name != null) draft.name = name;
-  if (templateId != null) draft.templateId = templateId;
+  if (templateId != null) draft.templateId = String(templateId).trim().slice(0, 120);
   if (subject != null) draft.subject = subject;
   if (payload != null) draft.payload = parseJsonBody(payload, {});
 
