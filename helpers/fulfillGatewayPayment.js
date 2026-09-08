@@ -7,32 +7,43 @@ const { updateCustomerOrderHistory } = require('./orderCustomerHistory');
 const { mergeRevenueSettings } = require('./revenueDefaults');
 const { sendPostPurchaseEmail } = require('./revenueLifecycleEmails');
 const { resolveSmtpHost } = require('./mailHost');
+const { clientEmailBrandingPayload } = require('./clientEmailBranding');
+const WhatsAppService = require('../services/saas/WhatsAppService');
 
 const { deductLineStock } = require('./productInventory');
 
 /**
- * Mark order paid, adjust stock, update customer history, send confirmation email.
- * Idempotent if order is already paid.
+ * Mark order paid, adjust stock if needed, update customer history, send confirmation email/WA.
+ * Idempotent if order is already paid (atomic claim).
  */
 async function fulfillGatewayPayment(orderId, totalPrice) {
   if (!mongoose.Types.ObjectId.isValid(String(orderId))) {
     return { ok: false, error: 'Invalid order id' };
   }
 
+  const setPayload = { paid: true };
+  if (totalPrice != null && !Number.isNaN(Number(totalPrice))) {
+    setPayload.totalPrice = Number(totalPrice);
+  }
+
+  const claimed = await Order.findOneAndUpdate(
+    { _id: orderId, paid: false, deletedAt: null },
+    { $set: setPayload },
+    { new: true }
+  );
+  if (!claimed) {
+    const existing = await Order.findById(orderId);
+    if (existing?.paid) return { ok: true, alreadyPaid: true };
+    return { ok: false, error: 'Order not found' };
+  }
+
   const order = await Order.findById(orderId).populate('orderItems').populate('customer');
   if (!order) return { ok: false, error: 'Order not found' };
-  if (order.paid) return { ok: true, alreadyPaid: true };
-
-  order.paid = true;
-  if (totalPrice != null && !Number.isNaN(Number(totalPrice))) {
-    order.totalPrice = Number(totalPrice);
-  }
-  await order.save();
 
   // Stock rules:
-  // - stockDeducted === true → already reserved (new create path or prior fulfill)
-  // - stockDeducted == null → legacy order; stock was already deducted on create — mark true, do not deduct again
-  // - stockDeducted === false → unpaid hold without reservation (rare); deduct now
+  // - stockDeducted === true → already reserved on create
+  // - stockDeducted == null → legacy order; stock already deducted on create — mark true
+  // - stockDeducted === false → unpaid hold without reservation; deduct now
   if (order.stockDeducted === false) {
     for (const orderItem of order.orderItems) {
       try {
@@ -56,10 +67,12 @@ async function fulfillGatewayPayment(orderId, totalPrice) {
     await order.save();
   }
 
-  await updateCustomerOrderHistory(order.customer._id, order, order.orderItems);
+  if (order.customer) {
+    await updateCustomerOrderHistory(order.customer._id || order.customer, order, order.orderItems);
+  }
 
   const client = await Client.findOne({ clientID: order.clientID });
-  if (client) {
+  if (client && order.customer) {
     try {
       await sendOrderConfirmationEmail(
         order.customer.emailAddress,
@@ -68,13 +81,23 @@ async function fulfillGatewayPayment(orderId, totalPrice) {
         client.businessEmailPassword,
         order.deliveryPrice,
         order.clientID,
-        String(orderId),
+        order.orderNumber || String(orderId),
         client.emailSignature || '',
+        clientEmailBrandingPayload(client),
         order.clientID
       );
     } catch (emailError) {
       console.error('Order confirmation email failed:', emailError.message);
     }
+
+    WhatsAppService.safeNotifyOrderConfirmation({
+      clientId: order.clientID,
+      to: order.customer.phoneNumber || order.phone,
+      companyName: client.companyName,
+      orderRef: String(order.orderNumber || order._id),
+      total:
+        order.finalPrice != null ? `R${Number(order.finalPrice).toFixed(2)}` : undefined,
+    }).catch(() => {});
 
     const settings = mergeRevenueSettings(client.revenueSettings);
     if (settings.postPurchaseEmailsEnabled && resolveSmtpHost(client)) {

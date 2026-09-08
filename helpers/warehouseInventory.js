@@ -160,6 +160,7 @@ async function resolveFulfillmentWarehouse({ client, buyer, items, requestedWare
 }
 
 async function allocateWarehouseStock({ clientID, warehouseId, lines }) {
+  const productIds = new Set();
   for (const line of lines) {
     const { variantName, variantValue } = variantKeyFromItem(line.variant);
     const row = await WarehouseStock.findOne({
@@ -178,7 +179,129 @@ async function allocateWarehouseStock({ clientID, warehouseId, lines }) {
     }
     row.quantity -= line.quantity;
     await row.save();
+    if (line.product) productIds.add(String(line.product));
   }
+  for (const productId of productIds) {
+    await syncLegacyProductStock(productId);
+  }
+  queueWarehouseLowStockCheck(clientID);
+}
+
+/**
+ * Deduct qty across warehouses (preferred first), then sync Product.countInStock / variant stock.
+ * Used by retail when multi-warehouse is on so storefront and B2B share one ledger.
+ */
+async function deductAcrossWarehousesThenSync({
+  clientID,
+  productId,
+  quantity,
+  variant,
+  preferredWarehouseId = null,
+  allowOversell = true,
+}) {
+  const qty = Math.max(0, Number(quantity) || 0);
+  if (!qty) return;
+
+  const warehouses = await getActiveWarehouses(clientID);
+  if (!warehouses.length) {
+    throw new Error('No active warehouses configured');
+  }
+
+  const ordered = [];
+  if (preferredWarehouseId) {
+    const preferred = warehouses.find((w) => String(w._id) === String(preferredWarehouseId));
+    if (preferred) ordered.push(preferred);
+  }
+  const defaultWh = warehouses.find((w) => w.isDefault) || warehouses[0];
+  if (defaultWh && !ordered.find((w) => String(w._id) === String(defaultWh._id))) {
+    ordered.push(defaultWh);
+  }
+  for (const wh of warehouses) {
+    if (!ordered.find((w) => String(w._id) === String(wh._id))) ordered.push(wh);
+  }
+
+  let remaining = qty;
+  for (const wh of ordered) {
+    if (remaining <= 0) break;
+    const row = await getStockRow(clientID, wh._id, productId, variant);
+    if (!row) continue;
+    const available = Math.max(0, (row.quantity || 0) - (row.reservedQuantity || 0));
+    if (available <= 0) continue;
+    const take = Math.min(available, remaining);
+    row.quantity -= take;
+    await row.save();
+    remaining -= take;
+  }
+
+  if (remaining > 0) {
+    if (!allowOversell) {
+      throw new Error(`Insufficient warehouse stock (need ${qty}, short ${remaining})`);
+    }
+    const wh = ordered[0] || defaultWh;
+    const { variantName, variantValue } = variantKeyFromItem(variant);
+    await WarehouseStock.findOneAndUpdate(
+      { clientID, warehouseId: wh._id, productId, variantName, variantValue },
+      {
+        $inc: { quantity: -remaining },
+        $setOnInsert: {
+          clientID,
+          warehouseId: wh._id,
+          productId,
+          variantName,
+          variantValue,
+          reservedQuantity: 0,
+        },
+      },
+      { upsert: true }
+    );
+  }
+
+  await syncLegacyProductStock(productId);
+  queueWarehouseLowStockCheck(clientID);
+}
+
+/**
+ * Restock qty into a warehouse (preferred / default), then sync Product ledger.
+ */
+async function restockToWarehouseThenSync({
+  clientID,
+  productId,
+  quantity,
+  variant,
+  preferredWarehouseId = null,
+}) {
+  const qty = Math.max(0, Number(quantity) || 0);
+  if (!qty) return;
+
+  const warehouses = await getActiveWarehouses(clientID);
+  if (!warehouses.length) {
+    throw new Error('No active warehouses configured');
+  }
+
+  let wh = null;
+  if (preferredWarehouseId) {
+    wh = warehouses.find((w) => String(w._id) === String(preferredWarehouseId));
+  }
+  if (!wh) wh = warehouses.find((w) => w.isDefault) || warehouses[0];
+
+  const { variantName, variantValue } = variantKeyFromItem(variant);
+  await WarehouseStock.findOneAndUpdate(
+    { clientID, warehouseId: wh._id, productId, variantName, variantValue },
+    {
+      $inc: { quantity: qty },
+      $setOnInsert: {
+        clientID,
+        warehouseId: wh._id,
+        productId,
+        variantName,
+        variantValue,
+        reservedQuantity: 0,
+      },
+    },
+    { upsert: true }
+  );
+
+  await syncLegacyProductStock(productId);
   queueWarehouseLowStockCheck(clientID);
 }
 
@@ -291,6 +414,8 @@ module.exports = {
   getStockByWarehouse,
   resolveFulfillmentWarehouse,
   allocateWarehouseStock,
+  deductAcrossWarehousesThenSync,
+  restockToWarehouseThenSync,
   syncLegacyProductStock,
   upsertWarehouseStock,
   transferStock,

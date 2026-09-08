@@ -24,6 +24,7 @@ const { recordTeamActivityFromRequest } = require('../helpers/teamActivity');
 const { normalizeOrderStatus, generateOrderNumber } = require('../helpers/orderStatus');
 const { catalogUnitPrice, parseVariantFields } = require('../helpers/productUnitPrice');
 const OrderReturn = require('../models/OrderReturn');
+const { deductLineStock, restockLineStock } = require('../helpers/productInventory');
 
 const authenticateToken = createDashboardAuth('orders');
 
@@ -32,6 +33,8 @@ async function restockOrderItems(order, reason = 'order_restock') {
   // false = never deducted (new unpaid hold). null/undefined = legacy (was deducted on create).
   if (order.stockDeducted === false) return { restocked: false, reason: 'not_deducted' };
   const items = order.orderItems || [];
+  const warehouseId =
+    order.stockSource === 'warehouse' && order.warehouseId ? order.warehouseId : null;
   for (const item of items) {
     const productId = item.product?._id || item.product;
     if (!productId) continue;
@@ -42,6 +45,7 @@ async function restockOrderItems(order, reason = 'order_restock') {
       variant: item.variant || '',
       orderId: String(order._id),
       reason,
+      warehouseId,
     });
   }
   order.stockRestocked = true;
@@ -298,46 +302,48 @@ router.post('/', authenticateToken, [
       await order.save();
     }
 
-    // Always deduct on create (same as pre-gap-close behaviour) so inventory stays reserved.
+    // Always reserve stock on create so checkout holds inventory until paid or expired.
     // PayFast fulfill uses stockDeducted guard and will not double-deduct.
     const populated = await Order.findById(order._id).populate('orderItems');
     await deductOrderItems(populated, 'order_create');
 
-    // Update customer order history and analytics (in background)
-    updateCustomerOrderHistory(customer, order, orderItems).catch(error => {
+    // Confirmations + customer history only when already marked paid (dashboard/manual).
+    // Unpaid PayFast checkouts wait for gateway ITN → fulfillGatewayPayment.
+    if (markPaid) {
+      updateCustomerOrderHistory(customer, order, orderItems).catch((error) => {
         console.error('Failed to update customer order history:', error);
-    });
+      });
 
-    // Send order confirmation email
-    const client = await Client.findOne({ clientID: req.clientId });
-    if (client) {
+      const client = await Client.findOne({ clientID: req.clientId });
+      if (client) {
         try {
-            await sendOrderConfirmationEmail(
-                customerDoc.emailAddress,
-                orderItems,
-                client.businessEmail,
-                client.businessEmailPassword,
-                deliveryPrice,
-                req.clientId,
-                order.orderNumber || order._id,
-                client.emailSignature || '',
-                clientEmailBrandingPayload(client),
-                req.clientId
-            );
+          await sendOrderConfirmationEmail(
+            customerDoc.emailAddress,
+            orderItems,
+            client.businessEmail,
+            client.businessEmailPassword,
+            deliveryPrice,
+            req.clientId,
+            order.orderNumber || order._id,
+            client.emailSignature || '',
+            clientEmailBrandingPayload(client),
+            req.clientId
+          );
         } catch (emailError) {
-            console.error('Order confirmation email failed to send:', emailError.message);
+          console.error('Order confirmation email failed to send:', emailError.message);
         }
 
         WhatsAppService.safeNotifyOrderConfirmation({
-            clientId: req.clientId,
-            to: customerDoc.phoneNumber,
-            companyName: client.companyName,
-            orderRef: String(order.orderNumber || order._id),
-            total:
-                order.finalPrice != null
-                    ? `R${Number(order.finalPrice).toFixed(2)}`
-                    : undefined,
+          clientId: req.clientId,
+          to: customerDoc.phoneNumber,
+          companyName: client.companyName,
+          orderRef: String(order.orderNumber || order._id),
+          total:
+            order.finalPrice != null
+              ? `R${Number(order.finalPrice).toFixed(2)}`
+              : undefined,
         }).catch(() => {});
+      }
     }
 
     res.status(201).json(order);

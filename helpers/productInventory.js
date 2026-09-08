@@ -1,5 +1,6 @@
 const Product = require('../models/product');
 const InventoryMovement = require('../models/InventoryMovement');
+const Client = require('../models/client');
 
 function httpError(message, status = 400) {
   const err = new Error(message);
@@ -22,6 +23,23 @@ function matchVariantValue(product, variantLabel) {
     }
   }
   return null;
+}
+
+function resolveVariantObject(product, variant) {
+  if (variant && typeof variant === 'object' && (variant.name || variant.value)) {
+    return {
+      name: String(variant.name || '').trim(),
+      value: String(variant.value || '').trim(),
+    };
+  }
+  const matched = matchVariantValue(product, variant);
+  if (matched) {
+    return {
+      name: String(matched.variant.name || '').trim(),
+      value: String(matched.val.value || '').trim(),
+    };
+  }
+  return { name: '', value: '' };
 }
 
 async function recordMovement({
@@ -50,6 +68,8 @@ async function recordMovement({
 
 /**
  * Deduct stock for one order line. Prefers variant stock when variant is present.
+ * When multi-warehouse is enabled, warehouse stock is the source of truth and Product
+ * countInStock is synced from warehouses (avoids dual-ledger oversell).
  * allowOversell (default true): match legacy order create which allowed negative stock
  * so existing client checkouts are not rejected after deploy.
  * @returns {{ productId: string, variantValue: string, qty: number }}
@@ -62,12 +82,52 @@ async function deductLineStock({
   orderId = '',
   reason = 'order_deduct',
   allowOversell = true,
+  warehouseId = null,
 }) {
   const qty = Math.max(0, Number(quantity) || 0);
   if (!qty) return null;
 
   const product = await Product.findOne({ _id: productId, clientID: clientId });
   if (!product) throw httpError('Product not found for stock deduction', 404);
+
+  const {
+    isMultiWarehouseEnabled,
+    deductAcrossWarehousesThenSync,
+  } = require('./warehouseInventory');
+
+  const client = await Client.findOne({ clientID: clientId }).select('b2bSettings').lean();
+  if (isMultiWarehouseEnabled(client)) {
+    const { getActiveWarehouses } = require('./warehouseInventory');
+    const warehouses = await getActiveWarehouses(clientId);
+    if (warehouses.length) {
+      const variantObj = resolveVariantObject(product, variant);
+      try {
+        await deductAcrossWarehousesThenSync({
+          clientID: clientId,
+          productId: product._id,
+          quantity: qty,
+          variant: variantObj,
+          preferredWarehouseId: warehouseId,
+          allowOversell,
+        });
+      } catch (e) {
+        throw httpError(e.message || 'Warehouse stock deduction failed', e.status || 400);
+      }
+      await recordMovement({
+        clientId,
+        productId: String(product._id),
+        variantValue: variantObj.value || '',
+        delta: -qty,
+        reason,
+        orderId,
+      });
+      return {
+        productId: String(product._id),
+        variantValue: variantObj.value || '',
+        qty,
+      };
+    }
+  }
 
   const matched = matchVariantValue(product, variant);
   if (matched) {
@@ -83,7 +143,6 @@ async function deductLineStock({
       );
     }
     matched.val.stock = Number(matched.val.stock) - qty;
-    // Keep parent count roughly in sync with sum of variant stocks when variants exist
     const sum = (product.variants || []).reduce(
       (acc, v) => acc + (v.values || []).reduce((a, x) => a + (Number(x.stock) || 0), 0),
       0
@@ -132,12 +191,47 @@ async function restockLineStock({
   variant = '',
   orderId = '',
   reason = 'order_restock',
+  warehouseId = null,
 }) {
   const qty = Math.max(0, Number(quantity) || 0);
   if (!qty) return null;
 
   const product = await Product.findOne({ _id: productId, clientID: clientId });
   if (!product) return null;
+
+  const {
+    isMultiWarehouseEnabled,
+    restockToWarehouseThenSync,
+  } = require('./warehouseInventory');
+
+  const client = await Client.findOne({ clientID: clientId }).select('b2bSettings').lean();
+  if (isMultiWarehouseEnabled(client)) {
+    const { getActiveWarehouses } = require('./warehouseInventory');
+    const warehouses = await getActiveWarehouses(clientId);
+    if (warehouses.length) {
+      const variantObj = resolveVariantObject(product, variant);
+      await restockToWarehouseThenSync({
+        clientID: clientId,
+        productId: product._id,
+        quantity: qty,
+        variant: variantObj,
+        preferredWarehouseId: warehouseId,
+      });
+      await recordMovement({
+        clientId,
+        productId: String(product._id),
+        variantValue: variantObj.value || '',
+        delta: qty,
+        reason,
+        orderId,
+      });
+      return {
+        productId: String(product._id),
+        variantValue: variantObj.value || '',
+        qty,
+      };
+    }
+  }
 
   const matched = matchVariantValue(product, variant);
   if (matched) {

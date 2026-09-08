@@ -163,13 +163,14 @@ function resolveEmailBrand(client = {}) {
 }
 
 /**
- * Khana accent strip + client logo row for newsletters.
+ * Client accent strip + client logo/name for newsletters (no Khana product label).
  */
 function buildNewsletterBrandHeaderHtml(brand = {}) {
   const company = escapeHtml(brand.companyName || '');
   const logo = String(brand.logoUrl || '').trim();
   const primary = sanitizeHexColor(brand.primaryColor, EMAIL_TOKENS.brand.primary);
-  const gradient = EMAIL_TOKENS.brand.gradientCss;
+  const gradient = buildBrandGradient(primary);
+  const gradientFallback = buildBrandGradientFallback(primary);
   const font = EMAIL_TOKENS.font.emailSans;
 
   const logoInner = logo
@@ -179,31 +180,24 @@ function buildNewsletterBrandHeaderHtml(brand = {}) {
       : '';
 
   const clientRow = logoInner
-    ? `<tr><td style="padding:20px 24px 12px;text-align:center;background:${EMAIL_TOKENS.color.cardBg}">${logoInner}</td></tr>`
+    ? `<tr><td style="padding:20px 24px 12px;text-align:center;background:${EMAIL_TOKENS.color.cardBg};border-bottom:1px solid ${EMAIL_TOKENS.color.border}">${logoInner}</td></tr>`
     : '';
 
   return `<tr data-khana-brand-header="true">
   <td style="padding:0;background:${EMAIL_TOKENS.color.cardBg}">
-    <div style="height:${EMAIL_TOKENS.layout.headerAccentHeight};line-height:${EMAIL_TOKENS.layout.headerAccentHeight};background:${gradient};background-color:${EMAIL_TOKENS.brand.gradientFallback};font-size:1px">&nbsp;</div>
-  </td>
-</tr>
-<tr data-khana-brand-header="true">
-  <td style="padding:10px 24px 6px;text-align:center;background:${EMAIL_TOKENS.color.cardBg};border-bottom:1px solid ${EMAIL_TOKENS.color.border}">
-    <p style="margin:0;font-family:${font};font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:${primary};font-weight:600">
-      ${escapeHtml(EMAIL_TOKENS.brand.productName)}
-    </p>
+    <div style="height:${EMAIL_TOKENS.layout.headerAccentHeight};line-height:${EMAIL_TOKENS.layout.headerAccentHeight};background:${gradient};background-color:${gradientFallback};font-size:1px">&nbsp;</div>
   </td>
 </tr>
 ${clientRow}`;
 }
 
 /**
- * Small Khana attribution row above unsubscribe.
+ * Small platform attribution row above unsubscribe (optional; clients can hide in builder).
  */
 function buildNewsletterKhanaAttributionHtml() {
   const font = EMAIL_TOKENS.font.emailSans;
   return `<tr data-khana-attribution="true"><td style="padding:12px 24px 0;text-align:center;font-family:${font};font-size:11px;line-height:1.5;color:${EMAIL_TOKENS.color.textSubtle}">
-    Sent via <strong style="color:${EMAIL_TOKENS.color.textMuted}">${escapeHtml(EMAIL_TOKENS.brand.productName)}</strong> · ${escapeHtml(EMAIL_TOKENS.brand.name)}
+    Brought to you by <strong style="color:${EMAIL_TOKENS.color.textMuted}">${escapeHtml(EMAIL_TOKENS.brand.name)}</strong>
   </td></tr>`;
 }
 

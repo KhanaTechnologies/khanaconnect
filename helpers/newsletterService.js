@@ -99,12 +99,13 @@ class NewsletterService {
     );
   }
 
-  static buildUnsubscribeFooterHtml(link) {
-    return `${buildNewsletterKhanaAttributionHtml()}${buildUnsubscribeFooterRowHtml(link)}`;
+  static buildUnsubscribeFooterHtml(link, { includeAttribution = true } = {}) {
+    const attribution = includeAttribution ? buildNewsletterKhanaAttributionHtml() : '';
+    return `${attribution}${buildUnsubscribeFooterRowHtml(link)}`;
   }
 
-  static appendUnsubscribeFooterHtml(html, link) {
-    const footer = this.buildUnsubscribeFooterHtml(link);
+  static appendUnsubscribeFooterHtml(html, link, options = {}) {
+    const footer = this.buildUnsubscribeFooterHtml(link, options);
     const innerTableClose = /<\/table>\s*<\/td>\s*<\/tr>\s*<\/table>\s*<\/body>/i;
     if (innerTableClose.test(html)) {
       return html.replace(innerTableClose, `${footer}</table></td></tr></table></body>`);

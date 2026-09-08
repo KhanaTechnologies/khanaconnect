@@ -10,6 +10,7 @@ const JOB_NAMES = {
   WHATSAPP_AUTO_REPLY: 'whatsapp-inbox:auto-reply',
   WHATSAPP_BROADCAST: 'whatsapp-inbox:broadcast-send',
   PRODUCT_SALES_EXPIRE: 'products:expire-sales',
+  UNPAID_ORDERS_EXPIRE: 'orders:expire-unpaid',
   CRM_TASK_REMINDERS: 'crm:task-reminders',
   NEWSLETTER_CAMPAIGN: 'newsletter-campaign:send',
   SOCIAL_POST: 'meta-social:publish',
@@ -113,6 +114,7 @@ function registerJobHandlers(agenda) {
   const { processWhatsAppAutoReply } = require('../jobs/handlers/processWhatsAppAutoReply');
   const { processWhatsAppBroadcast } = require('../jobs/handlers/processWhatsAppBroadcast');
   const { expireEndedProductSales } = require('../helpers/expireProductSales');
+  const { expireAbandonedUnpaidOrders } = require('../helpers/expireUnpaidOrders');
   const { processCrmTaskReminders } = require('../jobs/handlers/processCrmTaskReminders');
   const { processNewsletterCampaign } = require('../jobs/handlers/processNewsletterCampaign');
   const { processScheduledSocialPost } = require('../jobs/handlers/processScheduledSocialPost');
@@ -231,6 +233,12 @@ function registerJobHandlers(agenda) {
     JOB_NAMES.PRODUCT_SALES_EXPIRE,
     { concurrency: 1, lockLifetime: 10 * 60 * 1000 },
     async () => expireEndedProductSales()
+  );
+
+  agenda.define(
+    JOB_NAMES.UNPAID_ORDERS_EXPIRE,
+    { concurrency: 1, lockLifetime: 15 * 60 * 1000 },
+    async () => expireAbandonedUnpaidOrders()
   );
 
   agenda.define(
@@ -365,6 +373,10 @@ async function startJobScheduler() {
   const salesExpireInterval = process.env.PRODUCT_SALES_EXPIRE_INTERVAL || '1 hour';
   await agendaInstance.every(salesExpireInterval, JOB_NAMES.PRODUCT_SALES_EXPIRE, {});
   console.log(`🏷️ Product sales expire job scheduled every ${salesExpireInterval}`);
+
+  const unpaidExpireInterval = process.env.UNPAID_ORDER_EXPIRE_INTERVAL || '30 minutes';
+  await agendaInstance.every(unpaidExpireInterval, JOB_NAMES.UNPAID_ORDERS_EXPIRE, {});
+  console.log(`🛒 Unpaid order expire job scheduled every ${unpaidExpireInterval}`);
 
   const crmReminderInterval = process.env.CRM_TASK_REMINDER_INTERVAL || '15 minutes';
   await agendaInstance.every(crmReminderInterval, JOB_NAMES.CRM_TASK_REMINDERS, {});
