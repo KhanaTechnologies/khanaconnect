@@ -6,7 +6,11 @@ const saasTransactionSchema = new mongoose.Schema(
     type: { type: String, enum: ['topup', 'deduction'], required: true, index: true },
     amount: { type: Number, required: true, min: 0 },
     credits: { type: Number, required: true, min: 0 },
-    method: { type: String, enum: ['payfast', 'manual', 'internal'], default: 'internal' },
+    method: {
+      type: String,
+      enum: ['payfast', 'manual', 'internal', 'eft', 'monthly_grant', 'monthly_expiry'],
+      default: 'internal',
+    },
     reference: { type: String, required: true, trim: true, index: true },
     status: { type: String, enum: ['success', 'failed', 'pending'], default: 'success', index: true },
     metadata: { type: mongoose.Schema.Types.Mixed, default: {} },

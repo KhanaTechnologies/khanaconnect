@@ -50,6 +50,9 @@ class AdsService {
   }
 
   static async createCampaign({ clientId, name, objective, budget, accessToken: accessTokenOverride }) {
+    const BillingService = require('./BillingService');
+    await BillingService.assertCreditsForAction(clientId, 'ads_service_fee', 'setup', 1);
+
     const client = await Client.findOne({ clientID: clientId }).select('metaAds tier');
     if (!client) throw new Error('Client not found');
 

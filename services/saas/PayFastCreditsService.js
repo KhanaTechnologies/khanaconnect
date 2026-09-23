@@ -1,7 +1,8 @@
-const crypto = require('crypto');
+const { creditsForTopupPayment, prepaidCheaperHint } = require('../../helpers/creditPacks');
 const BillingService = require('./BillingService');
 const SaasTransaction = require('../../models/SaasTransaction');
 const { validateItnWithPayfast } = require('../../helpers/payfast');
+const crypto = require('crypto');
 
 function verifyPayFastSignature(payload, passphrase = '') {
   const incomingSig = payload.signature || '';
@@ -44,8 +45,14 @@ class PayFastCreditsService {
       throw new Error('Invalid amount_gross');
     }
 
-    const creditsMultiplier = Number(process.env.CREDITS_PER_ZAR || 1);
-    const credits = Number((amount * creditsMultiplier).toFixed(4));
+    // custom_str2 = prepaid pack id (growth, pro, …). Without a pack → higher spot rate.
+    const packId = String(body.custom_str2 || body.pack_id || '').trim();
+    const awarded = creditsForTopupPayment({
+      amountZar: amount,
+      packId,
+      preferSpot: !packId,
+    });
+
     const reference = String(body.pf_payment_id || body.m_payment_id || '').trim();
     if (!reference) throw new Error('Missing PayFast payment reference');
 
@@ -59,9 +66,9 @@ class PayFastCreditsService {
       return { alreadyProcessed: true, clientId: existing.client_id, reference };
     }
 
-    return BillingService.topUpCredits({
+    const result = await BillingService.topUpCredits({
       clientId,
-      credits,
+      credits: awarded.credits,
       amount,
       method: 'payfast',
       reference,
@@ -69,8 +76,14 @@ class PayFastCreditsService {
         pf_payment_id: body.pf_payment_id,
         m_payment_id: body.m_payment_id,
         merchant_id: body.merchant_id,
+        packId: awarded.packId || null,
+        rateLabel: awarded.rateLabel,
+        zarPerCredit: awarded.zarPerCredit,
+        hint: prepaidCheaperHint(),
       },
     });
+
+    return { ...result, awarded };
   }
 }
 

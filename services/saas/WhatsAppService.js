@@ -63,8 +63,8 @@ function httpError(message, status = 400, extra = {}) {
 function formatMetaSendError(err) {
   const data = err?.response?.data;
   const metaMsg =
-    data?.error?.message ||
     data?.error?.error_user_msg ||
+    data?.error?.message ||
     data?.message ||
     err?.message ||
     'WhatsApp send failed';
@@ -75,17 +75,39 @@ function formatMetaSendError(err) {
     .filter(Boolean)
     .join(' ');
   let message = detail ? `${metaMsg} (${detail})` : metaMsg;
-  if (Number(code) === 133010 || /not registered/i.test(String(metaMsg))) {
+  const n = Number(code);
+  if (n === 133010 || /not registered/i.test(String(metaMsg))) {
     message +=
-      ' — Open WhatsApp usage → Register Cloud API number (6-digit PIN), then retry Send test.';
+      ' — Open Account → WhatsApp → Register Cloud API number (6-digit PIN), then retry.';
+  } else if (n === 131047) {
+    message +=
+      ' — The 24-hour customer-service window is closed. Send an approved template instead of a free-form message.';
+  } else if (n === 131026) {
+    message +=
+      ' — Undeliverable: check the number is on WhatsApp, E.164 formatted (e.g. 2782… not 082…), and the user has not blocked you. Do not keep retrying the same recipient.';
+  } else if (n === 131048 || n === 131049) {
+    message +=
+      ' — Meta rate/spam limit on this sender. Pause broadcasts, check quality rating in WhatsApp Manager, and retry later.';
+  } else if (n === 131050) {
+    message += ' — Recipient opted out of marketing messages from this business.';
+  } else if (n === 132000) {
+    message +=
+      ' — Template variable count mismatch. Header, body, and button placeholders each need their own parameter values.';
+  } else if (n === 132001) {
+    message +=
+      ' — Template name/language not found or not APPROVED on this WABA (en vs en_US are different). Sync templates, then use the exact language Meta shows.';
+  } else if (n === 131045) {
+    message += ' — Phone registration error. Re-register the Cloud API number, then retry.';
+  } else if (n === 133016) {
+    message += ' — Too many register attempts. Wait before Retry register.';
   }
   if (/not available for SMB/i.test(String(metaMsg))) {
     message +=
-      ' — This number is on an SMB / WhatsApp Business App account. Meta blocks /register for SMB. Use a Cloud API (API) number, Meta’s test number, or migrate via Embedded Signup / full API migration — not the Register button.';
+      ' — This number is on an SMB / WhatsApp Business App account. Meta blocks /register for SMB. Use coexistence Embedded Signup, or a dedicated Cloud API number.';
   }
-  if (Number(code) === 100 && Number(subcode) === 33) {
+  if (n === 100 && Number(subcode) === 33) {
     message +=
-      ' — Token cannot access this Phone number ID. Generate a Temporary access token on the same API Setup page as this ID (or assign that WABA to your System User), then paste both again. Do not mix a production System User token with a different app’s test number ID.';
+      ' — Token cannot access this Phone number ID. Reconnect WhatsApp (Embedded Signup) so the BISU token matches this WABA.';
   }
   return httpError(message, status, { meta: data?.error || data || null });
 }
@@ -99,7 +121,7 @@ class WhatsAppService {
 
     // Do not fall back to Khana's WABA — that mixes tenant traffic and credentials.
     throw httpError(
-      'No active WhatsApp Cloud API account for this client. Save this client’s own WABA credentials under Account Management.',
+      'No active WhatsApp Cloud API account for this client. Open Account → Connect WhatsApp first.',
       400
     );
   }
@@ -352,16 +374,8 @@ class WhatsAppService {
 
   /** Ensure the billed client has enough SaaS credits for one WhatsApp unit. */
   static async assertCreditsAvailable(clientId, messageType = 'utility') {
-    if (!clientId || clientId === 'Khana') return;
-    const priced = await PricingService.computeWhatsAppCredits(clientId, messageType, 1);
-    const need = priced.credits;
-    const account = await BillingService.ensureAccount(clientId);
-    if (Number(account.credit_balance || 0) < need) {
-      throw httpError(
-        `Insufficient WhatsApp credits (need ${need}, have ${account.credit_balance}). Top up in Account Management.`,
-        402
-      );
-    }
+    const BillingService = require('./BillingService');
+    await BillingService.assertCreditsForAction(clientId, 'whatsapp', messageType, 1);
   }
 
   /** Queue usage + billing for one WhatsApp unit (templates and inbox freeform). */
@@ -419,8 +433,34 @@ class WhatsAppService {
     const token = decrypt(account.access_token_encrypted);
     const url = `${WA_API_BASE}/${account.phone_number_id}/messages`;
 
+    // Prefer the exact APPROVED language Meta stored (en vs en_US is a common 132001).
+    let resolvedLanguage = String(languageCode || TEMPLATE_LANG).trim() || TEMPLATE_LANG;
+    try {
+      const SaasWhatsAppTemplate = require('../../models/SaasWhatsAppTemplate');
+      const exact = await SaasWhatsAppTemplate.findOne({
+        client_id: clientId,
+        name: templateName,
+        language: resolvedLanguage,
+        status: { $regex: /^APPROVED$/i },
+      })
+        .select('language')
+        .lean();
+      if (!exact) {
+        const any = await SaasWhatsAppTemplate.findOne({
+          client_id: clientId,
+          name: templateName,
+          status: { $regex: /^APPROVED$/i },
+        })
+          .select('language')
+          .lean();
+        if (any?.language) resolvedLanguage = String(any.language).trim();
+      }
+    } catch {
+      /* keep caller language */
+    }
+
     console.log(
-      `[whatsapp] send template=${templateName} client=${clientId} resolved=${resolvedClientId} phone_number_id=${account.phone_number_id} to=${e164}`
+      `[whatsapp] send template=${templateName} lang=${resolvedLanguage} client=${clientId} resolved=${resolvedClientId} phone_number_id=${account.phone_number_id} to=${e164}`
     );
     const payload = {
       messaging_product: 'whatsapp',
@@ -428,7 +468,7 @@ class WhatsAppService {
       type: 'template',
       template: {
         name: templateName,
-        language: { code: languageCode },
+        language: { code: resolvedLanguage },
         components,
       },
     };
@@ -653,7 +693,7 @@ class WhatsAppService {
 
     do {
       const params = {
-        fields: 'name,status,language,category,components',
+        fields: 'name,status,language,category,components,rejected_reason,quality_score',
         limit: 100,
       };
       if (after) params.after = after;
@@ -675,14 +715,17 @@ class WhatsAppService {
         const language = String(row.language || 'en').trim() || 'en';
         if (!name) continue;
         fetched += 1;
+        const status = String(row.status || '').trim();
+        const rejectedReason = String(row.rejected_reason || '').trim();
         const doc = await SaasWhatsAppTemplate.findOneAndUpdate(
           { client_id: clientId, name, language },
           {
             $set: {
               waba_id: wabaId,
-              status: String(row.status || '').trim(),
+              status,
               category: String(row.category || '').trim(),
               components: row.components || [],
+              rejected_reason: /^REJECTED$/i.test(status) ? rejectedReason : '',
               synced_at: syncedAt,
             },
           },
@@ -694,6 +737,7 @@ class WhatsAppService {
           language: doc.language,
           status: doc.status,
           category: doc.category,
+          rejected_reason: doc.rejected_reason || '',
         });
       }
 
@@ -709,7 +753,615 @@ class WhatsAppService {
       upserted: upserted.length,
       templates: upserted,
       synced_at: syncedAt,
+      auto_wire: await this.maybeAutoWireNotifications(clientId),
     };
+  }
+
+  /**
+   * Submit a message template to Meta for review (POST /{WABA}/message_templates).
+   * Body can be a Khana starter id, or a custom name/category/language/components payload.
+   */
+  static async createMessageTemplate(clientId, body = {}) {
+    const SaasWhatsAppTemplate = require('../../models/SaasWhatsAppTemplate');
+    const {
+      getWhatsAppTemplateStarter,
+      listWhatsAppTemplateStarters,
+    } = require('../../helpers/whatsappTemplateStarters');
+
+    const { account } = await this.getClientAccount(clientId);
+    const wabaId = String(account.waba_id || '').trim();
+    if (!wabaId) throw httpError('WhatsApp account is missing waba_id', 400);
+    const token = decrypt(account.access_token_encrypted);
+
+    const starterKey = String(body.starter || body.starter_id || body.starterId || '').trim();
+    let name = String(body.name || '').trim().toLowerCase();
+    let language = String(body.language || body.language_code || TEMPLATE_LANG).trim() || TEMPLATE_LANG;
+    let category = String(body.category || 'UTILITY').trim().toUpperCase();
+    let components = Array.isArray(body.components) ? body.components : null;
+    let allowCategoryChange = body.allow_category_change !== false && body.allowCategoryChange !== false;
+
+    if (starterKey) {
+      const starter = getWhatsAppTemplateStarter(starterKey);
+      if (!starter) {
+        throw httpError(
+          `Unknown starter "${starterKey}". Use one of: ${listWhatsAppTemplateStarters()
+            .map((s) => s.id)
+            .join(', ')}`,
+          400
+        );
+      }
+      name = starter.name;
+      language = String(body.language || starter.language || language).trim() || language;
+      category = starter.category;
+      components = starter.components;
+    } else if (!components) {
+      // Simple custom builder: body (+ optional header/footer/URL button).
+      const bodyText = String(body.body || body.body_text || body.text || '').trim();
+      if (!bodyText) throw httpError('body text is required (or pass starter / components)', 400);
+      components = [];
+      const headerText = String(body.header || body.header_text || '').trim();
+      if (headerText) {
+        components.push({ type: 'HEADER', format: 'TEXT', text: headerText.slice(0, 60) });
+      }
+      const bodyExample = Array.isArray(body.body_examples)
+        ? body.body_examples.map((x) => String(x ?? ''))
+        : String(body.body_examples || '')
+            .split('|')
+            .map((x) => x.trim())
+            .filter(Boolean);
+      const bodyComp = { type: 'BODY', text: bodyText.slice(0, 1024) };
+      const varCount = [...bodyText.matchAll(/\{\{(\d+)\}\}/g)].reduce(
+        (m, x) => Math.max(m, Number(x[1]) || 0),
+        0
+      );
+      if (varCount > 0) {
+        const row = [];
+        for (let i = 1; i <= varCount; i += 1) {
+          row.push(bodyExample[i - 1] || `Sample ${i}`);
+        }
+        bodyComp.example = { body_text: [row] };
+      }
+      components.push(bodyComp);
+      const footerText = String(body.footer || body.footer_text || '').trim();
+      if (footerText) components.push({ type: 'FOOTER', text: footerText.slice(0, 60) });
+      const buttonUrl = String(body.button_url || body.buttonUrl || '').trim();
+      const buttonText = String(body.button_text || body.buttonText || 'Open').trim().slice(0, 25);
+      if (buttonUrl) {
+        const btn = { type: 'URL', text: buttonText || 'Open', url: buttonUrl };
+        if (buttonUrl.includes('{{')) {
+          btn.example = [String(body.button_example || body.buttonExample || 'sample').slice(0, 200)];
+        }
+        components.push({ type: 'BUTTONS', buttons: [btn] });
+      }
+    }
+
+    if (!name) throw httpError('Template name is required', 400);
+    if (!/^[a-z0-9_]+$/.test(name)) {
+      throw httpError('Template name must be lowercase letters, numbers, and underscores only', 400);
+    }
+    if (!['UTILITY', 'MARKETING', 'AUTHENTICATION'].includes(category)) {
+      throw httpError('category must be UTILITY, MARKETING, or AUTHENTICATION', 400);
+    }
+    if (!Array.isArray(components) || !components.length) {
+      throw httpError('components are required', 400);
+    }
+
+    const payload = {
+      name,
+      language,
+      category,
+      allow_category_change: !!allowCategoryChange,
+      components,
+    };
+
+    let response;
+    try {
+      response = await axios.post(`${WA_API_BASE}/${wabaId}/message_templates`, payload, {
+        timeout: 30000,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+    } catch (err) {
+      throw formatMetaSendError(err);
+    }
+
+    const metaId = String(response.data?.id || '').trim();
+    const status = String(response.data?.status || 'PENDING').trim() || 'PENDING';
+    const syncedAt = new Date();
+
+    const doc = await SaasWhatsAppTemplate.findOneAndUpdate(
+      { client_id: clientId, name, language },
+      {
+        $set: {
+          waba_id: wabaId,
+          status,
+          category,
+          components,
+          meta_template_id: metaId,
+          rejected_reason: '',
+          synced_at: syncedAt,
+        },
+      },
+      { upsert: true, new: true }
+    );
+
+    await this.writeAudit(clientId, {
+      action: 'template_submit',
+      templateName: name,
+      detail: `status=${status} category=${category}`,
+      meta: { meta_template_id: metaId, language },
+    });
+
+    return {
+      id: String(doc._id),
+      meta_template_id: metaId,
+      name: doc.name,
+      language: doc.language,
+      status: doc.status,
+      category: doc.category,
+      components: doc.components,
+      synced_at: syncedAt,
+      meta: response.data,
+    };
+  }
+
+  /** Delete a template on the client WABA (by name; language optional). */
+  static async deleteMessageTemplate(clientId, { name, language = '' } = {}) {
+    const SaasWhatsAppTemplate = require('../../models/SaasWhatsAppTemplate');
+    const templateName = String(name || '').trim().toLowerCase();
+    if (!templateName) throw httpError('Template name is required', 400);
+
+    const { account } = await this.getClientAccount(clientId);
+    const wabaId = String(account.waba_id || '').trim();
+    if (!wabaId) throw httpError('WhatsApp account is missing waba_id', 400);
+    const token = decrypt(account.access_token_encrypted);
+
+    const params = { name: templateName };
+    const lang = String(language || '').trim();
+    if (lang) params.language = lang;
+
+    try {
+      await axios.delete(`${WA_API_BASE}/${wabaId}/message_templates`, {
+        timeout: 30000,
+        headers: { Authorization: `Bearer ${token}` },
+        params,
+      });
+    } catch (err) {
+      throw formatMetaSendError(err);
+    }
+
+    const filter = { client_id: clientId, name: templateName };
+    if (lang) filter.language = lang;
+    await SaasWhatsAppTemplate.deleteMany(filter);
+
+    await this.writeAudit(clientId, {
+      action: 'template_delete',
+      templateName: templateName,
+      detail: lang ? `language=${lang}` : '',
+    });
+
+    return { deleted: true, name: templateName, language: lang || null };
+  }
+
+  static async writeAudit(clientId, { action, actor = '', templateName = '', detail = '', meta = null } = {}) {
+    try {
+      const SaasWhatsAppAuditLog = require('../../models/SaasWhatsAppAuditLog');
+      await SaasWhatsAppAuditLog.create({
+        client_id: clientId,
+        actor: String(actor || '').slice(0, 120),
+        action: String(action || 'event').slice(0, 80),
+        template_name: String(templateName || '').slice(0, 120),
+        detail: String(detail || '').slice(0, 500),
+        meta: meta && typeof meta === 'object' ? meta : null,
+      });
+    } catch (e) {
+      console.warn('[whatsapp audit]', e.message);
+    }
+  }
+
+  /** When required Khana templates are APPROVED, enable Cloud notifications automatically. */
+  static async maybeAutoWireNotifications(clientId) {
+    const SaasWhatsAppTemplate = require('../../models/SaasWhatsAppTemplate');
+    const required = [
+      'order_confirmation',
+      'order_status_update',
+      'booking_confirmation',
+      'booking_reminder',
+      'account_verification',
+    ];
+    const approved = await SaasWhatsAppTemplate.find({
+      client_id: clientId,
+      name: { $in: required },
+      status: { $regex: /^APPROVED$/i },
+    })
+      .select('name')
+      .lean();
+    const approvedNames = new Set(approved.map((r) => r.name));
+    const ready = required.filter((n) => approvedNames.has(n));
+    // Auto-wire when at least one core transactional template is approved.
+    const coreReady =
+      approvedNames.has('order_confirmation') || approvedNames.has('booking_confirmation');
+    if (!coreReady) {
+      return { enabled: false, reason: 'waiting_for_core_template', approved: ready };
+    }
+
+    const bill = await BillingService.ensureAccount(clientId);
+    const creditsOk = clientId === 'Khana' || Number(bill.credit_balance || 0) > 0;
+    if (!creditsOk) {
+      return { enabled: false, reason: 'needs_credits', approved: ready };
+    }
+
+    const client = await Client.findOne({ clientID: clientId }).select('whatsapp').lean();
+    if (client?.whatsapp?.notificationsEnabled) {
+      return { enabled: true, already: true, approved: ready };
+    }
+    await Client.updateOne(
+      { clientID: clientId },
+      { $set: { 'whatsapp.notificationsEnabled': true } }
+    );
+    await this.writeAudit(clientId, {
+      action: 'auto_wire_notifications',
+      detail: `Enabled notifications; approved=${ready.join(',')}`,
+    });
+    return { enabled: true, already: false, approved: ready };
+  }
+
+  /** Submit all Khana starter templates that are not already APPROVED/PENDING. */
+  static async installTemplatePack(clientId, { actor = '' } = {}) {
+    // Fail fast with a clear message before iterating starters.
+    await this.getClientAccount(clientId);
+    const SaasWhatsAppTemplate = require('../../models/SaasWhatsAppTemplate');
+    const { listWhatsAppTemplateStarters } = require('../../helpers/whatsappTemplateStarters');
+    const starters = listWhatsAppTemplateStarters();
+    const results = [];
+
+    for (const starter of starters) {
+      const existing = await SaasWhatsAppTemplate.findOne({
+        client_id: clientId,
+        name: starter.name,
+      })
+        .select('status language')
+        .lean();
+      const st = String(existing?.status || '');
+      if (/^APPROVED$/i.test(st) || /^PENDING$/i.test(st)) {
+        results.push({
+          starter: starter.id,
+          name: starter.name,
+          skipped: true,
+          status: st,
+        });
+        continue;
+      }
+      // Rejected / missing: clear local+Meta name when possible, then resubmit.
+      if (/^REJECTED$/i.test(st)) {
+        try {
+          await this.deleteMessageTemplate(clientId, {
+            name: starter.name,
+            language: existing?.language || '',
+          });
+        } catch (delErr) {
+          console.warn('[whatsapp pack] delete rejected failed:', delErr.message);
+        }
+      }
+      try {
+        const created = await this.createMessageTemplate(clientId, { starter: starter.id });
+        results.push({
+          starter: starter.id,
+          name: created.name,
+          skipped: false,
+          status: created.status,
+          id: created.id,
+        });
+      } catch (err) {
+        results.push({
+          starter: starter.id,
+          name: starter.name,
+          skipped: false,
+          error: err.message || 'create failed',
+        });
+      }
+    }
+
+    await this.writeAudit(clientId, {
+      action: 'install_template_pack',
+      actor,
+      detail: `submitted=${results.filter((r) => !r.skipped && !r.error).length} skipped=${results.filter((r) => r.skipped).length}`,
+      meta: { results },
+    });
+
+    return {
+      results,
+      submitted: results.filter((r) => !r.skipped && !r.error).length,
+      skipped: results.filter((r) => r.skipped).length,
+      failed: results.filter((r) => r.error).length,
+    };
+  }
+
+  static async getHealth(clientId) {
+    const SaasWhatsAppTemplate = require('../../models/SaasWhatsAppTemplate');
+    const SaasWhatsAppWebhookEvent = require('../../models/SaasWhatsAppWebhookEvent');
+    let account = null;
+    try {
+      ({ account } = await this.getClientAccount(clientId));
+    } catch {
+      account = null;
+    }
+    const client = await Client.findOne({ clientID: clientId }).select('whatsapp').lean();
+    const templates = await SaasWhatsAppTemplate.find({ client_id: clientId })
+      .select('name status category rejected_reason language')
+      .lean();
+    const required = [
+      'order_confirmation',
+      'order_status_update',
+      'booking_confirmation',
+      'booking_reminder',
+      'account_verification',
+    ];
+    const byName = new Map(templates.map((t) => [t.name, t]));
+    const requiredStatus = required.map((name) => ({
+      name,
+      status: byName.get(name)?.status || 'missing',
+      rejected_reason: byName.get(name)?.rejected_reason || '',
+    }));
+    const approvedRequired = requiredStatus.filter((r) => /^APPROVED$/i.test(r.status)).length;
+    let lastWebhookAt = null;
+    try {
+      if (account?.phone_number_id) {
+        const last = await SaasWhatsAppWebhookEvent.findOne({
+          phone_number_id: account.phone_number_id,
+        })
+          .sort({ created_at: -1 })
+          .select('created_at')
+          .lean();
+        lastWebhookAt = last?.created_at || null;
+      }
+    } catch {
+      lastWebhookAt = null;
+    }
+
+    let creditBalance = 0;
+    try {
+      const bill = await BillingService.ensureAccount(clientId);
+      creditBalance = Number(bill.credit_balance || 0) || 0;
+    } catch {
+      creditBalance = 0;
+    }
+
+    const checks = [
+      { id: 'cloud_connected', label: 'WhatsApp Cloud connected', ok: !!account?.access_token_encrypted },
+      {
+        id: 'phone_registered',
+        label: 'Number registered for Cloud API',
+        ok: !!account?.phone_registered_at || !!account?.coexistence,
+      },
+      {
+        id: 'notifications',
+        label: 'Order/booking notifications on',
+        ok: !!client?.whatsapp?.notificationsEnabled,
+      },
+      {
+        id: 'chat_number',
+        label: 'Website chat number set',
+        ok: !!String(client?.whatsapp?.phoneE164 || '').trim(),
+      },
+      {
+        id: 'core_templates',
+        label: 'Core templates approved',
+        ok: requiredStatus.some(
+          (r) =>
+            (r.name === 'order_confirmation' || r.name === 'booking_confirmation') &&
+            /^APPROVED$/i.test(r.status)
+        ),
+      },
+      {
+        id: 'credits',
+        label: creditBalance > 0 ? 'Credits available' : 'Top up WhatsApp credits',
+        ok: clientId === 'Khana' || creditBalance > 0,
+      },
+    ];
+    const score = Math.round((checks.filter((c) => c.ok).length / checks.length) * 100);
+
+    return {
+      score,
+      ready: checks.every((c) => c.ok),
+      checks,
+      coexistence: !!account?.coexistence,
+      display_phone_number: account?.display_phone_number || client?.whatsapp?.phoneE164 || '',
+      phone_number_id: account?.phone_number_id || '',
+      waba_id: account?.waba_id || '',
+      mode: account?.mode || '',
+      notifications_enabled: !!client?.whatsapp?.notificationsEnabled,
+      credit_balance: creditBalance,
+      templates: {
+        total: templates.length,
+        approved: templates.filter((t) => /^APPROVED$/i.test(t.status)).length,
+        pending: templates.filter((t) => /^PENDING$/i.test(t.status)).length,
+        rejected: templates.filter((t) => /^REJECTED$/i.test(t.status)).length,
+        required: requiredStatus,
+        approved_required: approvedRequired,
+      },
+      last_webhook_at: lastWebhookAt,
+      tips: [
+        !account?.access_token_encrypted
+          ? 'Connect WhatsApp under Account to link your business number.'
+          : null,
+        account?.access_token_encrypted && !account?.phone_registered_at && !account?.coexistence
+          ? 'Number not registered yet — use Retry register under Account → WhatsApp (6-digit PIN).'
+          : null,
+        account?.coexistence
+          ? 'Coexistence is on — you can keep using the WhatsApp Business app on this number.'
+          : account?.access_token_encrypted
+            ? 'Cloud-only number — use Connect WhatsApp with coexistence if you also need the Business app.'
+            : null,
+        clientId !== 'Khana' && creditBalance <= 0
+          ? 'Top up WhatsApp credits so order/booking notifications and tests can send.'
+          : null,
+        approvedRequired < required.length
+          ? 'Open WA Templates → Install Khana pack, then Sync until templates show APPROVED.'
+          : 'Required Khana templates look good.',
+        !lastWebhookAt && account?.phone_number_id
+          ? 'No webhook events yet — send yourself a message or reconnect if inbox stays empty.'
+          : null,
+      ].filter(Boolean),
+    };
+  }
+
+  static async estimateBroadcastCredits(clientId, { recipientCount = 0, messageType = 'utility' } = {}) {
+    const count = Math.max(0, Math.min(200, Number(recipientCount) || 0));
+    let creditsPer = 1;
+    try {
+      const priced = await PricingService.computeWhatsAppCredits(clientId, messageType, 1);
+      creditsPer = Number(priced.credits || 1) || 1;
+    } catch {
+      creditsPer = messageType === 'marketing' ? 2.25 : 1;
+    }
+    const total = Math.round(count * creditsPer * 100) / 100;
+    let balance = 0;
+    try {
+      const bill = await BillingService.ensureAccount(clientId);
+      balance = Number(bill.credit_balance || 0) || 0;
+    } catch {
+      balance = 0;
+    }
+    return {
+      recipient_count: count,
+      message_type: messageType,
+      credits_per_message: creditsPer,
+      estimated_credits: total,
+      credit_balance: balance,
+      can_afford: balance >= total,
+    };
+  }
+
+  /** Send a test template to the account owner's phone (or provided to). */
+  static async sendTestToMe(clientId, { to = '', templateName = '', language = '' } = {}) {
+    const SaasWhatsAppTemplate = require('../../models/SaasWhatsAppTemplate');
+    const client = await Client.findOne({ clientID: clientId })
+      .select('whatsapp companyName')
+      .lean();
+    const dest =
+      normalizePhoneE164(to) ||
+      normalizePhoneE164(client?.whatsapp?.phoneE164 || '') ||
+      '';
+    if (!dest) {
+      throw httpError(
+        'No test phone. Set website chat number or pass { to: "+27…" }.',
+        400
+      );
+    }
+
+    let name = String(templateName || '').trim();
+    if (!name) {
+      const preferred = await SaasWhatsAppTemplate.findOne({
+        client_id: clientId,
+        name: { $in: ['hello_world', 'order_confirmation', 'booking_confirmation'] },
+        status: { $regex: /^APPROVED$/i },
+      })
+        .select('name language')
+        .lean();
+      const anyApproved = preferred
+        || (await SaasWhatsAppTemplate.findOne({
+              client_id: clientId,
+              status: { $regex: /^APPROVED$/i },
+            })
+              .select('name language')
+              .lean());
+      if (!anyApproved) {
+        throw httpError(
+          'No APPROVED template yet. Install the Khana pack, wait for Meta approval, Sync, then retry Test to me.',
+          400
+        );
+      }
+      name = anyApproved.name;
+      if (!language) language = anyApproved.language || '';
+    }
+
+    const WhatsAppInboxService = require('./WhatsAppInboxService');
+    const data = await WhatsAppInboxService.sendInboxTemplate({
+      clientId,
+      contactWaId: dest,
+      templateName: name,
+      language,
+      companyName: client?.companyName || clientId,
+    });
+    await this.writeAudit(clientId, {
+      action: 'test_to_me',
+      templateName: name,
+      detail: `to=${dest}`,
+    });
+    return { ...data, template_name: name };
+  }
+
+  /**
+   * Apply Meta message_template_status_update webhook so clients see APPROVED/REJECTED
+   * without waiting for a manual Sync (common go-live delay others hit).
+   */
+  static async applyTemplateStatusWebhook({ wabaId = '', value = {} } = {}) {
+    const SaasWhatsAppTemplate = require('../../models/SaasWhatsAppTemplate');
+    const name = String(value.message_template_name || value.name || '').trim();
+    const language = String(value.message_template_language || value.language || '').trim();
+    const event = String(value.event || value.status || '').trim().toUpperCase();
+    const reason = String(value.reason || value.rejected_reason || '').trim();
+    const metaId = String(value.message_template_id || value.id || '').trim();
+    if (!name || !event) return { updated: 0 };
+
+    let clientIds = [];
+    const waba = String(wabaId || '').trim();
+    if (waba) {
+      const accounts = await SaasWhatsAppAccount.find({ waba_id: waba, status: 'active' })
+        .select('client_id')
+        .lean();
+      clientIds = [...new Set(accounts.map((a) => a.client_id).filter(Boolean))];
+    }
+    if (!clientIds.length && metaId) {
+      const byMeta = await SaasWhatsAppTemplate.find({ meta_template_id: metaId })
+        .select('client_id')
+        .lean();
+      clientIds = [...new Set(byMeta.map((t) => t.client_id).filter(Boolean))];
+    }
+    if (!clientIds.length) return { updated: 0, reason: 'no_tenant' };
+
+    const status =
+      event === 'APPROVED'
+        ? 'APPROVED'
+        : event === 'REJECTED'
+          ? 'REJECTED'
+          : event === 'PENDING' || event === 'IN_APPEAL'
+            ? 'PENDING'
+            : event;
+
+    let updated = 0;
+    for (const clientId of clientIds) {
+      const filter = { client_id: clientId, name };
+      if (language) filter.language = language;
+      const set = {
+        status,
+        synced_at: new Date(),
+        rejected_reason: status === 'REJECTED' ? reason : '',
+      };
+      if (waba) set.waba_id = waba;
+      if (metaId) set.meta_template_id = metaId;
+      const result = await SaasWhatsAppTemplate.updateMany(filter, { $set: set });
+      updated += result.modifiedCount || 0;
+      if (!(result.matchedCount || 0) && language) {
+        await SaasWhatsAppTemplate.findOneAndUpdate(
+          { client_id: clientId, name, language },
+          {
+            $set: {
+              ...set,
+              category: '',
+              components: [],
+            },
+            $setOnInsert: { client_id: clientId, name, language },
+          },
+          { upsert: true }
+        );
+        updated += 1;
+      }
+    }
+    return { updated, status, name, language, clientIds };
   }
 }
 

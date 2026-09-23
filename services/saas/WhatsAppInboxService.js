@@ -144,11 +144,32 @@ function extractInboundBody(msg) {
   if (type === 'text') return { type, body: String(msg.text?.body || '') };
   if (type === 'button') return { type: 'interactive', body: String(msg.button?.text || msg.button?.payload || '') };
   if (type === 'interactive') {
+    const nfm = msg.interactive?.nfm_reply;
+    if (nfm?.response_json) {
+      let summary = 'Flow response';
+      try {
+        const parsed =
+          typeof nfm.response_json === 'string' ? JSON.parse(nfm.response_json) : nfm.response_json;
+        const parts = [];
+        if (parsed.flow_type) parts.push(`[${parsed.flow_type}]`);
+        if (parsed.full_name) parts.push(parsed.full_name);
+        if (parsed.preferred_day || parsed.preferred_time) {
+          parts.push([parsed.preferred_day, parsed.preferred_time].filter(Boolean).join(' '));
+        }
+        if (parsed.interest) parts.push(parsed.interest);
+        if (parsed.message) parts.push(String(parsed.message).slice(0, 120));
+        if (parsed.email) parts.push(parsed.email);
+        if (parsed.notes) parts.push(String(parsed.notes).slice(0, 80));
+        summary = parts.length ? parts.join(' · ') : JSON.stringify(parsed).slice(0, 280);
+      } catch {
+        summary = String(nfm.response_json).slice(0, 280);
+      }
+      return { type: 'interactive', body: summary };
+    }
     const title =
       msg.interactive?.button_reply?.title ||
       msg.interactive?.list_reply?.title ||
-      msg.interactive?.nfm_reply?.response_json ||
-      '';
+      'Interactive reply';
     return { type: 'interactive', body: String(title) };
   }
   if (type === 'image') return { type, body: String(msg.image?.caption || '[Image]') };
@@ -416,6 +437,46 @@ class WhatsAppInboxService {
       } catch (e) {
         if (e?.code !== 11000) {
           console.error('[whatsapp inbox] ingest inbound failed:', e.message);
+        }
+      }
+    }
+
+    // Coexistence: staff sends from WhatsApp Business app arrive as message_echoes (not messages).
+    const echoes = Array.isArray(value.message_echoes) ? value.message_echoes : [];
+    for (const echo of echoes) {
+      const wamid = String(echo.id || '').trim();
+      const to = normalizePhoneE164(echo.to || '') || String(echo.to || '').replace(/\D/g, '');
+      if (!wamid || !to) continue;
+      try {
+        const { type, body } = extractInboundBody(echo);
+        const mediaId = extractMediaIdFromRaw(echo);
+        const tsSec = Number(echo.timestamp);
+        const timestamp = Number.isFinite(tsSec) && tsSec > 0 ? new Date(tsSec * 1000) : new Date();
+        await SaasWhatsAppMessage.findOneAndUpdate(
+          { wamid },
+          {
+            $setOnInsert: {
+              client_id: clientId,
+              phone_number_id: phoneNumberId,
+              contact_wa_id: to,
+              contact_name: '',
+              direction: 'outbound',
+              wamid,
+              type: type || 'text',
+              body: String(body || '').slice(0, 4000),
+              template_name: '',
+              media_id: mediaId || '',
+              status: 'sent',
+              timestamp,
+              raw: { ...echo, _source: 'smb_message_echoes' },
+            },
+          },
+          { upsert: true }
+        );
+        ingested += 1;
+      } catch (e) {
+        if (e?.code !== 11000) {
+          console.error('[whatsapp inbox] ingest message echo failed:', e.message);
         }
       }
     }
@@ -1971,8 +2032,20 @@ class WhatsAppInboxService {
       status: r.status,
       category: r.category || '',
       components: r.components || [],
+      meta_template_id: r.meta_template_id || '',
+      rejected_reason: r.rejected_reason || '',
       synced_at: r.synced_at,
     }));
+  }
+
+  static async createMessageTemplate(clientId, body = {}) {
+    const WhatsAppService = require('./WhatsAppService');
+    return WhatsAppService.createMessageTemplate(clientId, body);
+  }
+
+  static async deleteMessageTemplate(clientId, body = {}) {
+    const WhatsAppService = require('./WhatsAppService');
+    return WhatsAppService.deleteMessageTemplate(clientId, body);
   }
 
   static async listAutoRules(clientId) {

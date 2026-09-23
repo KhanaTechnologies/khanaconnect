@@ -175,7 +175,21 @@ async function completeOAuth({ code, state }) {
     limit: 25,
   });
   const pages = Array.isArray(pagesRes?.data) ? pagesRes.data : [];
-  const page = pages[0] || null;
+
+  const client = await Client.findOne({ clientID: clientId });
+  if (!client) throw new Error('Client not found');
+
+  if (!client.metaAds || typeof client.metaAds !== 'object') {
+    client.metaAds = {};
+  }
+
+  const previousPageId = String(client.metaAds.pageId || '');
+  const page =
+    (previousPageId && pages.find((p) => String(p.id) === previousPageId)) || pages[0] || null;
+
+  const MetaAdsService = require('./MetaAdsService');
+  const existingAct = MetaAdsService.normalizeAdAccountId(client.metaAds.adAccountId);
+  const isPlatform = String(clientId) === 'Khana' || client.role === 'admin';
 
   let adAccountId = '';
   let adAccountName = '';
@@ -186,10 +200,29 @@ async function completeOAuth({ code, state }) {
         limit: 25,
       });
       const accounts = Array.isArray(adRes?.data) ? adRes.data : [];
-      const active = accounts.find((a) => Number(a.account_status) === 1) || accounts[0];
-      if (active) {
-        adAccountId = String(active.account_id || active.id || '').replace(/^act_/i, '');
-        adAccountName = active.name || '';
+      const keep =
+        existingAct &&
+        accounts.find((a) => MetaAdsService.normalizeAdAccountId(a.account_id || a.id) === existingAct);
+      const keepTaken = keep ? await MetaAdsService.findAdAccountOwner(existingAct, clientId) : '';
+      if (keep && !keepTaken) {
+        adAccountId = existingAct;
+        adAccountName = String(keep.name || client.metaAds.adAccountName || '');
+      } else if (isPlatform) {
+        const active = accounts.find((a) => Number(a.account_status) === 1) || accounts[0];
+        if (active) {
+          adAccountId = MetaAdsService.normalizeAdAccountId(active.account_id || active.id);
+          adAccountName = String(active.name || '');
+        }
+      } else {
+        for (const a of accounts) {
+          const id = MetaAdsService.normalizeAdAccountId(a.account_id || a.id);
+          if (!id) continue;
+          const taken = await MetaAdsService.findAdAccountOwner(id, clientId);
+          if (taken) continue;
+          adAccountId = id;
+          adAccountName = String(a.name || '');
+          break;
+        }
       }
     } catch (err) {
       console.warn('[meta oauth] ad accounts fetch failed:', err.message);
@@ -208,13 +241,6 @@ async function completeOAuth({ code, state }) {
     } catch (err) {
       console.warn('[meta oauth] pixels fetch failed:', err.message);
     }
-  }
-
-  const client = await Client.findOne({ clientID: clientId });
-  if (!client) throw new Error('Client not found');
-
-  if (!client.metaAds || typeof client.metaAds !== 'object') {
-    client.metaAds = {};
   }
 
   client.metaAds.accessToken = accessToken;
@@ -263,6 +289,12 @@ async function completeOAuth({ code, state }) {
   if (adAccountId) {
     client.metaAds.adAccountId = adAccountId;
     client.metaAds.adAccountName = adAccountName;
+  } else if (!isPlatform) {
+    const taken = existingAct ? await MetaAdsService.findAdAccountOwner(existingAct, clientId) : '';
+    if (taken) {
+      client.metaAds.adAccountId = '';
+      client.metaAds.adAccountName = '';
+    }
   }
 
   if (pixelId) {

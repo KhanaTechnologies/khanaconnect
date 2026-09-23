@@ -96,7 +96,7 @@ const clientSchema = new Schema({
       enum: ['trialing', 'active', 'past_due', 'suspended', 'canceled'],
       default: 'active',
     },
-    plan: { type: String, default: 'partnership', trim: true },
+    plan: { type: String, default: 'starter', trim: true },
     billingCycle: {
       type: String,
       enum: ['monthly', 'quarterly', 'yearly', 'custom'],

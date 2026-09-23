@@ -2,12 +2,10 @@ const SaasPricingRule = require('../models/SaasPricingRule');
 const { FLAT_RATES, VOLUME_TIERS, describeVolumeTiers } = require('./whatsappVolumePricing');
 
 /**
- * WhatsApp credit pricing (1 credit ≈ R1 unless CREDITS_PER_ZAR overrides top-ups).
- *
- * v3: Client-facing rates — utility/auth R1 with monthly volume discounts;
- * marketing flat R2.25; service R0.20 platform fee.
+ * WhatsApp + ads service-fee credit pricing.
+ * Prepaid packs (see helpers/creditPacks.js) make credits cheaper when bought ahead.
  */
-const PRICING_SEED_VERSION = 3;
+const PRICING_SEED_VERSION = 4;
 
 function buildDefaultWhatsAppRules() {
   const utilityTiers = describeVolumeTiers('utility').join('; ');
@@ -43,21 +41,38 @@ function buildDefaultWhatsAppRules() {
   ];
 }
 
+/** Khana platform fee when creating/boosting ads (Meta media spend is separate). */
+function buildDefaultAdsServiceFeeRules() {
+  return [
+    {
+      message_type: 'setup',
+      cost_per_unit: 15,
+      markup_percentage: 0,
+      notes: `v${PRICING_SEED_VERSION}: 15 credits per campaign create (prepaid packs cheaper than spot top-ups).`,
+    },
+    {
+      message_type: 'service',
+      cost_per_unit: 8,
+      markup_percentage: 0,
+      notes: `v${PRICING_SEED_VERSION}: 8 credits per boost / standard ads action.`,
+    },
+    {
+      message_type: 'management',
+      cost_per_unit: 5,
+      markup_percentage: 0,
+      notes: `v${PRICING_SEED_VERSION}: 5 credits per lighter ads management action.`,
+    },
+  ];
+}
+
 const DEFAULT_WHATSAPP_RULES = buildDefaultWhatsAppRules();
 
-/**
- * Ensure WhatsApp SaaS pricing rules exist and match the current seed version.
- * Updates existing active tier=all rules when notes version is stale (or missing).
- */
-async function ensureWhatsAppPricingDefaults() {
-  const rules = buildDefaultWhatsAppRules();
+async function upsertRules(service, rules, versionTag) {
   let created = 0;
   let updated = 0;
-  const versionTag = `v${PRICING_SEED_VERSION}:`;
-
   for (const rule of rules) {
     const existing = await SaasPricingRule.findOne({
-      service: 'whatsapp',
+      service,
       message_type: rule.message_type,
       tier: 'all',
       active: true,
@@ -65,7 +80,7 @@ async function ensureWhatsAppPricingDefaults() {
 
     if (!existing) {
       await SaasPricingRule.create({
-        service: 'whatsapp',
+        service,
         message_type: rule.message_type,
         tier: 'all',
         cost_per_unit: rule.cost_per_unit,
@@ -92,11 +107,18 @@ async function ensureWhatsAppPricingDefaults() {
       updated += 1;
     }
   }
+  return { created, updated };
+}
 
-  if (created > 0 || updated > 0) {
+async function ensureWhatsAppPricingDefaults() {
+  const versionTag = `v${PRICING_SEED_VERSION}:`;
+  const wa = await upsertRules('whatsapp', buildDefaultWhatsAppRules(), versionTag);
+  const ads = await upsertRules('ads_service_fee', buildDefaultAdsServiceFeeRules(), versionTag);
+
+  if (wa.created || wa.updated || ads.created || ads.updated) {
     console.log(
-      `[whatsapp] Pricing defaults v${PRICING_SEED_VERSION}: created=${created} updated=${updated} ` +
-        `(utility=${rules[0].cost_per_unit} → volume tiers; marketing=${rules[2].cost_per_unit})`
+      `[billing] Pricing defaults v${PRICING_SEED_VERSION}: whatsapp created=${wa.created} updated=${wa.updated}; ` +
+        `ads_service_fee created=${ads.created} updated=${ads.updated}`
     );
   }
 }
@@ -106,4 +128,5 @@ module.exports = {
   DEFAULT_WHATSAPP_RULES,
   PRICING_SEED_VERSION,
   buildDefaultWhatsAppRules,
+  buildDefaultAdsServiceFeeRules,
 };

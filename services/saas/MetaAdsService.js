@@ -13,6 +13,19 @@ function normalizeAdAccountId(raw) {
   return String(raw).trim().replace(/^act_/i, '');
 }
 
+/** Another workspace already using this Meta ad account, if any. */
+async function findAdAccountOwner(adAccountId, exceptClientId = '') {
+  const id = normalizeAdAccountId(adAccountId);
+  if (!id) return '';
+  const owner = await Client.findOne({
+    clientID: { $ne: String(exceptClientId || '') },
+    $or: [{ 'metaAds.adAccountId': id }, { 'metaAds.adAccountId': `act_${id}` }],
+  })
+    .select('clientID')
+    .lean();
+  return owner?.clientID ? String(owner.clientID) : '';
+}
+
 async function graphGet(path, accessToken, params = {}) {
   const { data } = await axios.get(`${META_GRAPH_BASE}${path}`, {
     params: { access_token: accessToken, ...params },
@@ -265,6 +278,12 @@ async function updateSelection(clientId, { pageId, adAccountId }) {
       (a) => normalizeAdAccountId(a.account_id || a.id) === normId
     );
     if (!account) throw new Error('Ad account not found on your connected account');
+    const taken = await findAdAccountOwner(normId, client.clientID);
+    if (taken) {
+      throw metaClientError(
+        `That Meta ad account is already used by workspace ${taken}. Pick or create this client’s own ad account — do not reuse Khana’s.`
+      );
+    }
     client.metaAds.adAccountId = normId;
     client.metaAds.adAccountName = String(account.name || '');
 
@@ -302,37 +321,46 @@ async function updateSelection(clientId, { pageId, adAccountId }) {
 }
 
 async function ensurePageAccessToken(client, pageId, { requirePageToken = false } = {}) {
-  let pageToken = client.metaAds?.pageAccessToken
-    ? String(client.metaAds.pageAccessToken)
-    : '';
-  if (pageToken) return pageToken;
+  const wanted = String(pageId || '');
+  const storedPageId = String(client.metaAds?.pageId || '');
+  let pageToken =
+    client.metaAds?.pageAccessToken && wanted && storedPageId === wanted
+      ? String(client.metaAds.pageAccessToken)
+      : '';
 
   const userToken = String(client.metaAds.accessToken || '');
   if (!userToken) throw metaClientError('Facebook is not connected');
 
-  try {
-    const pagesRes = await graphGet('/me/accounts', userToken, {
-      fields: 'id,name,access_token',
-      limit: 50,
-    });
-    const pages = Array.isArray(pagesRes?.data) ? pagesRes.data : [];
-    const match = pages.find((p) => String(p.id) === String(pageId)) || pages[0];
-    if (match?.access_token) {
-      pageToken = String(match.access_token);
-      client.metaAds.pageAccessToken = pageToken;
-      if (match.id) client.metaAds.pageId = String(match.id);
-      if (match.name) client.metaAds.pageName = String(match.name);
-      client.markModified('metaAds');
-      await client.save();
+  if (!pageToken) {
+    try {
+      const pagesRes = await graphGet('/me/accounts', userToken, {
+        fields: 'id,name,access_token',
+        limit: 50,
+      });
+      const pages = Array.isArray(pagesRes?.data) ? pagesRes.data : [];
+      const match = pages.find((p) => String(p.id) === wanted);
+      if (match?.access_token) {
+        pageToken = String(match.access_token);
+        client.metaAds.pageAccessToken = pageToken;
+        client.metaAds.pageId = String(match.id);
+        if (match.name) client.metaAds.pageName = String(match.name);
+        client.markModified('metaAds');
+        await client.save();
+      } else if (!match && wanted) {
+        throw metaClientError(
+          'That Facebook Page is not on this Facebook login. In Meta Ads, select a Page you admin, or Disconnect → Connect Facebook and grant that Page.'
+        );
+      }
+    } catch (err) {
+      if (err.status || /not on this Facebook login/i.test(err.message || '')) throw err;
+      console.warn('[meta ads] page token refresh failed:', formatGraphError(err));
     }
-  } catch (err) {
-    console.warn('[meta ads] page token refresh failed:', formatGraphError(err));
   }
 
   if (pageToken) return pageToken;
   if (requirePageToken) {
     throw metaClientError(
-      'Could not load a Facebook Page access token. Reconnect Facebook and grant Page access, then select the Page again.'
+      'Could not load a Page access token for this Page. You need Admin or Editor on the Page. Disconnect → Connect Facebook and approve Page access.'
     );
   }
   return userToken;
@@ -410,7 +438,7 @@ async function listPagePosts(clientId, { limit = 20, includeEngagement = true } 
       pageName: client.metaAds.pageName || '',
       posts: [],
       error: needsPermissions
-        ? `${msg} Add pages_read_engagement and pages_read_user_content to the Login for Business configuration (META_LOGIN_CONFIG_ID), then Disconnect → Connect Facebook again and approve all Page permissions.`
+        ? `${msg} Khana needs a Page access token for the Page you selected (Admin or Editor). In Meta Ads, choose that Page again, or Disconnect → Connect Facebook, tick the Page, and approve pages_read_engagement.`
         : msg,
       missingPermissions: needsPermissions
         ? ['pages_read_engagement', 'pages_read_user_content']
@@ -1130,6 +1158,8 @@ async function boostPost(
 ) {
   const client = await loadClientWithMeta(clientId);
   assertAdsPermissions(client);
+  const BillingService = require('./BillingService');
+  await BillingService.assertCreditsForAction(clientId, 'ads_service_fee', 'service', 1);
   const token = String(client.metaAds.accessToken);
   const pageId = client.metaAds?.pageId;
   const adAccountId = normalizeAdAccountId(client.metaAds?.adAccountId);
@@ -1257,7 +1287,7 @@ async function boostPost(
   }
 
   const campaignDoc = {
-    name: `Boost ${boostLabel}`,
+    name: `Khana Boost ${boostSource === 'instagram' ? 'IG ' : ''}${stamp}`,
     objective: 'OUTCOME_ENGAGEMENT',
     budget: dailyBudgetNum,
     status: adStatus === 'ACTIVE' ? 'active' : 'paused',
@@ -1301,7 +1331,7 @@ async function boostPost(
       await usageBillingQueue.add('bill-ads-boost', {
         clientId,
         service: 'ads_service_fee',
-        messageType: 'boost',
+        messageType: 'service',
         units: 1,
         sourceRef: String(saved._id),
         metadata: {
@@ -1951,5 +1981,6 @@ module.exports = {
   searchTargeting,
   listCustomAudiences,
   normalizeAdAccountId,
+  findAdAccountOwner,
   resolveInstagramFromPage,
 };

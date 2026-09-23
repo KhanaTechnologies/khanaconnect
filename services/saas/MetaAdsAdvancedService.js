@@ -10,6 +10,7 @@ const { publishedProductFilter } = require('../../helpers/productCatalogFields')
 const {
   loadClientWithMeta,
   normalizeAdAccountId,
+  findAdAccountOwner,
   buildTargetingSpec,
   resolveInsightsWindow,
   insightsGraphDateParams,
@@ -37,6 +38,159 @@ function throwMeta(err, context = 'Meta API request failed') {
   const msg = formatGraphError(err);
   console.error(`[meta ads] ${context}:`, msg, err?.response?.data || '');
   throw httpError(msg || context, 400);
+}
+
+/**
+ * Create a Meta ad account under the *client's* Business Manager.
+ * Spend billing stays on the client's Meta payment method — never Khana's card.
+ * Defaults: ZAR + Africa/Johannesburg (timezone_id 141).
+ */
+async function createAdAccountForClient(clientId, { name = '', currency = 'ZAR', timezoneId = 141 } = {}) {
+  const client = await loadClientWithMeta(clientId);
+  const token = String(client.metaAds.accessToken);
+
+  let businesses = [];
+  try {
+    const biz = await graphGet('/me/businesses', token, {
+      fields: 'id,name,permitted_roles',
+      limit: 50,
+    });
+    businesses = Array.isArray(biz?.data) ? biz.data : [];
+  } catch (err) {
+    throwMeta(err, 'list businesses');
+  }
+
+  if (!businesses.length) {
+    throw httpError(
+      'No Meta Business Portfolio found on this Facebook login. Create one in Meta Business Settings first, then reconnect Facebook and try again.',
+      400
+    );
+  }
+
+  // Prefer a BM where the user is ADMIN (required to create ad accounts).
+  const adminBiz =
+    businesses.find((b) =>
+      (Array.isArray(b.permitted_roles) ? b.permitted_roles : []).some((r) =>
+        /ADMIN/i.test(String(r))
+      )
+    ) || null;
+  const storedBizId = String(client.metaAds.metaBusinessId || '').trim();
+  const stored = storedBizId ? businesses.find((b) => String(b.id) === storedBizId) : null;
+  const business = adminBiz || stored || businesses[0];
+  const businessId = String(business.id);
+
+  if (
+    adminBiz == null &&
+    !(Array.isArray(business.permitted_roles)
+      ? business.permitted_roles
+      : []
+    ).some((r) => /ADMIN/i.test(String(r)))
+  ) {
+    throw httpError(
+      `You need admin access on Meta Business “${business.name || businessId}” to create an ad account. Ask a Business admin to grant you access, or create the account in Meta Ads Manager.`,
+      403
+    );
+  }
+
+  const ClientModel = require('../../models/client');
+  const lean = await ClientModel.findOne({ clientID: clientId }).select('companyName').lean();
+  const accountName =
+    String(name || '').trim().slice(0, 100) ||
+    `${String(lean?.companyName || clientId).trim().slice(0, 60)} Ads`;
+
+  const currencyCode = String(currency || process.env.META_AD_ACCOUNT_CURRENCY || 'ZAR')
+    .trim()
+    .toUpperCase()
+    .slice(0, 3);
+  const tz = Number(timezoneId || process.env.META_AD_ACCOUNT_TIMEZONE_ID || 141) || 141;
+
+  let created;
+  try {
+    // Do not pass invoice / funding_id — that would attach Khana or BM credit lines.
+    // Client adds their own card in Meta after create.
+    created = await graphPost(`/${businessId}/adaccount`, token, {
+      name: accountName,
+      currency: currencyCode,
+      timezone_id: tz,
+      end_advertiser: businessId,
+      media_agency: 'NONE',
+      partner: 'NONE',
+    });
+  } catch (err) {
+    const msg = formatGraphError(err);
+    if (/3979|exceeded.*ad accounts/i.test(msg)) {
+      throw httpError(
+        'This Meta Business has reached its ad account limit. Free unused accounts in Meta Business Settings, or create the account manually in Ads Manager.',
+        400
+      );
+    }
+    if (/3980|bad standing|in review/i.test(msg)) {
+      throw httpError(
+        'Meta blocked new ad accounts because an existing account is in bad standing or under review. Fix Account Quality in Meta, then retry.',
+        400
+      );
+    }
+    if (/permission|(#200)|business_management/i.test(msg)) {
+      throw httpError(
+        'Missing permission to create ad accounts. Reconnect Facebook and ensure Business Manager admin access (business_management).',
+        403
+      );
+    }
+    throwMeta(err, 'create ad account');
+  }
+
+  const rawId = String(created?.id || created?.account_id || '').trim();
+  const adAccountId = normalizeAdAccountId(rawId);
+  if (!adAccountId) {
+    throw httpError('Meta created an ad account but did not return an ID. Refresh Ad accounts and select it.', 502);
+  }
+
+  client.metaAds.adAccountId = adAccountId;
+  client.metaAds.adAccountName = accountName;
+  client.metaAds.metaBusinessId = businessId;
+  client.metaAds.ownershipType = 'client';
+  client.markModified('metaAds');
+  await client.save();
+
+  // Best-effort pixel discovery on the new account.
+  try {
+    const pixRes = await graphGet(`/act_${adAccountId}/adspixels`, token, {
+      fields: 'id,name',
+      limit: 5,
+    });
+    const pixels = Array.isArray(pixRes?.data) ? pixRes.data : [];
+    if (pixels[0]?.id) {
+      client.metaAds.pixelId = String(pixels[0].id);
+      client.markModified('metaAds');
+      await client.save();
+    }
+  } catch {
+    /* optional */
+  }
+
+  const links = buildMetaDeepLinks({ adAccountId, businessId, pageId: client.metaAds.pageId });
+
+  return {
+    adAccountId,
+    adAccountName: accountName,
+    businessId,
+    businessName: business.name || '',
+    currency: currencyCode,
+    timezoneId: tz,
+    timezone: 'Africa/Johannesburg',
+    ownershipType: 'client',
+    billingNote:
+      'Ad spend is charged by Meta to YOUR card (not Khana). Khana charges a separate ads service fee from your Khana credits when you create or boost campaigns.',
+    serviceFeeNote:
+      'Khana service fee uses your prepaid credit balance — separate from Meta media spend.',
+    links: {
+      paymentSettings: links.paymentSettings,
+      accountBilling: links.accountBilling,
+      adsManager: links.adsManager,
+      adAccountSettings: links.adAccountSettings,
+    },
+    meta: created,
+  };
 }
 
 /**
@@ -213,7 +367,8 @@ async function getSetupHub(clientId) {
       if (status === 3) paymentHint = 'Ad account has an unpaid balance — settle billing in Meta.';
       else if (status === 2) paymentHint = 'Ad account is disabled — check Account Quality in Meta.';
       else if (!checklist.paymentReady) {
-        paymentHint = 'Add a payment method before activating ads. Use the Payment setup link below.';
+        paymentHint =
+          'Add YOUR payment method in Meta before ads can deliver. Ad spend → your Meta card. Khana service fee → your Khana credits (when you create/boost).';
       }
       if (account.business?.id && !client.metaAds.metaBusinessId) {
         client.metaAds.metaBusinessId = String(account.business.id);
@@ -234,7 +389,18 @@ async function getSetupHub(clientId) {
 
   const nextSteps = [];
   if (!checklist.pageSelected) nextSteps.push({ id: 'page', label: 'Select your Facebook Page', action: 'select_page' });
-  if (!checklist.adAccountSelected) nextSteps.push({ id: 'ad_account', label: 'Select your ad account', action: 'select_ad_account' });
+  if (!checklist.adAccountSelected) {
+    nextSteps.push({
+      id: 'ad_account_create',
+      label: 'Create a Meta ad account (ZAR · South Africa) — your card, not Khana’s',
+      action: 'create_ad_account',
+    });
+    nextSteps.push({
+      id: 'ad_account',
+      label: 'Or select an existing ad account',
+      action: 'select_ad_account',
+    });
+  }
   if (checklist.pageSelected && !checklist.instagramLinked) {
     nextSteps.push({
       id: 'instagram',
@@ -246,7 +412,7 @@ async function getSetupHub(clientId) {
   if (checklist.adAccountSelected && checklist.paymentReady === false) {
     nextSteps.push({
       id: 'payment',
-      label: 'Add a payment method in Meta (one click)',
+      label: 'Add YOUR payment method in Meta (ad spend bills to you, not Khana)',
       action: 'open_link',
       url: links.paymentSettings,
     });
@@ -358,19 +524,74 @@ async function listMetaAdAccountCampaigns(clientId) {
   }
 }
 
-async function listLocalCampaigns(clientId) {
-  const client = await Client.findOne({ clientID: clientId }).select('metaAds.campaigns metaAds.adAccountId metaAds.accessToken').lean();
-  const local = Array.isArray(client?.metaAds?.campaigns) ? client.metaAds.campaigns : [];
-  const localMapped = local.slice().reverse().map(mapLocalCampaign);
-  const localMetaIds = new Set(
-    localMapped.map((c) => c.metaCampaignId).filter(Boolean)
-  );
+function pruneLocalCampaignsToMeta(local, metaIds) {
+  const seenMeta = new Set();
+  const kept = [];
+  for (const c of [...local].reverse()) {
+    const mid = String(c.meta_campaign_id || '').replace(/^meta_/, '');
+    if (mid) {
+      if (!metaIds.has(mid) || seenMeta.has(mid)) continue;
+      seenMeta.add(mid);
+    }
+    kept.push(c);
+  }
+  return kept.reverse();
+}
 
+async function persistPrunedCampaigns(clientId, next) {
+  await Client.updateOne(
+    { clientID: clientId },
+    { $set: { 'metaAds.campaigns': next, 'metaAds.lastSync': new Date() } }
+  );
+}
+
+/**
+ * This workspace's campaigns only. Status/name come from Meta so Ads Manager matches.
+ * Other campaigns on a shared/wrong ad account (e.g. Khana's) stay hidden.
+ */
+async function listLocalCampaigns(clientId) {
+  const client = await Client.findOne({ clientID: clientId })
+    .select('metaAds.campaigns metaAds.adAccountId metaAds.accessToken')
+    .lean();
+  const local = Array.isArray(client?.metaAds?.campaigns) ? client.metaAds.campaigns : [];
   const fromMeta = await listMetaAdAccountCampaigns(clientId);
-  const extras = fromMeta.filter((c) => !localMetaIds.has(c.metaCampaignId));
+  const metaById = new Map(fromMeta.map((c) => [String(c.metaCampaignId), c]));
+  const metaIds = new Set(metaById.keys());
+
+  const pruned = pruneLocalCampaignsToMeta(local, metaIds);
+  if (pruned.length !== local.length) {
+    persistPrunedCampaigns(clientId, pruned).catch((err) =>
+      console.warn('[meta ads] prune local campaigns failed:', err.message)
+    );
+  }
+
+  const campaigns = [];
+  const seen = new Set();
+  for (const loc of [...pruned].reverse()) {
+    const mid = String(loc.meta_campaign_id || '').replace(/^meta_/, '');
+    if (mid && seen.has(mid)) continue;
+    if (mid) seen.add(mid);
+    const metaRow = mid ? metaById.get(mid) : null;
+    const mapped = mapLocalCampaign(loc);
+    campaigns.push({
+      ...mapped,
+      name: metaRow?.name || mapped.name,
+      status: metaRow?.status || mapped.status,
+      budget: metaRow?.budget != null ? metaRow.budget : mapped.budget,
+      source: metaRow ? 'meta' : 'local',
+    });
+  }
+
+  const act = normalizeAdAccountId(client?.metaAds?.adAccountId);
+  const sharedOwner =
+    act && String(clientId) !== 'Khana' ? await findAdAccountOwner(act, clientId) : '';
 
   return {
-    campaigns: [...localMapped, ...extras],
+    campaigns,
+    syncedFrom: 'workspace',
+    adAccountWarning: sharedOwner
+      ? `This Meta ad account is already used by workspace ${sharedOwner}. Create or select this client’s own ad account so you do not see or create ads on ${sharedOwner}.`
+      : '',
   };
 }
 
@@ -384,19 +605,6 @@ async function findCampaignSubdoc(client, campaignId) {
     campaigns.find((c) => String(c.meta_campaign_id) === String(campaignId))
     || campaigns.find((c) => String(c.meta_campaign_id) === rawId);
   if (byMeta) return { sub: byMeta, source: 'local' };
-
-  if (/^\d+$/.test(rawId)) {
-    return {
-      sub: {
-        _id: `meta_${rawId}`,
-        meta_campaign_id: rawId,
-        meta_adset_id: '',
-        meta_ad_id: '',
-        status: 'paused',
-      },
-      source: 'meta',
-    };
-  }
 
   throw new Error('Campaign not found');
 }
@@ -443,18 +651,34 @@ async function updateCampaignStatus(clientId, { campaignId, status }) {
       }
     }
   } catch (err) {
-    throw new Error(formatGraphError(err));
+    const msg = formatGraphError(err);
+    const gone = /does not exist|has been deleted|does not support|Object with ID/i.test(msg);
+    if (!(next === 'deleted' && gone)) {
+      throw new Error(msg);
+    }
   }
 
   if (source === 'local') {
     // Soft-delete (archive) keeps the subdoc so admins can Restore → paused.
-    // Hard delete (DELETED) removes the local record.
+    // Hard delete (DELETED) removes every local copy of this Meta campaign.
     if (next === 'deleted') {
-      client.metaAds.campaigns = (client.metaAds.campaigns || []).filter(
-        (c) => String(c._id) !== String(sub._id)
-      );
+      const dropId = String(sub._id);
+      const dropMeta = campaignMetaId;
+      client.metaAds.campaigns = (client.metaAds.campaigns || []).filter((c) => {
+        if (String(c._id) === dropId) return false;
+        const mid = String(c.meta_campaign_id || '').replace(/^meta_/, '');
+        return !dropMeta || mid !== dropMeta;
+      });
     } else {
       sub.status = next;
+      const mid = campaignMetaId;
+      if (mid) {
+        for (const c of client.metaAds.campaigns || []) {
+          if (String(c.meta_campaign_id || '').replace(/^meta_/, '') === mid) {
+            c.status = next;
+          }
+        }
+      }
     }
     client.metaAds.lastSync = new Date();
     client.markModified('metaAds');
@@ -1352,6 +1576,12 @@ async function createCatalogSalesCampaign(
 }
 
 async function pushLocalCampaign(clientId, campaignDoc) {
+  const BillingService = require('./BillingService');
+  const feeType = /boost/i.test(String(campaignDoc.campaign_type || ''))
+    ? 'service'
+    : 'setup';
+  await BillingService.assertCreditsForAction(clientId, 'ads_service_fee', feeType, 1);
+
   const updated = await Client.findOneAndUpdate(
     { clientID: clientId },
     { $push: { 'metaAds.campaigns': campaignDoc } },
@@ -1364,7 +1594,7 @@ async function pushLocalCampaign(clientId, campaignDoc) {
     await SaasUsageEvent.create({
       client_id: clientId,
       service: 'ads_service_fee',
-      message_type: campaignDoc.campaign_type || 'setup',
+      message_type: feeType,
       units: 1,
       source_ref: String(saved._id),
       status: 'queued',
@@ -1373,7 +1603,7 @@ async function pushLocalCampaign(clientId, campaignDoc) {
     await usageBillingQueue.add('bill-ads-advanced', {
       clientId,
       service: 'ads_service_fee',
-      messageType: campaignDoc.campaign_type || 'setup',
+      messageType: feeType,
       units: 1,
       sourceRef: String(saved._id),
       metadata: { metaCampaignSubdocId: String(saved._id) },
@@ -1396,6 +1626,7 @@ module.exports = {
   AUDIENCE_PRESETS,
   buildMetaDeepLinks,
   getSetupHub,
+  createAdAccountForClient,
   listLocalCampaigns,
   updateCampaignStatus,
   updateCampaignBudget,

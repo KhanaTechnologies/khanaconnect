@@ -15,6 +15,7 @@ const JOB_NAMES = {
   NEWSLETTER_CAMPAIGN: 'newsletter-campaign:send',
   SOCIAL_POST: 'meta-social:publish',
   WHATSAPP_WINDOW_ALERT: 'whatsapp-inbox:window-close-alert',
+  MONTHLY_INCLUDED_CREDITS: 'billing:monthly-included-credits',
 };
 
 let agendaInstance = null;
@@ -119,6 +120,7 @@ function registerJobHandlers(agenda) {
   const { processNewsletterCampaign } = require('../jobs/handlers/processNewsletterCampaign');
   const { processScheduledSocialPost } = require('../jobs/handlers/processScheduledSocialPost');
   const { processWhatsAppWindowCloseAlerts } = require('../jobs/handlers/processWhatsAppWindowCloseAlerts');
+  const { processMonthlyIncludedCredits } = require('../jobs/handlers/processMonthlyIncludedCredits');
 
   agenda.define(
     JOB_NAMES.EVENT_BATCH,
@@ -254,6 +256,12 @@ function registerJobHandlers(agenda) {
   );
 
   agenda.define(
+    JOB_NAMES.MONTHLY_INCLUDED_CREDITS,
+    { concurrency: 1, lockLifetime: 30 * 60 * 1000 },
+    async () => processMonthlyIncludedCredits()
+  );
+
+  agenda.define(
     JOB_NAMES.NEWSLETTER_CAMPAIGN,
     {
       concurrency: Number(process.env.NEWSLETTER_CAMPAIGN_CONCURRENCY || 1),
@@ -385,6 +393,10 @@ async function startJobScheduler() {
   const waWindowAlertInterval = process.env.WHATSAPP_WINDOW_ALERT_INTERVAL || '15 minutes';
   await agendaInstance.every(waWindowAlertInterval, JOB_NAMES.WHATSAPP_WINDOW_ALERT, {});
   console.log(`📱 WhatsApp window-close alert job scheduled every ${waWindowAlertInterval}`);
+
+  const monthlyCreditsInterval = process.env.MONTHLY_INCLUDED_CREDITS_INTERVAL || '1 day';
+  await agendaInstance.every(monthlyCreditsInterval, JOB_NAMES.MONTHLY_INCLUDED_CREDITS, {});
+  console.log(`💳 Monthly included credits job scheduled every ${monthlyCreditsInterval}`);
 
   console.log('✅ MongoDB job scheduler (Agenda) started');
   return agendaInstance;

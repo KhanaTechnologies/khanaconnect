@@ -1,6 +1,6 @@
 const { DEFAULT_PLAN_BUILDER, mergePlanBuilderConfig } = require('./planBuilderPricing');
 
-const PRICING_CONFIG_VERSION = 14;
+const PRICING_CONFIG_VERSION = 15;
 
 /** Default partnership pricing for the SA market. */
 const DEFAULT_PARTNERSHIP_PRICING = {
@@ -9,7 +9,7 @@ const DEFAULT_PARTNERSHIP_PRICING = {
   currency: 'ZAR',
   currencySymbol: 'R',
   billingNote:
-    'Pricing depends on scope and features. Request a personalised estimate for exact setup and monthly fees — most partnerships start from R450/month after go-live. WhatsApp order & booking alerts are available with our help to set up; usage is billed with prepaid credits.',
+    'Pricing depends on scope and features. Request a personalised estimate for exact setup and monthly fees — most partnerships start from R450/month after go-live. Each plan includes monthly WhatsApp/ads credits (unused expire at month-end); top up prepaid packs when you need more.',
   vatNote: '',
   tiers: [
     {
@@ -29,6 +29,7 @@ const DEFAULT_PARTNERSHIP_PRICING = {
         'Up to 5-page business website',
         'Online store',
         'Online booking system',
+        '50 WhatsApp/ads credits included each month (unused expire)',
         'WhatsApp confirmations & updates (we help set up)',
         'Managed hosting & SSL',
         'Mobile-responsive design',
@@ -52,8 +53,9 @@ const DEFAULT_PARTNERSHIP_PRICING = {
       highlights: [
         'Up to 10-page website',
         'Everything in Starter',
+        '100 WhatsApp/ads credits included each month (unused expire)',
         'Online store & booking system',
-        'WhatsApp customer alerts (usage billed)',
+        'WhatsApp customer alerts',
         'Blog or news section',
         'SEO-ready structure',
         'Priority email support',
@@ -75,6 +77,7 @@ const DEFAULT_PARTNERSHIP_PRICING = {
       sortOrder: 2,
       highlights: [
         'Everything in Launch',
+        '200 WhatsApp/ads credits included each month (unused expire)',
         'Revenue Command Center',
         'Cart recovery & customer segments',
         'Orders & appointment dashboard',
@@ -98,6 +101,7 @@ const DEFAULT_PARTNERSHIP_PRICING = {
       sortOrder: 3,
       highlights: [
         'Everything in Growth',
+        '500 WhatsApp/ads credits included each month (unused expire)',
         'Store + bookings combined',
         'Mixed-business dashboard permissions',
         'Advanced campaigns & preorder tools',
@@ -206,8 +210,14 @@ const DEFAULT_PARTNERSHIP_PRICING = {
     {
       question: 'How much does Khana cost?',
       answer:
-        'We quote based on your scope — website size, store, bookings, team seats, and add-ons. Use the plan estimator on our site for a ballpark figure, then book a short call to confirm. Most partnerships start from R450/month after launch.',
+        'We quote based on your scope — website size, store, bookings, team seats, and add-ons. Use the plan estimator on our site for a ballpark figure, then book a short call to confirm. Most partnerships start from R450/month after launch, and include monthly WhatsApp/ads credits (unused expire). Extra usage is topped up with prepaid credit packs.',
       sortOrder: 0,
+    },
+    {
+      question: 'Do monthly fees include WhatsApp credits?',
+      answer:
+        'Yes. Starter includes 50 credits/month, Launch 100, Growth 200, and Scale 500. Unused included credits expire at month-end. Prepaid packs never expire and are used after your included balance is finished.',
+      sortOrder: 0.5,
     },
     {
       question: "What's included in the setup fee?",
@@ -257,6 +267,7 @@ const DEFAULT_PARTNERSHIP_PRICING = {
     { label: 'Up to 10 pages + blog', starter: false, launch: true, growth: true, scale: true, enterprise: true },
     { label: 'Online store', starter: true, launch: true, growth: true, scale: true, enterprise: true },
     { label: 'Booking system', starter: true, launch: true, growth: true, scale: true, enterprise: true },
+    { label: 'Monthly included credits (expire unused)', starter: '50', launch: '100', growth: '200', scale: '500', enterprise: '500' },
     { label: 'Store + bookings (mixed)', starter: false, launch: false, growth: false, scale: true, enterprise: true },
     { label: 'Revenue Command Center', starter: false, launch: false, growth: true, scale: true, enterprise: true },
     { label: 'Cart recovery', starter: false, launch: false, growth: true, scale: true, enterprise: true },

@@ -18,10 +18,21 @@ function getRawBody(req) {
 
 function verifyMetaWebhookSignature(appSecretEnvName) {
   return function (req, res, next) {
-    const appSecret = process.env[appSecretEnvName] || '';
+    let appSecret = process.env[appSecretEnvName] || '';
+    // WhatsApp webhooks often share the Meta app secret — accept common aliases.
+    if (!appSecret && appSecretEnvName === 'WHATSAPP_APP_SECRET') {
+      appSecret =
+        process.env.META_APP_SECRET ||
+        process.env.FACEBOOK_APP_SECRET ||
+        process.env.WHATSAPP_APP_SECRET ||
+        '';
+    }
     if (!appSecret) {
-      console.error(`[webhook] missing env ${appSecretEnvName} — Meta POST rejected`);
-      return res.status(500).json({ ok: false, message: `Missing ${appSecretEnvName} for webhook signature validation` });
+      console.error(`[webhook] missing env ${appSecretEnvName} (and Meta app secret fallbacks) — Meta POST rejected`);
+      return res.status(500).json({
+        ok: false,
+        message: `Missing ${appSecretEnvName} (or META_APP_SECRET) for webhook signature validation`,
+      });
     }
     const signature = String(req.headers['x-hub-signature-256'] || '');
     if (!signature.startsWith('sha256=')) {
@@ -35,7 +46,7 @@ function verifyMetaWebhookSignature(appSecretEnvName) {
     const expected = `sha256=${digest}`;
     if (!safeEqualHex(signature, expected)) {
       console.warn(
-        `[webhook] Meta POST rejected: invalid signature (${appSecretEnvName}) — check WHATSAPP_APP_SECRET matches the Meta app`
+        `[webhook] Meta POST rejected: invalid signature (${appSecretEnvName}) — check WHATSAPP_APP_SECRET / META_APP_SECRET matches the Meta app`
       );
       return res.status(401).json({ ok: false, message: 'Invalid Meta webhook signature' });
     }

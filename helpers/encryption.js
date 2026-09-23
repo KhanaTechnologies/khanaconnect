@@ -83,13 +83,23 @@ function decrypt(text) {
         
         return decrypted;
       } catch (oldError) {
-        // If both fail, log and return original
+        // If both fail, do not return ciphertext as a "token"
         console.error('Decryption error with both keys:', error.message);
+        if (isEncrypted(text)) {
+          const err = new Error('Failed to decrypt stored credential — check ENCRYPTION_KEY on the server');
+          err.code = 'DECRYPT_FAILED';
+          throw err;
+        }
         return text;
       }
     }
     
     console.error('Decryption error with new key:', error.message);
+    if (isEncrypted(text)) {
+      const err = new Error('Failed to decrypt stored credential — check ENCRYPTION_KEY on the server');
+      err.code = 'DECRYPT_FAILED';
+      throw err;
+    }
     return text;
   }
 }

@@ -103,7 +103,7 @@ function buildClientDefaults(body = {}) {
       const paidUntil = body.paidUntil ? new Date(body.paidUntil) : defaultPaidUntilForNewClient();
       return {
         status: body.subscriptionStatus || 'active',
-        plan: body.subscriptionPlan || body.plan || 'partnership',
+        plan: body.subscriptionPlan || body.plan || 'starter',
         billingCycle: body.billingCycle || 'monthly',
         paidUntil,
         graceUntil: applyGracePeriod(paidUntil, DEFAULT_GRACE_DAYS),

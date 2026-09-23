@@ -4,7 +4,7 @@ function normalizeSubscription(client) {
   const raw = client?.subscription || {};
   return {
     status: raw.status || 'active',
-    plan: raw.plan || 'partnership',
+    plan: raw.plan || 'starter',
     billingCycle: raw.billingCycle || 'monthly',
     paidUntil: raw.paidUntil ? new Date(raw.paidUntil) : null,
     graceUntil: raw.graceUntil ? new Date(raw.graceUntil) : null,

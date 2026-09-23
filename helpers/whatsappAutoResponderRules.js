@@ -116,7 +116,7 @@ const DEFAULT_RULES = [
 
       '• Hosting, support, and ongoing access to the system\n\n' +
 
-      'Pricing: most partnerships start from about R450/month after go-live, plus a once-off setup fee based on scope. WhatsApp message credits are prepaid separately.\n\n' +
+      'Pricing: most partnerships start from about R450/month after go-live, plus a once-off setup fee based on scope. Monthly plans include WhatsApp/ads credits (unused expire); top up prepaid packs for more.\n\n' +
 
       'Best way to see it: explore the live demo yourself, then tell us if you want to go further.' +
 
@@ -374,7 +374,7 @@ const DEFAULT_RULES = [
 
     reply:
 
-      'Most partnerships start from about R450/month after go-live, plus a once-off setup fee depending on scope (website, bookings/orders, WhatsApp setup, etc). WhatsApp message credits are prepaid separately.\n\n' +
+      'Most partnerships start from about R450/month after go-live, plus a once-off setup fee depending on scope (website, bookings/orders, WhatsApp setup, etc). Monthly plans include WhatsApp/ads credits (unused expire); top up prepaid packs when you need more.\n\n' +
 
       ROLE +
 

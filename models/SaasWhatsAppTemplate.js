@@ -9,6 +9,10 @@ const saasWhatsAppTemplateSchema = new mongoose.Schema(
     status: { type: String, default: '', trim: true, index: true },
     category: { type: String, default: '', trim: true },
     components: { type: mongoose.Schema.Types.Mixed, default: [] },
+    /** Meta Graph template id when created via API (optional for synced-only rows). */
+    meta_template_id: { type: String, default: '', trim: true },
+    /** Last Meta rejection reason when status is REJECTED. */
+    rejected_reason: { type: String, default: '', trim: true },
     synced_at: { type: Date, default: null },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }

@@ -47,14 +47,41 @@ router.post('/webhooks/whatsapp', verifyMetaWebhookSignature('WHATSAPP_APP_SECRE
     for (const entry of entries) {
       const changes = Array.isArray(entry.changes) ? entry.changes : [];
       for (const change of changes) {
+        const field = String(change.field || '');
         const value = change.value || {};
+
+        // Template approval/rejection webhooks (no phone metadata) — keep local status fresh.
+        if (field === 'message_template_status_update') {
+          try {
+            const applied = await WhatsAppService.applyTemplateStatusWebhook({
+              wabaId: entry.id || value.waba_id || '',
+              value,
+            });
+            if (applied.updated) {
+              console.log(
+                `[whatsapp webhook] template ${applied.name}/${applied.language || '?'} → ${applied.status} (${applied.updated} row(s))`
+              );
+            }
+          } catch (tplErr) {
+            console.error('[whatsapp webhook] template status update failed:', tplErr.message);
+          }
+          continue;
+        }
+
         const phoneNumberId = value.metadata?.phone_number_id || '';
         const statuses = Array.isArray(value.statuses) ? value.statuses : [];
         for (const st of statuses) {
           statusCount += 1;
           const level =
             st.status === 'failed' || st.errors?.length ? 'error' : 'log';
-          const msg = `[whatsapp webhook] phone_number_id=${phoneNumberId} id=${st.id} status=${st.status} recipient=${st.recipient_id || ''}`;
+          const errors = Array.isArray(st.errors) ? st.errors : [];
+          const errHint = errors
+            .map((e) => `#${e.code || '?'} ${e.title || e.message || ''}`.trim())
+            .filter(Boolean)
+            .join('; ');
+          const msg = `[whatsapp webhook] phone_number_id=${phoneNumberId} id=${st.id} status=${st.status} recipient=${st.recipient_id || ''}${
+            errHint ? ` errors=${errHint}` : ''
+          }`;
           if (level === 'error') {
             console.error(msg, st.errors || st);
           } else {
@@ -62,10 +89,16 @@ router.post('/webhooks/whatsapp', verifyMetaWebhookSignature('WHATSAPP_APP_SECRE
           }
         }
         const messages = Array.isArray(value.messages) ? value.messages : [];
-        inboundCount += messages.length;
+        const echoes = Array.isArray(value.message_echoes) ? value.message_echoes : [];
+        inboundCount += messages.length + echoes.length;
         if (messages.length) {
           console.log(
             `[whatsapp webhook] inbound ${messages.length} message(s) for phone_number_id=${phoneNumberId}`
+          );
+        }
+        if (echoes.length) {
+          console.log(
+            `[whatsapp webhook] ${echoes.length} Business-app echo(s) for phone_number_id=${phoneNumberId} (coexistence)`
           );
         }
         // Archive first so Meta's 200 ack cannot leave us with no recoverable copy on ingest bugs.
@@ -196,18 +229,33 @@ router.post('/whatsapp/accounts', requireRoles('owner', 'manager', 'operator'), 
     return res.status(400).json({ ok: false, message: 'waba_id, phone_number_id and access_token are required' });
   }
 
+  const tenantId = req.tenant.clientId;
+  const conflict = await SaasWhatsAppAccount.findOne({
+    phone_number_id,
+    status: 'active',
+    client_id: { $ne: tenantId },
+  })
+    .select('client_id')
+    .lean();
+  if (conflict) {
+    return res.status(409).json({
+      ok: false,
+      message: `This WhatsApp Business number is already connected to another Khana client (${conflict.client_id}). Disconnect it there first, then try again.`,
+    });
+  }
+
   const prev = await SaasWhatsAppAccount.findOne({
-    client_id: req.tenant.clientId,
+    client_id: tenantId,
     phone_number_id,
   }).select('waba_id dataset_id');
 
   const wabaChanged = prev && String(prev.waba_id) !== String(waba_id);
 
   const doc = await SaasWhatsAppAccount.findOneAndUpdate(
-    { client_id: req.tenant.clientId, phone_number_id },
+    { client_id: tenantId, phone_number_id },
     {
       $set: {
-        client_id: req.tenant.clientId,
+        client_id: tenantId,
         waba_id,
         phone_number_id,
         mode,
@@ -226,6 +274,15 @@ router.post('/whatsapp/accounts', requireRoles('owner', 'manager', 'operator'), 
     { upsert: true, new: true }
   );
 
+  await SaasWhatsAppAccount.updateMany(
+    {
+      client_id: tenantId,
+      status: 'active',
+      phone_number_id: { $ne: phone_number_id },
+    },
+    { $set: { status: 'disabled' } }
+  );
+
   const subscribe = await WhatsAppService.subscribeWabaApp({
     wabaId: waba_id,
     accessToken: access_token,
@@ -235,7 +292,7 @@ router.post('/whatsapp/accounts', requireRoles('owner', 'manager', 'operator'), 
   let datasetError = '';
   try {
     const WhatsAppConversionsService = require('../services/saas/WhatsAppConversionsService');
-    dataset = await WhatsAppConversionsService.ensureDataset(req.tenant.clientId, { force: true });
+    dataset = await WhatsAppConversionsService.ensureDataset(tenantId, { force: true });
   } catch (e) {
     datasetError = String(e?.message || e).slice(0, 500);
     console.warn('[whatsapp] dataset link on account save:', datasetError);
@@ -265,17 +322,20 @@ router.post('/whatsapp/accounts/disconnect', requireRoles('owner', 'manager'), w
   res.json({ ok: true, data });
 }));
 
-router.get('/whatsapp/setup', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (_req, res) => {
+router.get('/whatsapp/setup', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const WhatsAppEmbeddedSignupService = require('../services/saas/WhatsAppEmbeddedSignupService');
   const apiBase = (process.env.PUBLIC_API_BASE || process.env.PUBLIC_API_URL || process.env.API_PUBLIC_URL || 'https://khanaconnect.onrender.com').replace(
     /\/$/,
     ''
   );
   const apiPath = (process.env.API_URL || '/api/v1').replace(/\/$/, '');
+  const role = String(req.tenant?.role || '').toLowerCase();
+  const canSeeSecrets = role === 'owner' || role === 'manager' || role === 'admin';
   res.json({
     ok: true,
     data: {
       callbackUrl: `${apiBase}${apiPath}/saas/webhooks/whatsapp`,
-      verifyToken: String(process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || ''),
+      verifyToken: canSeeSecrets ? String(process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || '') : '',
       requiredTemplates: [
         'order_confirmation',
         'order_status_update',
@@ -284,8 +344,63 @@ router.get('/whatsapp/setup', requireRoles('owner', 'manager', 'operator', 'view
         'account_verification',
       ],
       templateLanguage: String(process.env.WHATSAPP_TEMPLATE_LANG || 'en_US'),
+      embeddedSignup: WhatsAppEmbeddedSignupService.getPublicConfig(),
+      onboarding: {
+        steps: [
+          'Connect WhatsApp (one-click Meta signup)',
+          'Top up credits if balance is zero',
+          'Install Khana template pack and wait for APPROVED',
+          'Optional: create Flows for booking/leads',
+          'Send a test from WA Templates or Inbox',
+        ],
+      },
     },
   });
+}));
+
+router.get('/whatsapp/embedded-signup/config', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (_req, res) => {
+  const WhatsAppEmbeddedSignupService = require('../services/saas/WhatsAppEmbeddedSignupService');
+  res.json({ ok: true, data: WhatsAppEmbeddedSignupService.getPublicConfig() });
+}));
+
+/**
+ * Complete Meta Embedded Signup: exchange code, save WABA credentials, subscribe webhooks, register number.
+ * Body: { code, waba_id?, phone_number_id?, event?, pin? }
+ */
+router.post('/whatsapp/embedded-signup/complete', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const WhatsAppEmbeddedSignupService = require('../services/saas/WhatsAppEmbeddedSignupService');
+  const body = req.body || {};
+  try {
+    const data = await WhatsAppEmbeddedSignupService.completeEmbeddedSignup({
+      clientId: req.tenant.clientId,
+      code: body.code,
+      wabaId: body.waba_id || body.wabaId || '',
+      phoneNumberId: body.phone_number_id || body.phoneNumberId || '',
+      event: body.event || '',
+      pin: body.pin || '',
+    });
+    res.status(201).json({ ok: true, data });
+  } catch (err) {
+    const status = err.status || err.response?.status || 400;
+    res.status(status).json({
+      ok: false,
+      message: err.message || 'WhatsApp Embedded Signup failed',
+    });
+  }
+}));
+
+/** Re-register Cloud API phone (owner/manager) — used if auto-register failed during signup. */
+router.post('/whatsapp/register', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const pin = String(req.body?.pin || '').trim();
+  const data = await WhatsAppService.registerPhoneNumber({
+    clientId: req.tenant.clientId,
+    pin,
+  });
+  await SaasWhatsAppAccount.updateOne(
+    { client_id: req.tenant.clientId, phone_number_id: data.phone_number_id },
+    { $set: { phone_registered_at: new Date(), last_register_error: '' } }
+  );
+  res.json({ ok: true, data });
 }));
 
 router.get('/whatsapp/account', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
@@ -304,9 +419,15 @@ router.get('/whatsapp/account', requireRoles('owner', 'manager', 'operator', 'vi
       client_id: doc.client_id,
       waba_id: doc.waba_id,
       phone_number_id: doc.phone_number_id,
+      display_phone_number: doc.display_phone_number || '',
+      verified_name: doc.verified_name || '',
       mode: doc.mode,
       status: doc.status,
+      coexistence: !!doc.coexistence,
       has_token: !!doc.access_token_encrypted,
+      phone_registered_at: doc.phone_registered_at || null,
+      last_register_error: doc.last_register_error || '',
+      embedded_signup_at: doc.embedded_signup_at || null,
       dataset_id: doc.dataset_id || '',
       dataset_linked_at: doc.dataset_linked_at || null,
       last_conversion_at: doc.last_conversion_at || null,
@@ -552,9 +673,184 @@ router.get('/whatsapp/templates', requireRoles('owner', 'manager', 'operator', '
   res.json({ ok: true, data: { templates } });
 }));
 
+router.get('/whatsapp/templates/starters', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (_req, res) => {
+  const { listWhatsAppTemplateStarterSummaries } = require('../helpers/whatsappTemplateStarters');
+  res.json({
+    ok: true,
+    data: {
+      starters: listWhatsAppTemplateStarterSummaries(),
+    },
+  });
+}));
+
 router.post('/whatsapp/templates/sync', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
   const data = await WhatsAppInboxService.syncMessageTemplates(req.tenant.clientId);
   res.json({ ok: true, data });
+}));
+
+/** Create / submit a template to Meta for approval (starter id or custom body). */
+router.post('/whatsapp/templates', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  try {
+    const data = await WhatsAppInboxService.createMessageTemplate(req.tenant.clientId, req.body || {});
+    res.status(201).json({ ok: true, data });
+  } catch (err) {
+    const status = err.status || err.response?.status || 400;
+    res.status(status).json({
+      ok: false,
+      message: err.message || 'Could not create WhatsApp template',
+    });
+  }
+}));
+
+router.delete('/whatsapp/templates', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const name = req.body?.name || req.query?.name || '';
+  const language = req.body?.language || req.query?.language || '';
+  try {
+    const data = await WhatsAppInboxService.deleteMessageTemplate(req.tenant.clientId, { name, language });
+    res.json({ ok: true, data });
+  } catch (err) {
+    const status = err.status || err.response?.status || 400;
+    res.status(status).json({
+      ok: false,
+      message: err.message || 'Could not delete WhatsApp template',
+    });
+  }
+}));
+
+router.post('/whatsapp/templates/coach', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const { coachWhatsAppTemplate } = require('../helpers/whatsappTemplateCoach');
+  res.json({ ok: true, data: coachWhatsAppTemplate(req.body || {}) });
+}));
+
+router.post('/whatsapp/templates/pack', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  try {
+    const data = await WhatsAppService.installTemplatePack(req.tenant.clientId, {
+      actor: req.user?.email || req.user?.memberId || '',
+    });
+    res.status(201).json({ ok: true, data });
+  } catch (err) {
+    const status = err.status || 400;
+    res.status(status).json({ ok: false, message: err.message || 'Pack install failed' });
+  }
+}));
+
+router.get('/whatsapp/health', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const data = await WhatsAppService.getHealth(req.tenant.clientId);
+  res.json({ ok: true, data });
+}));
+
+router.post('/whatsapp/broadcasts/estimate', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const data = await WhatsAppService.estimateBroadcastCredits(req.tenant.clientId, {
+    recipientCount: req.body?.recipientCount ?? req.body?.recipient_count,
+    messageType: req.body?.messageType || req.body?.message_type || 'utility',
+  });
+  res.json({ ok: true, data });
+}));
+
+router.post('/whatsapp/messages/test-to-me', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  try {
+    const data = await WhatsAppService.sendTestToMe(req.tenant.clientId, {
+      to: req.body?.to || '',
+      templateName: req.body?.templateName || req.body?.template_name || 'hello_world',
+      language: req.body?.language || '',
+    });
+    res.json({ ok: true, data });
+  } catch (err) {
+    const status = err.status || 400;
+    res.status(status).json({ ok: false, message: err.message || 'Test send failed' });
+  }
+}));
+
+router.get('/whatsapp/audit', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const SaasWhatsAppAuditLog = require('../models/SaasWhatsAppAuditLog');
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 40));
+  const rows = await SaasWhatsAppAuditLog.find({ client_id: req.tenant.clientId })
+    .sort({ created_at: -1 })
+    .limit(limit)
+    .lean();
+  res.json({
+    ok: true,
+    data: {
+      events: rows.map((r) => ({
+        id: String(r._id),
+        action: r.action,
+        actor: r.actor || '',
+        template_name: r.template_name || '',
+        detail: r.detail || '',
+        created_at: r.created_at,
+      })),
+    },
+  });
+}));
+
+/** WhatsApp Flows — in-chat forms (booking, leads, contact). */
+router.get('/whatsapp/flows/starters', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const WhatsAppFlowsService = require('../services/saas/WhatsAppFlowsService');
+  const client = await Client.findOne({ clientID: req.tenant.clientId }).select('companyName').lean();
+  res.json({
+    ok: true,
+    data: {
+      starters: WhatsAppFlowsService.listStarters(client?.companyName || req.tenant.clientId),
+    },
+  });
+}));
+
+router.get('/whatsapp/flows', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const WhatsAppFlowsService = require('../services/saas/WhatsAppFlowsService');
+  const flows = await WhatsAppFlowsService.listFlows(req.tenant.clientId);
+  res.json({ ok: true, data: { flows } });
+}));
+
+router.post('/whatsapp/flows/sync', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
+  const WhatsAppFlowsService = require('../services/saas/WhatsAppFlowsService');
+  try {
+    const data = await WhatsAppFlowsService.syncFlows(req.tenant.clientId);
+    res.json({ ok: true, data });
+  } catch (err) {
+    res.status(err.status || 400).json({ ok: false, message: err.message || 'Flow sync failed' });
+  }
+}));
+
+router.post('/whatsapp/flows', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const WhatsAppFlowsService = require('../services/saas/WhatsAppFlowsService');
+  try {
+    const data = await WhatsAppFlowsService.createFromStarter(req.tenant.clientId, {
+      starterId: req.body?.starter || req.body?.starterId || req.body?.starter_id,
+      publish: req.body?.publish !== false,
+      name: req.body?.name || '',
+    });
+    res.status(201).json({ ok: true, data });
+  } catch (err) {
+    res.status(err.status || 400).json({ ok: false, message: err.message || 'Could not create Flow' });
+  }
+}));
+
+router.post('/whatsapp/flows/send', requireRoles('owner', 'manager', 'operator'), wrapRoute(async (req, res) => {
+  const WhatsAppFlowsService = require('../services/saas/WhatsAppFlowsService');
+  try {
+    const data = await WhatsAppFlowsService.sendFlowMessage(req.tenant.clientId, {
+      to: req.body?.to,
+      flowId: req.body?.flow_id || req.body?.flowId,
+      flowName: req.body?.flow_name || req.body?.flowName,
+      body: req.body?.body,
+      header: req.body?.header,
+      footer: req.body?.footer,
+      cta: req.body?.cta || req.body?.flow_cta,
+    });
+    res.status(202).json({ ok: true, data });
+  } catch (err) {
+    res.status(err.status || 400).json({ ok: false, message: err.message || 'Could not send Flow' });
+  }
+}));
+
+router.post('/whatsapp/flows/:flowId/publish', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const WhatsAppFlowsService = require('../services/saas/WhatsAppFlowsService');
+  try {
+    const data = await WhatsAppFlowsService.publishFlow(req.tenant.clientId, req.params.flowId);
+    res.json({ ok: true, data });
+  } catch (err) {
+    res.status(err.status || 400).json({ ok: false, message: err.message || 'Publish failed' });
+  }
 }));
 
 router.get('/whatsapp/inbox/auto-rules', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
@@ -1514,6 +1810,24 @@ router.get('/meta/setup', requireRoles('owner', 'manager', 'operator', 'viewer')
   res.json({ ok: true, data });
 }));
 
+/**
+ * Create a Meta ad account under the client's Business Manager (ZAR / Africa/Johannesburg).
+ * Ad spend stays on the client's Meta payment method — never Khana's.
+ */
+router.post('/meta/ad-accounts/create', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  try {
+    const data = await MetaAdsAdvancedService.createAdAccountForClient(req.tenant.clientId, {
+      name: req.body?.name || '',
+      currency: req.body?.currency || 'ZAR',
+      timezoneId: req.body?.timezone_id || req.body?.timezoneId || 141,
+    });
+    res.status(201).json({ ok: true, data });
+  } catch (err) {
+    const status = err.status || 400;
+    res.status(status).json({ ok: false, message: err.message || 'Could not create ad account' });
+  }
+}));
+
 router.get('/meta/campaigns', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
   const data = await MetaAdsAdvancedService.listLocalCampaigns(req.tenant.clientId);
   res.json({ ok: true, data });
@@ -1652,7 +1966,12 @@ router.post('/meta/refresh-token', requireRoles('owner', 'manager'), wrapRoute(a
 
 router.get('/billing', requireRoles('owner', 'manager', 'billing_admin', 'viewer', 'operator'), wrapRoute(async (req, res) => {
   const clientId = req.tenant.clientId;
-  const account = await BillingService.ensureAccount(clientId);
+  await BillingService.ensureMonthlyIncludedCredits(clientId);
+  const accountDoc = await BillingService.ensureAccount(clientId);
+  const clientSnap = await Client.findOne({ clientID: clientId }).select('subscription').lean();
+  const account = BillingService.serializeAccount(accountDoc, {
+    plan: clientSnap?.subscription?.plan || 'starter',
+  });
   const recent = await SaasTransaction.find({ client_id: clientId }).sort({ created_at: -1 }).limit(30);
   const whatsappDeductions = recent.filter(
     (t) => t.type === 'deduction' && (t.metadata?.service === 'whatsapp' || String(t.reference || '').startsWith('wamid.'))
@@ -1707,24 +2026,206 @@ router.get('/billing', requireRoles('owner', 'manager', 'billing_admin', 'viewer
         utilityVolumeTiers: volumeSchedule.utility,
         volumeSchedule: volumeSchedule.descriptions,
       },
+      credits: BillingService.listCreditPacks(),
+      ads: {
+        boostCredits: 8,
+        campaignCreateCredits: 15,
+        note:
+          'Meta media spend bills to your Meta card. Khana deducts service-fee credits when you create or boost ads — included monthly credits apply first, then prepaid packs.',
+      },
     },
   });
 }));
 
+router.get('/billing/credit-packs', requireRoles('owner', 'manager', 'billing_admin', 'viewer', 'operator'), wrapRoute(async (_req, res) => {
+  res.json({ ok: true, data: BillingService.listCreditPacks() });
+}));
+
+/** Client: create EFT top-up request (bank transfer — no gateway). Credits pending until admin confirms. */
+router.post('/billing/eft/request', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  try {
+    const data = await BillingService.createEftTopupRequest(req.tenant.clientId, {
+      packId: req.body?.pack_id || req.body?.packId || '',
+      amountZar: req.body?.amount_zar ?? req.body?.amountZar ?? null,
+      note: req.body?.note || '',
+    });
+    res.status(201).json({ ok: true, data });
+  } catch (err) {
+    res.status(err.status || 400).json({ ok: false, message: err.message || 'EFT request failed' });
+  }
+}));
+
+router.get('/billing/eft/requests', requireRoles('owner', 'manager', 'billing_admin', 'viewer'), wrapRoute(async (req, res) => {
+  const rows = await BillingService.listClientEftTopups(req.tenant.clientId, {
+    limit: Number(req.query.limit) || 20,
+  });
+  res.json({ ok: true, data: { requests: rows } });
+}));
+
+router.post('/billing/eft/mark-paid', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  try {
+    const data = await BillingService.markEftPaidByClient({
+      reference: req.body?.reference || '',
+      clientId: req.tenant.clientId,
+      note: req.body?.note || '',
+    });
+    res.json({ ok: true, data });
+  } catch (err) {
+    res.status(err.status || 400).json({ ok: false, message: err.message || 'Could not mark paid' });
+  }
+}));
+
+router.post('/billing/eft/cancel', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  try {
+    const data = await BillingService.cancelEftTopup({
+      reference: req.body?.reference || '',
+      clientId: req.tenant.clientId,
+      cancelledBy: req.tenant.userId || req.tenant.clientId,
+    });
+    res.json({ ok: true, data });
+  } catch (err) {
+    res.status(err.status || 400).json({ ok: false, message: err.message || 'Could not cancel' });
+  }
+}));
+
+/** Admin: pending EFTs across clients */
+router.get('/admin/billing/eft/pending', adminOnly, wrapRoute(async (req, res) => {
+  const rows = await BillingService.listPendingEftTopups({
+    clientId: req.query.client_id || req.query.clientId || '',
+    limit: Number(req.query.limit) || 50,
+  });
+  res.json({ ok: true, data: { requests: rows } });
+}));
+
+router.post('/admin/billing/eft/confirm', adminOnly, wrapRoute(async (req, res) => {
+  try {
+    const data = await BillingService.confirmEftTopup({
+      reference: req.body?.reference || '',
+      confirmedBy: req.tenant.userId || req.tenant.clientId || 'admin',
+      note: req.body?.note || '',
+    });
+    res.json({ ok: true, data });
+  } catch (err) {
+    res.status(err.status || 400).json({ ok: false, message: err.message || 'Confirm failed' });
+  }
+}));
+
+router.get('/billing/invoices', requireRoles('owner', 'manager', 'billing_admin', 'viewer'), wrapRoute(async (req, res) => {
+  const BillingDocumentsService = require('../helpers/BillingDocumentsService');
+  const invoices = await BillingDocumentsService.listInvoices(req.tenant.clientId, {
+    limit: Number(req.query.limit) || 50,
+  });
+  res.json({ ok: true, data: { invoices } });
+}));
+
+router.get('/billing/invoices/:reference', requireRoles('owner', 'manager', 'billing_admin', 'viewer'), wrapRoute(async (req, res) => {
+  const BillingDocumentsService = require('../helpers/BillingDocumentsService');
+  const print = String(req.query.print || '') === '1' || String(req.query.format || '') === 'html';
+  const data = await BillingDocumentsService.getInvoice(req.tenant.clientId, req.params.reference, {
+    asHtml: print,
+  });
+  if (print && data.html) {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.status(200).send(data.html);
+  }
+  res.json({ ok: true, data });
+}));
+
+router.get('/billing/statement', requireRoles('owner', 'manager', 'billing_admin', 'viewer'), wrapRoute(async (req, res) => {
+  const BillingDocumentsService = require('../helpers/BillingDocumentsService');
+  const print = String(req.query.print || '') === '1' || String(req.query.format || '') === 'html';
+  const data = await BillingDocumentsService.getStatement(
+    req.tenant.clientId,
+    { from: req.query.from || null, to: req.query.to || null },
+    { asHtml: print }
+  );
+  if (print && data.html) {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.status(200).send(data.html);
+  }
+  res.json({ ok: true, data });
+}));
+
+router.get('/admin/billing/invoices/:reference', adminOnly, wrapRoute(async (req, res) => {
+  const BillingDocumentsService = require('../helpers/BillingDocumentsService');
+  const print = String(req.query.print || '') === '1' || String(req.query.format || '') === 'html';
+  const data = await BillingDocumentsService.getInvoice(null, req.params.reference, { asHtml: print });
+  if (print && data.html) {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.status(200).send(data.html);
+  }
+  res.json({ ok: true, data });
+}));
+
+router.get('/admin/billing/statement/:clientId', adminOnly, wrapRoute(async (req, res) => {
+  const BillingDocumentsService = require('../helpers/BillingDocumentsService');
+  const print = String(req.query.print || '') === '1' || String(req.query.format || '') === 'html';
+  const data = await BillingDocumentsService.getStatement(
+    req.params.clientId,
+    { from: req.query.from || null, to: req.query.to || null },
+    { asHtml: print }
+  );
+  if (print && data.html) {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.status(200).send(data.html);
+  }
+  res.json({ ok: true, data });
+}));
+
 router.post('/billing/topup/manual', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
-  const { credits, amount, reference, client_id } = req.body;
+  const { credits, amount, reference, client_id, pack_id: packId } = req.body;
   const requested = String(client_id || '').trim();
   if (requested && requested !== String(req.tenant.clientId)) {
     return res.status(403).json({ ok: false, message: 'Cannot credit another workspace' });
   }
   const targetClient = String(req.tenant.clientId);
+
+  if (packId) {
+    const result = await BillingService.topUpWithPack({
+      clientId: targetClient,
+      packId,
+      amount: amount != null ? Number(amount) : undefined,
+      reference: reference || undefined,
+      method: 'manual',
+      metadata: { adminBy: req.tenant.userId || 'admin' },
+    });
+    return res.json({ ok: true, data: result });
+  }
+
   const result = await BillingService.topUpCredits({
     clientId: targetClient,
     credits: Number(credits || 0),
     amount: Number(amount || credits || 0),
     method: 'manual',
     reference: reference || `manual-${Date.now()}`,
-    metadata: { adminBy: req.tenant.userId || 'admin' },
+    metadata: { adminBy: req.tenant.userId || 'admin', rateLabel: 'manual_list' },
+  });
+  res.json({ ok: true, data: result });
+}));
+
+/** Admin can credit any client (EFT confirmed offline or goodwill). */
+router.post('/admin/billing/topup', adminOnly, wrapRoute(async (req, res) => {
+  const clientId = String(req.body?.client_id || req.body?.clientId || '').trim();
+  if (!clientId) return res.status(400).json({ ok: false, message: 'client_id is required' });
+  const packId = String(req.body?.pack_id || req.body?.packId || '').trim();
+  if (packId) {
+    const result = await BillingService.topUpWithPack({
+      clientId,
+      packId,
+      amount: req.body?.amount != null ? Number(req.body.amount) : undefined,
+      reference: req.body?.reference || undefined,
+      method: 'manual',
+      metadata: { adminBy: req.tenant.userId || 'admin', channel: 'admin_topup' },
+    });
+    return res.json({ ok: true, data: result });
+  }
+  const result = await BillingService.topUpCredits({
+    clientId,
+    credits: Number(req.body?.credits || 0),
+    amount: Number(req.body?.amount || req.body?.credits || 0),
+    method: 'manual',
+    reference: req.body?.reference || `admin-${Date.now()}`,
+    metadata: { adminBy: req.tenant.userId || 'admin', channel: 'admin_topup' },
   });
   res.json({ ok: true, data: result });
 }));
@@ -1965,6 +2466,9 @@ router.get('/admin/whatsapp-usage', adminOnly, wrapRoute(async (req, res) => {
       queued: row.queued,
       billedCredits: Number(Number(row.billedCredits || 0).toFixed(4)),
       creditBalance: Number(bill.credit_balance || 0),
+      includedCredits: Number(bill.included_credit_balance || 0),
+      purchasedCredits: Number(bill.purchased_credit_balance || 0),
+      includedPeriod: bill.included_period || '',
       totalSpent: Number(bill.total_spent || 0),
       lastAt: row.lastAt,
     };
