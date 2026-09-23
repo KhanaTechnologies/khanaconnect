@@ -320,11 +320,14 @@ async function updateSelection(clientId, { pageId, adAccountId }) {
   };
 }
 
-async function ensurePageAccessToken(client, pageId, { requirePageToken = false } = {}) {
+async function ensurePageAccessToken(client, pageId, { requirePageToken = false, forceRefresh = false } = {}) {
   const wanted = String(pageId || '');
   const storedPageId = String(client.metaAds?.pageId || '');
   let pageToken =
-    client.metaAds?.pageAccessToken && wanted && storedPageId === wanted
+    !forceRefresh &&
+    client.metaAds?.pageAccessToken &&
+    wanted &&
+    storedPageId === wanted
       ? String(client.metaAds.pageAccessToken)
       : '';
 
@@ -363,7 +366,7 @@ async function ensurePageAccessToken(client, pageId, { requirePageToken = false 
       'Could not load a Page access token for this Page. You need Admin or Editor on the Page. Disconnect → Connect Facebook and approve Page access.'
     );
   }
-  return userToken;
+  return '';
 }
 
 function mapPagePosts(posts) {
@@ -381,7 +384,8 @@ function mapPagePosts(posts) {
   }));
 }
 
-/** Fields Boost used successfully before organic engagement was added. */
+/** Minimal fields — avoid shares/reactions so listing does not require extra Page scopes. */
+const PAGE_POST_FIELDS_MIN = 'id,message,created_time,full_picture,permalink_url';
 const PAGE_POST_FIELDS_LIGHT = 'id,message,created_time,full_picture,permalink_url,shares';
 /** Engagement summaries — often need pages_read_engagement; never block listing. */
 const PAGE_POST_FIELDS_ENGAGEMENT =
@@ -392,9 +396,28 @@ async function graphGetPagePostsEdge(pageId, token, edge, fields, limit) {
   return mapPagePosts(res?.data);
 }
 
+async function fetchPagePostsWithToken(pageId, token, cap) {
+  const edges = ['published_posts', 'posts', 'feed'];
+  const fieldSets = [PAGE_POST_FIELDS_MIN, PAGE_POST_FIELDS_LIGHT];
+  let lastError = null;
+  for (const fields of fieldSets) {
+    for (const edge of edges) {
+      try {
+        const posts = await graphGetPagePostsEdge(pageId, token, edge, fields, cap);
+        return { posts, edge, error: null };
+      } catch (err) {
+        lastError = err;
+        console.warn(`[meta ads] ${edge} (page, ${fields === PAGE_POST_FIELDS_MIN ? 'min' : 'light'}) failed:`, formatGraphError(err));
+      }
+    }
+  }
+  return { posts: null, edge: null, error: lastError };
+}
+
 /**
  * List Page posts for Boost + Posts activity.
- * Uses light fields first (restore Boost). Engagement counts are best-effort.
+ * Always uses a fresh Page token from /me/accounts — never a user token
+ * (user tokens trigger #10 Page Public Content Access).
  */
 async function listPagePosts(clientId, { limit = 20, includeEngagement = true } = {}) {
   const client = await loadClientWithMeta(clientId);
@@ -402,57 +425,46 @@ async function listPagePosts(clientId, { limit = 20, includeEngagement = true } 
   if (!pageId) throw new Error('Select a Facebook Page first');
 
   const cap = Math.min(Math.max(Number(limit) || 20, 1), 50);
-  const pageToken = await ensurePageAccessToken(client, pageId);
-  const userToken = String(client.metaAds?.accessToken || '').trim();
-  const tokens = [...new Set([pageToken, userToken].filter(Boolean))];
+  let pageToken = await ensurePageAccessToken(client, pageId, {
+    requirePageToken: true,
+    forceRefresh: true,
+  });
 
-  // Same edge order as when Boost last worked; light fields first.
-  const edges = ['published_posts', 'posts', 'feed'];
-  let lastError = null;
-  let posts = null;
-  let usedEdge = null;
-  let usedTokenKind = null;
-
-  for (const token of tokens) {
-    const tokenKind = token === pageToken ? 'page' : 'user';
-    for (const edge of edges) {
-      try {
-        posts = await graphGetPagePostsEdge(pageId, token, edge, PAGE_POST_FIELDS_LIGHT, cap);
-        usedEdge = edge;
-        usedTokenKind = tokenKind;
-        break;
-      } catch (err) {
-        lastError = err;
-        console.warn(`[meta ads] ${edge} (${tokenKind}, light) failed:`, formatGraphError(err));
-      }
-    }
-    if (posts) break;
+  let fetched = await fetchPagePostsWithToken(pageId, pageToken, cap);
+  if (!fetched.posts) {
+    client.metaAds.pageAccessToken = '';
+    client.markModified('metaAds');
+    pageToken = await ensurePageAccessToken(client, pageId, {
+      requirePageToken: true,
+      forceRefresh: true,
+    });
+    fetched = await fetchPagePostsWithToken(pageId, pageToken, cap);
   }
+
+  let posts = fetched.posts;
+  const usedEdge = fetched.edge;
+  const lastError = fetched.error;
 
   if (!posts) {
     const msg = formatGraphError(lastError);
-    const needsPermissions =
-      /permission|(#200)|(#10)|pages_read|OAuthException|Page Public Content Access/i.test(msg);
     return {
       pageId: String(pageId),
       pageName: client.metaAds.pageName || '',
       posts: [],
-      error: needsPermissions
-        ? `${msg} Khana needs a Page access token for the Page you selected (Admin or Editor). In Meta Ads, choose that Page again, or Disconnect → Connect Facebook, tick the Page, and approve pages_read_engagement.`
-        : msg,
-      missingPermissions: needsPermissions
-        ? ['pages_read_engagement', 'pages_read_user_content']
+      error:
+        'Could not load posts for this Page. Select the Page again under Meta Ads, or Disconnect → Connect Facebook and approve Page access (pages_read_engagement).',
+      missingPermissions: /permission|(#200)|(#10)|pages_read|OAuthException|Page Public Content Access/i.test(msg)
+        ? ['pages_read_engagement']
         : [],
     };
   }
 
   // Best-effort likes/comments — never fail Boost if this step is denied.
-  if (includeEngagement && usedEdge && usedTokenKind) {
-    const token = usedTokenKind === 'page' ? pageToken : userToken;
+  if (includeEngagement && usedEdge && pageToken) {
     try {
       const rich = await graphGetPagePostsEdge(
         pageId,
-        token,
+        pageToken,
         usedEdge,
         PAGE_POST_FIELDS_ENGAGEMENT,
         cap
