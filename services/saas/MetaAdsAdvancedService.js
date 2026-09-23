@@ -12,6 +12,10 @@ const {
   normalizeAdAccountId,
   findAdAccountOwner,
   buildTargetingSpec,
+  buildReadableCampaignName,
+  looksLikeMetaIdName,
+  formatMetaDate,
+  deleteMetaCampaignQuietly,
   resolveInsightsWindow,
   insightsGraphDateParams,
 } = require('./MetaAdsService');
@@ -498,36 +502,51 @@ async function listMetaAdAccountCampaigns(clientId) {
       });
       rows = Array.isArray(retry?.data) ? retry.data : [];
     }
+    const mapped = [];
+    for (const c of rows) {
+      const statusRaw = String(c.effective_status || c.status || 'PAUSED').toLowerCase();
+      const status =
+        statusRaw === 'active'
+          ? 'active'
+          : statusRaw === 'archived' || statusRaw === 'deleted'
+            ? 'archived'
+            : 'paused';
+      const budgetCents = Number(c.daily_budget);
+      let displayName = String(c.name || 'Campaign');
+      if (looksLikeMetaIdName(displayName)) {
+        const when = c.created_time ? formatMetaDate(c.created_time) : formatMetaDate();
+        const next = buildReadableCampaignName(client, 'boost', {
+          name: `${client.companyName || client.metaAds?.pageName || 'Khana'} boost · ${when}`,
+        });
+        try {
+          await graphPost(`/${c.id}`, token, { name: next });
+          displayName = next;
+        } catch (err) {
+          console.warn('[meta ads] rename id-like campaign failed:', formatGraphError(err));
+        }
+      }
+      mapped.push({
+        id: `meta_${c.id}`,
+        name: displayName,
+        objective: String(c.objective || ''),
+        budget: Number.isFinite(budgetCents) && budgetCents > 0 ? budgetCents / 100 : undefined,
+        status,
+        campaignType: String(c.objective || '').includes('OUTCOME_ENGAGEMENT')
+          || String(c.objective || '').includes('POST_ENGAGEMENT')
+          ? 'boost'
+          : 'meta',
+        metaCampaignId: String(c.id),
+        metaAdsetId: '',
+        metaAdId: '',
+        boostPostId: '',
+        source: 'meta',
+        createdAt: c.created_time || null,
+        updatedAt: c.updated_time || null,
+      });
+    }
     return {
       ok: true,
-      campaigns: rows.map((c) => {
-        const statusRaw = String(c.effective_status || c.status || 'PAUSED').toLowerCase();
-        const status =
-          statusRaw === 'active'
-            ? 'active'
-            : statusRaw === 'archived' || statusRaw === 'deleted'
-              ? 'archived'
-              : 'paused';
-        const budgetCents = Number(c.daily_budget);
-        return {
-          id: `meta_${c.id}`,
-          name: String(c.name || 'Campaign'),
-          objective: String(c.objective || ''),
-          budget: Number.isFinite(budgetCents) && budgetCents > 0 ? budgetCents / 100 : undefined,
-          status,
-          campaignType: String(c.objective || '').includes('OUTCOME_ENGAGEMENT')
-            || String(c.objective || '').includes('POST_ENGAGEMENT')
-            ? 'boost'
-            : 'meta',
-          metaCampaignId: String(c.id),
-          metaAdsetId: '',
-          metaAdId: '',
-          boostPostId: '',
-          source: 'meta',
-          createdAt: c.created_time || null,
-          updatedAt: c.updated_time || null,
-        };
-      }),
+      campaigns: mapped,
     };
   } catch (err) {
     console.warn('[meta ads] list meta campaigns failed:', formatGraphError(err));
@@ -1021,7 +1040,7 @@ async function createClickToWhatsAppCampaign(
   const cents = Math.round(budgetNum * 100);
   const durationDays = Math.min(Math.max(Number(days) || 7, 1), 30);
   const adStatus = String(status).toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'PAUSED';
-  const campaignName = String(name || '').trim() || `Khana WhatsApp ${new Date().toISOString().slice(0, 10)}`;
+  const campaignName = buildReadableCampaignName(client, 'WhatsApp', { name, caption: message });
   const targeting = buildTargetingSpec({
     country,
     ...targetingInput,
@@ -1049,14 +1068,17 @@ async function createClickToWhatsAppCampaign(
 
     const startTime = Math.floor(Date.now() / 1000);
     const adSet = await graphPost(`/act_${adAccountId}/adsets`, token, {
-      name: `${campaignName} ad set`,
+      name: campaignName,
       campaign_id: campaignId,
       daily_budget: cents,
       billing_event: 'IMPRESSIONS',
       optimization_goal: 'CONVERSATIONS',
       bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
       targeting: JSON.stringify(targeting),
-      promoted_object: JSON.stringify({ page_id: pageId }),
+      promoted_object: JSON.stringify({
+        page_id: pageId,
+        ...(waDigits ? { whatsapp_phone_number: waDigits } : {}),
+      }),
       destination_type: 'WHATSAPP',
       start_time: startTime,
       end_time: startTime + durationDays * 86400,
@@ -1084,13 +1106,13 @@ async function createClickToWhatsAppCampaign(
     }
 
     const creative = await graphPost(`/act_${adAccountId}/adcreatives`, token, {
-      name: `${campaignName} creative`,
+      name: campaignName,
       object_story_spec: JSON.stringify(objectStorySpec),
     });
     creativeId = creative.id;
 
     const ad = await graphPost(`/act_${adAccountId}/ads`, token, {
-      name: `${campaignName} ad`,
+      name: campaignName,
       adset_id: adSetId,
       creative: JSON.stringify({ creative_id: creativeId }),
       status: adStatus,
@@ -1101,8 +1123,10 @@ async function createClickToWhatsAppCampaign(
     // ctwa_clid and breaks WhatsApp Conversions / App Review demos.
     // Opt-in only: META_WHATSAPP_TRAFFIC_FALLBACK=1
     if (String(process.env.META_WHATSAPP_TRAFFIC_FALLBACK || '').trim() !== '1') {
+      await deleteMetaCampaignQuietly(campaignId, token);
       throw new Error(formatGraphError(err));
     }
+    await deleteMetaCampaignQuietly(campaignId, token);
     try {
       const campaign = await graphPost(`/act_${adAccountId}/campaigns`, token, {
         name: campaignName,
@@ -1114,7 +1138,7 @@ async function createClickToWhatsAppCampaign(
       campaignId = campaign.id;
       const startTime = Math.floor(Date.now() / 1000);
       const adSet = await graphPost(`/act_${adAccountId}/adsets`, token, {
-        name: `${campaignName} ad set`,
+        name: campaignName,
         campaign_id: campaignId,
         daily_budget: cents,
         billing_event: 'IMPRESSIONS',
@@ -1141,12 +1165,12 @@ async function createClickToWhatsAppCampaign(
         },
       };
       const creative = await graphPost(`/act_${adAccountId}/adcreatives`, pageToken, {
-        name: `${campaignName} creative`,
+        name: campaignName,
         object_story_spec: JSON.stringify(objectStorySpec),
       });
       creativeId = creative.id;
       const ad = await graphPost(`/act_${adAccountId}/ads`, token, {
-        name: `${campaignName} ad`,
+        name: campaignName,
         adset_id: adSetId,
         creative: JSON.stringify({ creative_id: creativeId }),
         status: adStatus,
@@ -1238,7 +1262,10 @@ async function createLeadAd(
   const cents = Math.round(budgetNum * 100);
   const durationDays = Math.min(Math.max(Number(days) || 7, 1), 30);
   const adStatus = String(status).toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'PAUSED';
-  const campaignName = String(name || '').trim() || `Khana Leads ${new Date().toISOString().slice(0, 10)}`;
+  const campaignName = buildReadableCampaignName(client, 'Leads', {
+    name,
+    caption: headline || body,
+  });
   const privacyUrl =
     String(privacyPolicyUrl || '').trim() ||
     `${String(client.return_url || '').replace(/\/$/, '')}/privacy` ||
@@ -1285,7 +1312,7 @@ async function createLeadAd(
 
     const startTime = Math.floor(Date.now() / 1000);
     const adSet = await graphPost(`/act_${adAccountId}/adsets`, token, {
-      name: `${campaignName} ad set`,
+      name: campaignName,
       campaign_id: campaignId,
       daily_budget: cents,
       billing_event: 'IMPRESSIONS',
@@ -1301,7 +1328,7 @@ async function createLeadAd(
     adSetId = adSet.id;
 
     const creative = await graphPost(`/act_${adAccountId}/adcreatives`, token, {
-      name: `${campaignName} creative`,
+      name: campaignName,
       object_story_spec: JSON.stringify({
         page_id: pageId,
         link_data: {
@@ -1319,13 +1346,14 @@ async function createLeadAd(
     creativeId = creative.id;
 
     const ad = await graphPost(`/act_${adAccountId}/ads`, token, {
-      name: `${campaignName} ad`,
+      name: campaignName,
       adset_id: adSetId,
       creative: JSON.stringify({ creative_id: creativeId }),
       status: adStatus,
     });
     adId = ad.id;
   } catch (err) {
+    await deleteMetaCampaignQuietly(campaignId, token);
     throw new Error(formatGraphError(err));
   }
 
@@ -1530,8 +1558,7 @@ async function createCatalogSalesCampaign(
   const cents = Math.round(budgetNum * 100);
   const durationDays = Math.min(Math.max(Number(days) || 7, 1), 30);
   const adStatus = String(status).toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'PAUSED';
-  const campaignName =
-    String(name || '').trim() || `Khana Catalog ${new Date().toISOString().slice(0, 10)}`;
+  const campaignName = buildReadableCampaignName(client, 'Catalog', { name });
   const pixelId = client.metaAds.pixelId ? String(client.metaAds.pixelId) : '';
   if (!pixelId) {
     throw new Error(
@@ -1566,11 +1593,15 @@ async function createCatalogSalesCampaign(
     });
     campaignId = campaign.id;
 
-    const promotedObject = { product_set_id: productSetId, pixel_id: pixelId };
+    const promotedObject = {
+      product_set_id: productSetId,
+      pixel_id: pixelId,
+      custom_event_type: 'PURCHASE',
+    };
 
     const startTime = Math.floor(Date.now() / 1000);
     const adSet = await graphPost(`/act_${adAccountId}/adsets`, token, {
-      name: `${campaignName} ad set`,
+      name: campaignName,
       campaign_id: campaignId,
       daily_budget: cents,
       billing_event: 'IMPRESSIONS',
@@ -1586,7 +1617,7 @@ async function createCatalogSalesCampaign(
     adSetId = adSet.id;
 
     const creative = await graphPost(`/act_${adAccountId}/adcreatives`, token, {
-      name: `${campaignName} creative`,
+      name: campaignName,
       product_set_id: productSetId,
       object_story_spec: JSON.stringify({
         page_id: pageId,
@@ -1601,13 +1632,14 @@ async function createCatalogSalesCampaign(
     creativeId = creative.id;
 
     const ad = await graphPost(`/act_${adAccountId}/ads`, token, {
-      name: `${campaignName} ad`,
+      name: campaignName,
       adset_id: adSetId,
       creative: JSON.stringify({ creative_id: creativeId }),
       status: adStatus,
     });
     adId = ad.id;
   } catch (err) {
+    await deleteMetaCampaignQuietly(campaignId, token);
     throw new Error(formatGraphError(err));
   }
 

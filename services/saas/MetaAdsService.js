@@ -1156,6 +1156,105 @@ async function listCustomAudiences(clientId) {
   }
 }
 
+function formatMetaDate(date = new Date()) {
+  try {
+    return new Date(date).toLocaleDateString('en-GB', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    });
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+
+function looksLikeMetaIdName(name) {
+  const s = String(name || '').trim();
+  return (
+    /^(boost|creative|ad)[\s_\-]*\d{5,}([\s_\-]\d{4,})?$/i.test(s)
+    || /^\d{5,}_\d{4,}$/.test(s)
+  );
+}
+
+function workspaceBrand(client) {
+  return (
+    String(client?.companyName || client?.metaAds?.pageName || 'Khana')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 40) || 'Khana'
+  );
+}
+
+function sanitizeMetaName(raw, fallback = 'Khana campaign') {
+  const cleaned = String(raw || '')
+    .replace(/[\u0000-\u001F\u007F]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned || looksLikeMetaIdName(cleaned)) {
+    return String(fallback || 'Khana campaign').slice(0, 100);
+  }
+  return cleaned.slice(0, 100);
+}
+
+/** Human-readable name for campaign / ad set / ad / creative — never Page_Post IDs. */
+function buildReadableCampaignName(client, kind, { name, caption } = {}) {
+  const branded = `${workspaceBrand(client)} ${kind} · ${formatMetaDate()}`;
+  if (name) return sanitizeMetaName(name, branded);
+  const snippet = String(caption || '').replace(/\s+/g, ' ').trim();
+  if (snippet) return sanitizeMetaName(`Boost: ${snippet}`, branded);
+  return sanitizeMetaName(branded, branded);
+}
+
+async function deleteMetaCampaignQuietly(campaignId, token) {
+  if (!campaignId) return;
+  try {
+    await graphPost(`/${campaignId}`, token, { status: 'DELETED' });
+  } catch (err) {
+    console.warn('[meta ads] failed campaign cleanup:', formatGraphError(err));
+  }
+}
+
+async function fetchBoostCaption(client, {
+  boostSource,
+  objectStoryId,
+  igMediaId,
+  pageId,
+  token,
+}) {
+  let pageToken = '';
+  try {
+    pageToken = await ensurePageAccessToken(client, pageId);
+  } catch {
+    pageToken = '';
+  }
+  const readToken = pageToken || token;
+  try {
+    if (boostSource === 'instagram') {
+      const media = await graphGet(`/${igMediaId}`, readToken, {
+        fields: 'id,caption,media_type,boost_eligibility_info',
+      });
+      const eligible = media?.boost_eligibility_info;
+      if (eligible && eligible.eligible_to_boost === false) {
+        const reason = eligible.reason_not_eligible || eligible.ineligibility_reason;
+        throw metaClientError(
+          reason
+            ? `This Instagram post cannot be boosted: ${reason}`
+            : 'This Instagram post is not eligible to boost.'
+        );
+      }
+      return String(media?.caption || '');
+    }
+    const post = await graphGet(`/${objectStoryId}`, readToken, {
+      fields: 'id,message,story',
+    });
+    return String(post?.message || post?.story || '');
+  } catch (err) {
+    if (err?.status) throw err;
+    console.warn('[meta ads] boost source lookup failed:', formatGraphError(err));
+    return '';
+  }
+}
+
 async function boostPost(
   clientId,
   {
@@ -1166,6 +1265,8 @@ async function boostPost(
     status = 'PAUSED',
     targeting: targetingInput = {},
     source = 'facebook',
+    name = '',
+    caption = '',
   }
 ) {
   const client = await loadClientWithMeta(clientId);
@@ -1202,7 +1303,6 @@ async function boostPost(
 
   const durationDays = Math.min(Math.max(Number(days) || 7, 1), 30);
   const adStatus = String(status).toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'PAUSED';
-  const stamp = new Date().toISOString().slice(0, 10);
 
   let objectStoryId = '';
   let igMediaId = '';
@@ -1228,7 +1328,34 @@ async function boostPost(
     }
   } else {
     objectStoryId = String(postId).includes('_') ? String(postId) : `${pageId}_${postId}`;
+    if (!igUserId) {
+      try {
+        const pageToken = await ensurePageAccessToken(client, pageId);
+        const ig = await resolveInstagramFromPage(pageId, pageToken);
+        igUserId = ig.instagramUserId || '';
+        if (igUserId) {
+          client.metaAds.instagramUserId = ig.instagramUserId;
+          client.metaAds.instagramUsername = ig.instagramUsername;
+          client.markModified('metaAds');
+          await client.save();
+        }
+      } catch (err) {
+        console.warn('[meta ads] optional IG resolve for FB boost:', formatGraphError(err));
+      }
+    }
   }
+
+  const fetchedCaption = await fetchBoostCaption(client, {
+    boostSource,
+    objectStoryId,
+    igMediaId,
+    pageId,
+    token,
+  });
+  const campaignName = buildReadableCampaignName(client, boostSource === 'instagram' ? 'Instagram boost' : 'Facebook boost', {
+    name,
+    caption: caption || fetchedCaption,
+  });
 
   const targeting = buildTargetingSpec({
     country,
@@ -1242,8 +1369,10 @@ async function boostPost(
   const boostLabel = boostSource === 'instagram' ? igMediaId : objectStoryId;
 
   try {
+    // Campaign → ad set → creative → ad. Outcome-driven Engagement + ON_POST
+    // matches https://developers.facebook.com/docs/marketing-api/adset/destination_type/
     const campaign = await graphPost(`/act_${adAccountId}/campaigns`, token, {
-      name: `Khana Boost ${boostSource === 'instagram' ? 'IG ' : ''}${stamp}`,
+      name: campaignName,
       objective: 'OUTCOME_ENGAGEMENT',
       status: adStatus,
       special_ad_categories: JSON.stringify([]),
@@ -1255,8 +1384,8 @@ async function boostPost(
     const startTime = Math.floor(Date.now() / 1000);
     const endTime = startTime + durationDays * 86400;
 
-    const adSet = await graphPost(`/act_${adAccountId}/adsets`, token, {
-      name: `Boost ${boostLabel}`,
+    const adSetPayload = {
+      name: campaignName,
       campaign_id: campaignId,
       daily_budget: dailyBudgetCents,
       billing_event: 'IMPRESSIONS',
@@ -1269,37 +1398,43 @@ async function boostPost(
       start_time: startTime,
       end_time: endTime,
       status: adStatus,
-    });
+    };
+    if (igUserId) adSetPayload.instagram_user_id = igUserId;
+
+    const adSet = await graphPost(`/act_${adAccountId}/adsets`, token, adSetPayload);
     adSetId = adSet.id;
 
     let creative;
     if (boostSource === 'instagram') {
       creative = await graphPost(`/act_${adAccountId}/adcreatives`, token, {
-        name: `IG Creative ${igMediaId}`,
+        name: campaignName,
         object_id: pageId,
         instagram_user_id: igUserId,
         source_instagram_media_id: igMediaId,
       });
     } else {
-      creative = await graphPost(`/act_${adAccountId}/adcreatives`, token, {
-        name: `Creative ${objectStoryId}`,
+      const creativePayload = {
+        name: campaignName,
         object_story_id: objectStoryId,
-      });
+      };
+      if (igUserId) creativePayload.instagram_user_id = igUserId;
+      creative = await graphPost(`/act_${adAccountId}/adcreatives`, token, creativePayload);
     }
 
     const ad = await graphPost(`/act_${adAccountId}/ads`, token, {
-      name: `Boost ${boostLabel}`,
+      name: campaignName,
       adset_id: adSetId,
       creative: JSON.stringify({ creative_id: creative.id }),
       status: adStatus,
     });
     adId = ad.id;
   } catch (err) {
+    await deleteMetaCampaignQuietly(campaignId, token);
     throw metaClientError(formatGraphError(err));
   }
 
   const campaignDoc = {
-    name: `Khana Boost ${boostSource === 'instagram' ? 'IG ' : ''}${stamp}`,
+    name: campaignName,
     objective: 'OUTCOME_ENGAGEMENT',
     budget: dailyBudgetNum,
     status: adStatus === 'ACTIVE' ? 'active' : 'paused',
@@ -1361,6 +1496,7 @@ async function boostPost(
     campaignId: String(campaignId),
     adSetId: String(adSetId),
     adId: String(adId),
+    name: campaignName,
     status: adStatus,
     boostSource,
     boostPostId: boostLabel,
@@ -1989,6 +2125,11 @@ module.exports = {
   resolveInsightsWindow,
   insightsGraphDateParams,
   boostPost,
+  buildReadableCampaignName,
+  sanitizeMetaName,
+  looksLikeMetaIdName,
+  formatMetaDate,
+  deleteMetaCampaignQuietly,
   buildTargetingSpec,
   searchTargeting,
   listCustomAudiences,

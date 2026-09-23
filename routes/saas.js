@@ -1755,6 +1755,8 @@ router.post('/meta/boost', requireRoles('owner', 'manager'), wrapRoute(async (re
     status,
     targeting,
     source,
+    name,
+    caption,
   } = req.body || {};
   if (!postId || dailyBudget == null) {
     return res.status(400).json({ ok: false, message: 'post_id and daily_budget are required' });
@@ -1767,6 +1769,8 @@ router.post('/meta/boost', requireRoles('owner', 'manager'), wrapRoute(async (re
       country,
       status,
       source,
+      name,
+      caption,
       targeting: targeting && typeof targeting === 'object' ? targeting : {},
     });
     res.status(201).json({ ok: true, data });
