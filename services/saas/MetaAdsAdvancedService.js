@@ -472,11 +472,12 @@ async function listMetaAdAccountCampaigns(clientId) {
   const client = await loadClientWithMeta(clientId);
   const token = String(client.metaAds.accessToken);
   const adAccountId = normalizeAdAccountId(client.metaAds.adAccountId);
-  if (!adAccountId) return [];
+  if (!adAccountId) return { campaigns: [], ok: false };
 
   try {
+    const fields = 'id,name,objective,status,effective_status,daily_budget,lifetime_budget,created_time,updated_time';
     const res = await graphGet(`/act_${adAccountId}/campaigns`, token, {
-      fields: 'id,name,objective,status,effective_status,daily_budget,lifetime_budget,created_time,updated_time',
+      fields,
       limit: 50,
       effective_status: JSON.stringify([
         'ACTIVE',
@@ -489,38 +490,48 @@ async function listMetaAdAccountCampaigns(clientId) {
         'ARCHIVED',
       ]),
     });
-    const rows = Array.isArray(res?.data) ? res.data : [];
-    return rows.map((c) => {
-      const statusRaw = String(c.effective_status || c.status || 'PAUSED').toLowerCase();
-      const status =
-        statusRaw === 'active'
-          ? 'active'
-          : statusRaw === 'archived' || statusRaw === 'deleted'
-            ? 'archived'
-            : 'paused';
-      const budgetCents = Number(c.daily_budget);
-      return {
-        id: `meta_${c.id}`,
-        name: String(c.name || 'Campaign'),
-        objective: String(c.objective || ''),
-        budget: Number.isFinite(budgetCents) && budgetCents > 0 ? budgetCents / 100 : undefined,
-        status,
-        campaignType: String(c.objective || '').includes('OUTCOME_ENGAGEMENT')
-          || String(c.objective || '').includes('POST_ENGAGEMENT')
-          ? 'boost'
-          : 'meta',
-        metaCampaignId: String(c.id),
-        metaAdsetId: '',
-        metaAdId: '',
-        boostPostId: '',
-        source: 'meta',
-        createdAt: c.created_time || null,
-        updatedAt: c.updated_time || null,
-      };
-    });
+    let rows = Array.isArray(res?.data) ? res.data : [];
+    if (!rows.length) {
+      const retry = await graphGet(`/act_${adAccountId}/campaigns`, token, {
+        fields,
+        limit: 50,
+      });
+      rows = Array.isArray(retry?.data) ? retry.data : [];
+    }
+    return {
+      ok: true,
+      campaigns: rows.map((c) => {
+        const statusRaw = String(c.effective_status || c.status || 'PAUSED').toLowerCase();
+        const status =
+          statusRaw === 'active'
+            ? 'active'
+            : statusRaw === 'archived' || statusRaw === 'deleted'
+              ? 'archived'
+              : 'paused';
+        const budgetCents = Number(c.daily_budget);
+        return {
+          id: `meta_${c.id}`,
+          name: String(c.name || 'Campaign'),
+          objective: String(c.objective || ''),
+          budget: Number.isFinite(budgetCents) && budgetCents > 0 ? budgetCents / 100 : undefined,
+          status,
+          campaignType: String(c.objective || '').includes('OUTCOME_ENGAGEMENT')
+            || String(c.objective || '').includes('POST_ENGAGEMENT')
+            ? 'boost'
+            : 'meta',
+          metaCampaignId: String(c.id),
+          metaAdsetId: '',
+          metaAdId: '',
+          boostPostId: '',
+          source: 'meta',
+          createdAt: c.created_time || null,
+          updatedAt: c.updated_time || null,
+        };
+      }),
+    };
   } catch (err) {
     console.warn('[meta ads] list meta campaigns failed:', formatGraphError(err));
-    return [];
+    return { campaigns: [], ok: false };
   }
 }
 
@@ -546,49 +557,75 @@ async function persistPrunedCampaigns(clientId, next) {
 }
 
 /**
- * This workspace's campaigns only. Status/name come from Meta so Ads Manager matches.
- * Other campaigns on a shared/wrong ad account (e.g. Khana's) stay hidden.
+ * Own ad account → full Meta campaign list (what Ads Manager shows).
+ * Someone else's ad account → only campaigns this workspace created.
  */
 async function listLocalCampaigns(clientId) {
   const client = await Client.findOne({ clientID: clientId })
     .select('metaAds.campaigns metaAds.adAccountId metaAds.accessToken')
     .lean();
   const local = Array.isArray(client?.metaAds?.campaigns) ? client.metaAds.campaigns : [];
-  const fromMeta = await listMetaAdAccountCampaigns(clientId);
+  const { campaigns: fromMeta, ok: metaOk } = await listMetaAdAccountCampaigns(clientId);
   const metaById = new Map(fromMeta.map((c) => [String(c.metaCampaignId), c]));
   const metaIds = new Set(metaById.keys());
 
-  const pruned = pruneLocalCampaignsToMeta(local, metaIds);
-  if (pruned.length !== local.length) {
-    persistPrunedCampaigns(clientId, pruned).catch((err) =>
-      console.warn('[meta ads] prune local campaigns failed:', err.message)
-    );
+  if (metaOk && fromMeta.length) {
+    const pruned = pruneLocalCampaignsToMeta(local, metaIds);
+    if (pruned.length !== local.length) {
+      persistPrunedCampaigns(clientId, pruned).catch((err) =>
+        console.warn('[meta ads] prune local campaigns failed:', err.message)
+      );
+    }
   }
 
-  const campaigns = [];
-  const seen = new Set();
-  for (const loc of [...pruned].reverse()) {
-    const mid = String(loc.meta_campaign_id || '').replace(/^meta_/, '');
-    if (mid && seen.has(mid)) continue;
-    if (mid) seen.add(mid);
-    const metaRow = mid ? metaById.get(mid) : null;
-    const mapped = mapLocalCampaign(loc);
-    campaigns.push({
-      ...mapped,
-      name: metaRow?.name || mapped.name,
-      status: metaRow?.status || mapped.status,
-      budget: metaRow?.budget != null ? metaRow.budget : mapped.budget,
-      source: metaRow ? 'meta' : 'local',
-    });
+  const localByMetaId = new Map();
+  for (const c of local) {
+    const mid = String(c.meta_campaign_id || '').replace(/^meta_/, '');
+    if (mid && !localByMetaId.has(mid)) localByMetaId.set(mid, c);
   }
 
   const act = normalizeAdAccountId(client?.metaAds?.adAccountId);
   const sharedOwner =
     act && String(clientId) !== 'Khana' ? await findAdAccountOwner(act, clientId) : '';
+  const showFullMetaList = !sharedOwner;
+
+  let campaigns = [];
+  if (showFullMetaList && metaOk && fromMeta.length) {
+    campaigns = fromMeta.map((metaRow) => {
+      const loc = localByMetaId.get(String(metaRow.metaCampaignId));
+      if (!loc) return metaRow;
+      return {
+        ...metaRow,
+        id: String(loc._id),
+        campaignType: loc.campaign_type || metaRow.campaignType,
+        metaAdsetId: loc.meta_adset_id || '',
+        metaAdId: loc.meta_ad_id || '',
+        boostPostId: loc.boostPostId || '',
+        boostSource: loc.boostSource || '',
+        source: 'meta',
+      };
+    });
+  } else {
+    const seen = new Set();
+    for (const loc of [...local].reverse()) {
+      const mid = String(loc.meta_campaign_id || '').replace(/^meta_/, '');
+      if (mid && seen.has(mid)) continue;
+      if (mid) seen.add(mid);
+      const metaRow = mid ? metaById.get(mid) : null;
+      const mapped = mapLocalCampaign(loc);
+      campaigns.push({
+        ...mapped,
+        name: metaRow?.name || mapped.name,
+        status: metaRow?.status || mapped.status,
+        budget: metaRow?.budget != null ? metaRow.budget : mapped.budget,
+        source: metaRow ? 'meta' : 'local',
+      });
+    }
+  }
 
   return {
     campaigns,
-    syncedFrom: 'workspace',
+    syncedFrom: showFullMetaList ? 'meta' : 'workspace',
     adAccountWarning: sharedOwner
       ? `This Meta ad account is already used by workspace ${sharedOwner}. Create or select this client’s own ad account so you do not see or create ads on ${sharedOwner}.`
       : '',
@@ -605,6 +642,19 @@ async function findCampaignSubdoc(client, campaignId) {
     campaigns.find((c) => String(c.meta_campaign_id) === String(campaignId))
     || campaigns.find((c) => String(c.meta_campaign_id) === rawId);
   if (byMeta) return { sub: byMeta, source: 'local' };
+
+  if (/^\d+$/.test(rawId)) {
+    return {
+      sub: {
+        _id: `meta_${rawId}`,
+        meta_campaign_id: rawId,
+        meta_adset_id: '',
+        meta_ad_id: '',
+        status: 'paused',
+      },
+      source: 'meta',
+    };
+  }
 
   throw new Error('Campaign not found');
 }
