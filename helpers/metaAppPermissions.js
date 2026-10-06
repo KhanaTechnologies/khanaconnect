@@ -1,11 +1,11 @@
 /**
- * Meta App Review permission state (Sep 2026).
+ * Meta App Review permission state (Oct 2026).
  * Update when App Review approvals change.
  *
- * Live review snapshot:
- * - New request in progress: ads_management
- * - Existing access renewing (already approved): ads_read, business_management,
- *   Instagram, WhatsApp (incl. manage_events), pages_*, Marketing API Access Tier, public_profile
+ * Submission approved 4 Oct 2026:
+ * - New: ads_management (Approved)
+ * - Renewed: ads_read, business_management, Instagram, WhatsApp (incl. manage_events),
+ *   pages_*, Marketing API Access Tier, public_profile
  */
 
 const APPROVED_PERMISSIONS = [
@@ -17,15 +17,13 @@ const APPROVED_PERMISSIONS = [
   'whatsapp_business_messaging',
   'whatsapp_business_manage_events',
   'ads_read',
+  'ads_management',
   'instagram_basic',
   'instagram_content_publish',
 ];
 
-/**
- * Still waiting on Meta (new request). Until Advanced Access is live for customers,
- * manage/create ads may only work for roles on your app / Development mode.
- */
-const PENDING_PERMISSIONS = ['ads_management'];
+/** No App Review requests currently pending. */
+const PENDING_PERMISSIONS = [];
 
 const PERMISSION_FEATURES = {
   whatsapp_business_messaging: {
@@ -65,10 +63,8 @@ const PERMISSION_FEATURES = {
   },
   ads_management: {
     label: 'Manage ads',
-    status: 'pending',
+    status: 'approved',
     blocks: 'Create/pause campaigns and boosts from Khana',
-    resubmit:
-      'Already submitted — Review in progress. Screen recording: create a draft/paused campaign or boost from Khana Meta Ads.',
   },
   instagram_basic: {
     label: 'Instagram profile',
@@ -86,8 +82,9 @@ const META_BUSINESS_ADMIN_HELP = [
   'Sign in to Facebook with the personal profile that is Admin on the Meta Business Portfolio (not only Page Editor).',
   'Meta Business Settings → People → your name must show Full control (Admin).',
   'The WhatsApp Business Account must live under that same Business Portfolio.',
-  'In Developers → App → Login for Business configuration: include approved scopes only. Keep ads_management out of Live customer config until Meta approves the new request; roles on the app can still test it.',
-  'Disconnect → Connect Facebook in Khana after changing the Login for Business config.',
+  'In Developers → App → Login for Business configuration: include all approved scopes (ads_read, ads_management, Instagram, WhatsApp, pages_*).',
+  'App mode must be Live for real customers (not only app roles / Development mode).',
+  'Disconnect → Connect Facebook in Khana after changing the Login for Business config so clients re-grant ads_management.',
 ];
 
 function normalizePermissionList(granted = []) {

@@ -36,12 +36,9 @@ const {
 const { recordEventSafe } = require('./ApiMonitorService');
 
 // Login for Business rejects many scopes on the OAuth `scope=` URL (same as `email`).
-// Put ONLY approved permissions on the Login for Business *configuration* (META_LOGIN_CONFIG_ID).
-// Remove denied scopes from the Meta config until App Review approves them:
-//   ads_read, ads_management, instagram_basic, instagram_content_publish,
-//   whatsapp_business_manage_events
-// Approved (Aug 2026): public_profile, pages_show_list, pages_read_engagement,
-//   business_management, whatsapp_business_management, whatsapp_business_messaging
+// Put ALL approved permissions on the Login for Business *configuration* (META_LOGIN_CONFIG_ID).
+// Approved (Oct 2026 App Review): ads_management + renewals for ads_read, Instagram,
+// WhatsApp (incl. manage_events), pages_*, business_management, Marketing API Access Tier.
 const OAUTH_SCOPES = APPROVED_PERMISSIONS.join(',');
 
 const META_LOGIN_CONFIG_ID = (process.env.META_LOGIN_CONFIG_ID || '').trim();

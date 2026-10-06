@@ -78,9 +78,8 @@ function assertAdsPermissions(client) {
 
   throw metaClientError(
     'Your Facebook connection does not include ads permissions yet (ads_read / ads_management). ' +
-      'For App Review demos: Meta App in Development mode → Login for Business config must list those permissions → ' +
-      'Disconnect Facebook in Khana → Connect again and accept all prompts → then retry boost. ' +
-      'Until Meta approves them in Live mode, only app admins/testers can use boost.'
+      'In Meta Developers → Login for Business, include those scopes, switch the app to Live, then ' +
+      'Disconnect → Connect Facebook in Khana and accept all prompts.'
   );
 }
 

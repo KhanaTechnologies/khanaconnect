@@ -86,7 +86,7 @@ function formatMetaError(err, logContext = {}) {
       formatMetaBusinessAdminError,
     } = require('../../helpers/metaAppPermissions');
     return httpError(
-      `${message}\n\n${formatMetaBusinessAdminError()}\n\nNote: whatsapp_business_manage_events was not approved in App Review yet — WhatsApp conversion events are disabled until Meta approves that permission.`,
+      `${message}\n\n${formatMetaBusinessAdminError()}\n\nNote: whatsapp_business_manage_events is approved — if this still fails, the System User token or WABA asset assignment is missing that permission.`,
       status >= 500 ? 502 : 400,
       { meta: fb || data || null }
     );
