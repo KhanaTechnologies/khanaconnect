@@ -10,19 +10,18 @@ const { recordEventSafe } = require('./ApiMonitorService');
  * @see https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/business-login
  */
 
+// Instagram App ID from "Instagram API" screen — NOT the Facebook App ID.
+// Falling back to META_APP_ID causes Invalid redirect_uri because the redirect is
+ // registered on the Instagram product, not Facebook Login.
 const IG_APP_ID = (
   process.env.META_INSTAGRAM_APP_ID ||
   process.env.INSTAGRAM_APP_ID ||
-  process.env.META_APP_ID ||
-  process.env.FACEBOOK_APP_ID ||
   ''
 ).trim();
 
 const IG_APP_SECRET = (
   process.env.META_INSTAGRAM_APP_SECRET ||
   process.env.INSTAGRAM_APP_SECRET ||
-  process.env.META_APP_SECRET ||
-  process.env.FACEBOOK_APP_SECRET ||
   ''
 ).trim();
 
@@ -33,28 +32,32 @@ const IG_GRAPH_VERSION = process.env.META_INSTAGRAM_GRAPH_VERSION || 'v25.0';
 // Keep in sync with App Dashboard → Instagram Business login Embed URL scopes.
 const IG_SCOPES = [
   'instagram_business_basic',
-  'instagram_business_content_publish',
-  'instagram_business_manage_comments',
   'instagram_business_manage_messages',
+  'instagram_business_manage_comments',
+  'instagram_business_content_publish',
   'instagram_business_manage_insights',
 ].join(',');
+
+const EXPECTED_REDIRECT_URI =
+  'https://khanaconnect.onrender.com/api/v1/saas/meta/instagram/oauth/callback/';
+
+function normalizeIgRedirectUri(raw) {
+  const u = String(raw || '').trim();
+  if (!u) return '';
+  // Meta Embed URL uses a trailing slash on this callback — force it.
+  if (/\/saas\/meta\/instagram\/oauth\/callback\/?$/i.test(u)) {
+    return u.replace(/\/?$/, '/');
+  }
+  return u;
+}
 
 function resolveInstagramOAuthRedirectUri() {
   // Must match App Dashboard → Instagram → API setup with Instagram login →
   // Business login settings → OAuth redirect URIs EXACTLY (incl. trailing slash).
   if (process.env.META_INSTAGRAM_OAUTH_REDIRECT_URI) {
-    return String(process.env.META_INSTAGRAM_OAUTH_REDIRECT_URI).trim();
+    return normalizeIgRedirectUri(process.env.META_INSTAGRAM_OAUTH_REDIRECT_URI);
   }
-  const base = (
-    process.env.API_PUBLIC_URL ||
-    process.env.PUBLIC_API_URL ||
-    process.env.BASE_URL ||
-    process.env.RENDER_EXTERNAL_URL ||
-    'https://khanaconnect.onrender.com'
-  ).replace(/\/$/, '');
-  const api = (process.env.API_URL || '/api/v1').replace(/\/$/, '');
-  // Meta often appends a trailing slash when you save the URI — default with slash.
-  return `${base}${api}/saas/meta/instagram/oauth/callback/`;
+  return EXPECTED_REDIRECT_URI;
 }
 
 const IG_OAUTH_REDIRECT_URI = resolveInstagramOAuthRedirectUri();
@@ -85,12 +88,19 @@ function verifyState(state) {
 }
 
 function buildAuthorizeUrl(clientId) {
-  if (!isConfigured()) {
+  if (!IG_APP_ID || !IG_APP_SECRET) {
     throw new Error(
-      'Instagram Login is not configured (META_INSTAGRAM_APP_ID / META_APP_ID, secret, redirect URI)'
+      'Instagram Login is not configured. On Render set META_INSTAGRAM_APP_ID ' +
+        '(Instagram app ID from the Instagram API screen, e.g. 1015645374512249) and ' +
+        'META_INSTAGRAM_APP_SECRET (Instagram app secret from that same screen — not the Facebook App Secret).'
     );
   }
+  if (!IG_OAUTH_REDIRECT_URI) {
+    throw new Error('META_INSTAGRAM_OAUTH_REDIRECT_URI is missing');
+  }
+  // Match Meta's Embed URL param order/fields (force_reauth + trailing-slash redirect).
   const params = new URLSearchParams({
+    force_reauth: 'true',
     client_id: IG_APP_ID,
     redirect_uri: IG_OAUTH_REDIRECT_URI,
     response_type: 'code',
@@ -104,9 +114,28 @@ function getAuthorizeDebug() {
   return {
     configured: isConfigured(),
     appId: IG_APP_ID || null,
+    appIdSource: process.env.META_INSTAGRAM_APP_ID
+      ? 'META_INSTAGRAM_APP_ID'
+      : process.env.INSTAGRAM_APP_ID
+        ? 'INSTAGRAM_APP_ID'
+        : 'missing',
+    hasSecret: Boolean(IG_APP_SECRET),
+    secretSource: process.env.META_INSTAGRAM_APP_SECRET
+      ? 'META_INSTAGRAM_APP_SECRET'
+      : process.env.INSTAGRAM_APP_SECRET
+        ? 'INSTAGRAM_APP_SECRET'
+        : 'missing',
     redirectUri: IG_OAUTH_REDIRECT_URI,
+    expectedRedirectUri: EXPECTED_REDIRECT_URI,
+    redirectMatchesExpected: IG_OAUTH_REDIRECT_URI === EXPECTED_REDIRECT_URI,
     scopes: IG_SCOPES.split(','),
     graphBase: `${IG_GRAPH_BASE}/${IG_GRAPH_VERSION}`,
+    hint:
+      IG_APP_ID && IG_APP_ID !== '1015645374512249'
+        ? 'client_id should be Instagram app ID 1015645374512249 from your Embed URL'
+        : !IG_APP_ID
+          ? 'Set META_INSTAGRAM_APP_ID=1015645374512249 on Render'
+          : 'OK — compare redirectUri to the Embed URL redirect_uri=',
   };
 }
 
