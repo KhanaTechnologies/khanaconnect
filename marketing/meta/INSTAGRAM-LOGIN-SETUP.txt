@@ -1,0 +1,32 @@
+KHANA — Connect Instagram (Business Login for Instagram)
+========================================================
+Lets clients with only an Instagram Professional account publish / list media
+without a Facebook Page. Boosts and Meta ads still need Connect Facebook.
+
+1) Meta App Dashboard
+   - Open the same Khana Business app
+   - Add / open: Instagram → API setup with Instagram login
+   - Complete Business login settings
+   - Copy Instagram App ID + Instagram App Secret
+     (may match META_APP_ID / META_APP_SECRET on newer apps)
+
+2) Valid OAuth Redirect URI (exact match)
+   https://khanaconnect.onrender.com/api/v1/saas/meta/instagram/oauth/callback
+
+3) Render env (khanaconnect service)
+   META_INSTAGRAM_APP_ID=<Instagram App ID>
+   META_INSTAGRAM_APP_SECRET=<Instagram App Secret>
+   META_INSTAGRAM_OAUTH_REDIRECT_URI=https://khanaconnect.onrender.com/api/v1/saas/meta/instagram/oauth/callback
+   (Optional fallbacks: META_APP_ID / META_APP_SECRET are used if Instagram-specific vars are unset.)
+
+4) Permissions requested by Khana
+   instagram_business_basic
+   instagram_business_content_publish
+
+5) App Review
+   These Instagram Login scopes need Advanced Access / Ready to publish for real
+   customers (same pattern as ads). Until then, only app roles can connect.
+
+6) Client flow
+   Meta Ads → Connect Instagram → approve → publish / list IG posts
+   Connect Facebook later for boosts and ads.

@@ -215,9 +215,20 @@ const clientSchema = new Schema({
     pageId: { type: String, default: '' },
     pageName: { type: String, default: '' },
     pageAccessToken: encryptedString,
-    /** Instagram professional account linked to the selected Facebook Page. */
+    /** Instagram professional account (Page-linked and/or Instagram Login). */
     instagramUserId: { type: String, default: '' },
     instagramUsername: { type: String, default: '' },
+    /** How IG was connected: facebook_page | instagram_login */
+    instagramAuthMethod: {
+      type: String,
+      enum: ['', 'facebook_page', 'instagram_login'],
+      default: '',
+    },
+    /** Business Login for Instagram — no Facebook Page required. */
+    instagramLoginAccessToken: encryptedString,
+    instagramLoginTokenExpiresAt: { type: Date, default: null },
+    instagramLoginConnectedAt: { type: Date, default: null },
+    instagramLoginScopes: { type: [String], default: undefined },
     adAccountName: { type: String, default: '' },
     tokenExpiresAt: { type: Date, default: null },
     /** Meta Commerce product catalog id (for dynamic product ads). */

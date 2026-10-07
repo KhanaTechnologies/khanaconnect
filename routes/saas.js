@@ -9,6 +9,7 @@ const WhatsAppService = require('../services/saas/WhatsAppService');
 const WhatsAppInboxService = require('../services/saas/WhatsAppInboxService');
 const AdsService = require('../services/saas/AdsService');
 const MetaOAuthService = require('../services/saas/MetaOAuthService');
+const InstagramOAuthService = require('../services/saas/InstagramOAuthService');
 const MetaAdsService = require('../services/saas/MetaAdsService');
 const MetaAdsAdvancedService = require('../services/saas/MetaAdsAdvancedService');
 const CrmWorkspaceService = require('../services/saas/CrmWorkspaceService');
@@ -216,6 +217,60 @@ router.post('/meta/oauth/complete', wrapRoute(async (req, res) => {
       message: MetaOAuthService.isMetaBusinessAdminError(raw)
         ? MetaOAuthService.formatMetaBusinessAdminError(raw)
         : raw,
+    });
+  }
+}));
+
+// Instagram Login (no Facebook Page) — public callback; secured via signed state JWT.
+router.get('/meta/instagram/oauth/callback', wrapRoute(async (req, res) => {
+  const ApiMonitorService = require('../services/saas/ApiMonitorService');
+  const { code, state, error, error_description: errorDescription, error_reason: errorReason } = req.query || {};
+  let clientId = '';
+  if (state) {
+    try {
+      clientId = InstagramOAuthService.verifyState(state);
+    } catch {
+      clientId = '';
+    }
+  }
+  if (error) {
+    const raw = String(errorDescription || errorReason || error);
+    ApiMonitorService.recordEventSafe({
+      clientId,
+      integration: 'meta_oauth',
+      operation: 'instagram_callback_denied',
+      outcome: 'error',
+      message: raw,
+      meta: { error, errorDescription: errorDescription || '', errorReason: errorReason || '' },
+    });
+    const msg = encodeURIComponent(raw);
+    return res.redirect(InstagramOAuthService.dashboardReturnUrl(`instagram=error&message=${msg}`));
+  }
+  try {
+    await InstagramOAuthService.completeOAuth({ code, state });
+    return res.redirect(InstagramOAuthService.dashboardReturnUrl('instagram=connected'));
+  } catch (err) {
+    console.error('[instagram oauth] callback failed:', err.message);
+    const msg = encodeURIComponent(err.message || 'Instagram connection failed');
+    return res.redirect(InstagramOAuthService.dashboardReturnUrl(`instagram=error&message=${msg}`));
+  }
+}));
+
+router.post('/meta/instagram/oauth/complete', wrapRoute(async (req, res) => {
+  const { code, state, error, error_description: errorDescription } = req.body || {};
+  if (error) {
+    return res.status(400).json({
+      ok: false,
+      message: String(errorDescription || error || 'Instagram connection failed'),
+    });
+  }
+  try {
+    const data = await InstagramOAuthService.completeOAuth({ code, state });
+    res.json({ ok: true, data });
+  } catch (err) {
+    res.status(400).json({
+      ok: false,
+      message: err.message || 'Instagram connection failed',
     });
   }
 }));
@@ -1279,6 +1334,21 @@ router.get('/crm/export.csv', requireRoles('owner', 'manager', 'operator', 'view
 
 router.post('/crm/reminders/run', requireRoles('owner', 'manager'), wrapRoute(async (_req, res) => {
   const data = await CrmWorkspaceService.processRemindersTick({});
+  res.json({ ok: true, data });
+}));
+
+router.get('/meta/instagram/oauth/start', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const url = InstagramOAuthService.buildAuthorizeUrl(req.tenant.clientId);
+  res.json({ ok: true, data: { url, debug: InstagramOAuthService.getAuthorizeDebug() } });
+}));
+
+router.get('/meta/instagram/oauth/status', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const data = await InstagramOAuthService.getConnectionStatus(req.tenant.clientId);
+  res.json({ ok: true, data });
+}));
+
+router.post('/meta/instagram/oauth/disconnect', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
+  const data = await InstagramOAuthService.disconnect(req.tenant.clientId);
   res.json({ ok: true, data });
 }));
 

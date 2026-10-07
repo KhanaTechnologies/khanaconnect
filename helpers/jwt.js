@@ -117,6 +117,8 @@ const authJwt = () => {
       { url: new RegExp(`^${apiEsc}/saas/webhooks/meta-ads/?$`), methods: ['GET', 'POST', 'OPTIONS'] },
       { url: new RegExp(`^${apiEsc}/saas/meta/oauth/callback/?$`), methods: ['GET', 'OPTIONS'] },
       { url: new RegExp(`^${apiEsc}/saas/meta/oauth/complete/?$`), methods: ['POST', 'OPTIONS'] },
+      { url: new RegExp(`^${apiEsc}/saas/meta/instagram/oauth/callback/?$`), methods: ['GET', 'OPTIONS'] },
+      { url: new RegExp(`^${apiEsc}/saas/meta/instagram/oauth/complete/?$`), methods: ['POST', 'OPTIONS'] },
       `${api}/orders/update-order-payment`,
       { url: new RegExp(`^${apiEsc}/bookings/[^/]+/payment-confirmation/?$`), methods: ['POST', 'OPTIONS'] },
 

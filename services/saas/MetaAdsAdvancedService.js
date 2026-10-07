@@ -405,13 +405,20 @@ async function getSetupHub(clientId) {
       action: 'select_ad_account',
     });
   }
-  if (checklist.pageSelected && !checklist.instagramLinked) {
+  if (!checklist.instagramLinked) {
     nextSteps.push({
-      id: 'instagram',
-      label: 'Link Instagram Professional to your Facebook Page (for IG boosts)',
-      action: 'open_link',
-      url: 'https://www.facebook.com/business/help/connect-instagram-to-page',
+      id: 'instagram_login',
+      label: 'Connect Instagram (no Facebook Page needed for publishing)',
+      action: 'connect_instagram',
     });
+    if (checklist.pageSelected) {
+      nextSteps.push({
+        id: 'instagram',
+        label: 'Or link Instagram Professional to your Facebook Page (needed for IG boosts)',
+        action: 'open_link',
+        url: 'https://www.facebook.com/business/help/connect-instagram-to-page',
+      });
+    }
   }
   if (checklist.adAccountSelected && checklist.paymentReady === false) {
     nextSteps.push({

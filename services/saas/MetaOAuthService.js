@@ -267,18 +267,25 @@ async function completeOAuth({ code, state }) {
           ? String(client.metaAds.pageAccessToken)
           : accessToken;
         const ig = await MetaAdsService.resolveInstagramFromPage(client.metaAds.pageId, pageToken);
-        client.metaAds.instagramUserId = ig.instagramUserId;
-        client.metaAds.instagramUsername = ig.instagramUsername;
+        if (ig.instagramUserId) {
+          client.metaAds.instagramUserId = ig.instagramUserId;
+          client.metaAds.instagramUsername = ig.instagramUsername;
+          if (!client.metaAds.instagramLoginAccessToken) {
+            client.metaAds.instagramAuthMethod = 'facebook_page';
+          }
+        }
       } catch (err) {
         console.warn('[meta oauth] instagram resolve failed:', err.message);
-        client.metaAds.instagramUserId = '';
-        client.metaAds.instagramUsername = '';
+        if (!client.metaAds.instagramLoginAccessToken) {
+          client.metaAds.instagramUserId = '';
+          client.metaAds.instagramUsername = '';
+        }
       }
-    } else {
+    } else if (!client.metaAds.instagramLoginAccessToken) {
       client.metaAds.instagramUserId = '';
       client.metaAds.instagramUsername = '';
     }
-  } else {
+  } else if (!client.metaAds.instagramLoginAccessToken) {
     client.metaAds.instagramUserId = '';
     client.metaAds.instagramUsername = '';
   }
@@ -388,6 +395,15 @@ async function getConnectionStatus(clientId) {
     instagramConnected: !!m.instagramUserId,
     instagramUserId: m.instagramUserId || '',
     instagramUsername: m.instagramUsername || '',
+    instagramLoginConnected: Boolean(m.instagramLoginAccessToken && m.instagramUserId),
+    instagramAuthMethod: m.instagramAuthMethod || '',
+    instagramLoginConfigured: (() => {
+      try {
+        return require('./InstagramOAuthService').isConfigured();
+      } catch {
+        return false;
+      }
+    })(),
     enabled: !!m.enabled,
     status: m.status || 'inactive',
     errorMessage: m.errorMessage || '',
@@ -418,6 +434,11 @@ async function disconnect(clientId) {
   client.metaAds.pageName = '';
   client.metaAds.instagramUserId = '';
   client.metaAds.instagramUsername = '';
+  client.metaAds.instagramAuthMethod = '';
+  client.metaAds.instagramLoginAccessToken = '';
+  client.metaAds.instagramLoginTokenExpiresAt = null;
+  client.metaAds.instagramLoginConnectedAt = null;
+  client.metaAds.instagramLoginScopes = [];
   client.metaAds.adAccountId = '';
   client.metaAds.adAccountName = '';
   // Keep pixelId across Disconnect → Connect. OAuth often cannot re-seed it when the

@@ -9,6 +9,7 @@ const READONLY_WRITE_ALLOW = [
   /^\/saas\/whatsapp\/conversions\/test-event\/?$/i,
   /^\/saas\/meta\/pixel\/test-event\/?$/i,
   /^\/saas\/meta\/oauth\/complete\/?$/i,
+  /^\/saas\/meta\/instagram\/oauth\/complete\/?$/i,
   /^\/saas\/meta\/refresh-token\/?$/i,
   /^\/saas\/ads\/accounts\/?$/i,
   /^\/saas\/whatsapp\/accounts\/?$/i,

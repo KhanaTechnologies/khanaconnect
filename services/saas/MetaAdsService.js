@@ -487,8 +487,117 @@ async function listPagePosts(clientId, { limit = 20, includeEngagement = true } 
   };
 }
 
+function mapIgMediaRows(rows) {
+  return (Array.isArray(rows) ? rows : []).map((m) => {
+    const eligibility = m.boost_eligibility_info || {};
+    const eligibleRaw = eligibility.eligible;
+    const eligible =
+      eligibleRaw === undefined || eligibleRaw === null ? true : Boolean(eligibleRaw);
+    return {
+      id: String(m.id),
+      caption: String(m.caption || '').slice(0, 500),
+      mediaType: String(m.media_type || ''),
+      mediaUrl: m.media_url || '',
+      thumbnailUrl: m.thumbnail_url || m.media_url || '',
+      permalink: m.permalink || '',
+      timestamp: m.timestamp || null,
+      likes: Number(m.like_count) || 0,
+      comments: Number(m.comments_count) || 0,
+      platform: 'instagram',
+      eligible,
+      ineligibilityReason: eligible
+        ? ''
+        : String(eligibility.reason_summary || eligibility.reason || 'Not eligible to boost'),
+    };
+  });
+}
+
+async function listInstagramMediaViaLogin(client, { limit = 20 } = {}) {
+  const InstagramOAuthService = require('./InstagramOAuthService');
+  await InstagramOAuthService.refreshTokenIfNeeded(client);
+  const token = String(client.metaAds.instagramLoginAccessToken || '');
+  const igUserId = String(client.metaAds.instagramUserId || '').trim();
+  const igUsername = String(client.metaAds.instagramUsername || '').trim();
+  if (!token || !igUserId) {
+    return {
+      connected: false,
+      instagramUserId: '',
+      instagramUsername: '',
+      pageId: '',
+      pageName: '',
+      media: [],
+      message: 'Connect Instagram to list posts.',
+      helpUrl: '',
+      authMethod: 'instagram_login',
+      boostRequiresFacebook: true,
+    };
+  }
+
+  const cap = Math.min(Math.max(Number(limit) || 20, 1), 50);
+  const fieldsLight = 'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp';
+  const fieldsRich = `${fieldsLight},like_count,comments_count`;
+
+  try {
+    let res;
+    try {
+      res = await InstagramOAuthService.igGraphGet(`/${igUserId}/media`, token, {
+        fields: fieldsRich,
+        limit: cap,
+      });
+    } catch (richErr) {
+      console.warn('[meta ads] IG login media rich fields failed:', formatGraphError(richErr));
+      res = await InstagramOAuthService.igGraphGet(`/${igUserId}/media`, token, {
+        fields: fieldsLight,
+        limit: cap,
+      });
+    }
+    return {
+      connected: true,
+      instagramUserId: igUserId,
+      instagramUsername: igUsername,
+      pageId: String(client.metaAds.pageId || ''),
+      pageName: client.metaAds.pageName || '',
+      media: mapIgMediaRows(res?.data),
+      message: client.metaAds.accessToken
+        ? ''
+        : 'Instagram connected. Connect Facebook to boost posts or run Meta ads.',
+      helpUrl: '',
+      authMethod: 'instagram_login',
+      boostRequiresFacebook: !client.metaAds.accessToken,
+    };
+  } catch (err) {
+    throw metaClientError(
+      `${formatGraphError(err)} Disconnect Instagram and Connect again if this persists.`
+    );
+  }
+}
+
 async function listInstagramMedia(clientId, { limit = 20 } = {}) {
-  const client = await loadClientWithMeta(clientId);
+  const client = await Client.findOne({ clientID: clientId });
+  if (!client) throw metaClientError('Client not found', 404);
+
+  const InstagramOAuthService = require('./InstagramOAuthService');
+  if (InstagramOAuthService.hasInstagramLogin(client)) {
+    return listInstagramMediaViaLogin(client, { limit });
+  }
+
+  if (!client.metaAds?.accessToken) {
+    return {
+      connected: false,
+      instagramUserId: '',
+      instagramUsername: '',
+      pageId: '',
+      pageName: '',
+      media: [],
+      message:
+        'Connect Instagram (no Facebook Page needed for publishing), or Connect Facebook if your IG is linked to a Page.',
+      helpUrl: 'https://www.facebook.com/business/help/connect-instagram-to-page',
+      authMethod: '',
+      boostRequiresFacebook: true,
+    };
+  }
+
+  await refreshTokenIfNeeded(client);
   assertInstagramPermissions(client, { publish: false });
   const pageId = client.metaAds?.pageId;
   if (!pageId) throw metaClientError('Select a Facebook Page first');
@@ -501,6 +610,9 @@ async function listInstagramMedia(clientId, { limit = 20 } = {}) {
   if (igUserId) {
     client.metaAds.instagramUserId = igUserId;
     client.metaAds.instagramUsername = igUsername;
+    if (!client.metaAds.instagramAuthMethod) {
+      client.metaAds.instagramAuthMethod = 'facebook_page';
+    }
     client.markModified('metaAds');
     await client.save();
   } else {
@@ -517,8 +629,10 @@ async function listInstagramMedia(clientId, { limit = 20 } = {}) {
       pageName: client.metaAds.pageName || '',
       media: [],
       message:
-        'This Facebook Page has no linked Instagram professional account. In Meta, link Instagram to the Page, then reconnect Facebook in Khana.',
+        'This Facebook Page has no linked Instagram. Connect Instagram directly, or link IG Professional to the Page in Meta then reconnect Facebook.',
       helpUrl: 'https://www.facebook.com/business/help/connect-instagram-to-page',
+      authMethod: '',
+      boostRequiresFacebook: true,
     };
   }
 
@@ -541,29 +655,6 @@ async function listInstagramMedia(clientId, { limit = 20 } = {}) {
         limit: cap,
       });
     }
-    const rows = Array.isArray(res?.data) ? res.data : [];
-    const media = rows.map((m) => {
-      const eligibility = m.boost_eligibility_info || {};
-      const eligibleRaw = eligibility.eligible;
-      const eligible =
-        eligibleRaw === undefined || eligibleRaw === null ? true : Boolean(eligibleRaw);
-      return {
-        id: String(m.id),
-        caption: String(m.caption || '').slice(0, 500),
-        mediaType: String(m.media_type || ''),
-        mediaUrl: m.media_url || '',
-        thumbnailUrl: m.thumbnail_url || m.media_url || '',
-        permalink: m.permalink || '',
-        timestamp: m.timestamp || null,
-        likes: Number(m.like_count) || 0,
-        comments: Number(m.comments_count) || 0,
-        platform: 'instagram',
-        eligible,
-        ineligibilityReason: eligible
-          ? ''
-          : String(eligibility.reason_summary || eligibility.reason || 'Not eligible to boost'),
-      };
-    });
 
     return {
       connected: true,
@@ -571,16 +662,18 @@ async function listInstagramMedia(clientId, { limit = 20 } = {}) {
       instagramUsername: igUsername,
       pageId: String(pageId),
       pageName: client.metaAds.pageName || '',
-      media,
+      media: mapIgMediaRows(res?.data),
       message: '',
       helpUrl: '',
+      authMethod: 'facebook_page',
+      boostRequiresFacebook: false,
     };
   } catch (err) {
     const msg = formatGraphError(err);
     const needsReconnect = /permission|(#10)|(#200)|instagram|OAuthException/i.test(msg);
     throw metaClientError(
       needsReconnect
-        ? `${msg} Reconnect Facebook after adding instagram_basic to the Login for Business configuration.`
+        ? `${msg} Reconnect Facebook after adding instagram_basic to the Login for Business configuration, or use Connect Instagram.`
         : msg
     );
   }
@@ -1520,7 +1613,57 @@ async function forceRefreshToken(clientId) {
 }
 
 async function resolveIgPublishContext(clientId, { publish = true } = {}) {
-  const client = await loadClientWithMeta(clientId);
+  const client = await Client.findOne({ clientID: clientId });
+  if (!client) throw metaClientError('Client not found', 404);
+
+  const InstagramOAuthService = require('./InstagramOAuthService');
+  if (InstagramOAuthService.hasInstagramLogin(client)) {
+    await InstagramOAuthService.refreshTokenIfNeeded(client);
+    const scopes = Array.isArray(client.metaAds.instagramLoginScopes)
+      ? client.metaAds.instagramLoginScopes
+      : [];
+    if (
+      publish &&
+      scopes.length &&
+      !scopes.includes('instagram_business_content_publish') &&
+      !scopes.includes('business_content_publish')
+    ) {
+      throw metaClientError(
+        'Instagram publish permission is missing. Disconnect Instagram and Connect again, approving content publish.'
+      );
+    }
+    const igUserId = String(client.metaAds.instagramUserId || '').trim();
+    const igUsername = String(client.metaAds.instagramUsername || '').trim();
+    const accessToken = String(client.metaAds.instagramLoginAccessToken || '');
+    if (!igUserId || !accessToken) {
+      throw metaClientError('Connect Instagram first to publish.');
+    }
+    return {
+      client,
+      pageId: String(client.metaAds.pageId || ''),
+      pageToken: accessToken,
+      igUserId,
+      igUsername,
+      apiHost: 'instagram',
+      graphPost: async (path, _token, params = {}) => {
+        const { data } = await axios.post(
+          `${InstagramOAuthService.IG_GRAPH_BASE}/${InstagramOAuthService.IG_GRAPH_VERSION}${path}`,
+          null,
+          { params: { access_token: accessToken, ...params }, timeout: 60000 }
+        );
+        return data;
+      },
+      graphGetFn: (path, _token, params = {}) =>
+        InstagramOAuthService.igGraphGet(path, accessToken, params),
+    };
+  }
+
+  await refreshTokenIfNeeded(client);
+  if (!client.metaAds?.accessToken) {
+    throw metaClientError(
+      'Connect Instagram (no Facebook Page needed), or Connect Facebook with a Page-linked Instagram account.'
+    );
+  }
   assertInstagramPermissions(client, { publish });
   const pageId = client.metaAds?.pageId;
   if (!pageId) throw metaClientError('Select a Facebook Page first');
@@ -1533,6 +1676,9 @@ async function resolveIgPublishContext(clientId, { publish = true } = {}) {
   if (igUserId) {
     client.metaAds.instagramUserId = igUserId;
     client.metaAds.instagramUsername = igUsername;
+    if (!client.metaAds.instagramAuthMethod) {
+      client.metaAds.instagramAuthMethod = 'facebook_page';
+    }
     client.markModified('metaAds');
     await client.save();
   } else {
@@ -1542,18 +1688,31 @@ async function resolveIgPublishContext(clientId, { publish = true } = {}) {
 
   if (!igUserId) {
     throw metaClientError(
-      'This Facebook Page has no linked Instagram professional account. Link Instagram to the Page in Meta, then reconnect Facebook.'
+      'This Facebook Page has no linked Instagram professional account. Connect Instagram directly, or link IG to the Page in Meta then reconnect Facebook.'
     );
   }
 
-  return { client, pageId, pageToken, igUserId, igUsername };
+  return {
+    client,
+    pageId,
+    pageToken,
+    igUserId,
+    igUsername,
+    apiHost: 'facebook',
+    graphPost,
+    graphGetFn: graphGet,
+  };
 }
 
-async function waitForIgContainer(containerId, pageToken, { maxAttempts = 30, intervalMs = 3000 } = {}) {
+async function waitForIgContainer(
+  containerId,
+  pageToken,
+  { maxAttempts = 30, intervalMs = 3000, graphGetFn = graphGet } = {}
+) {
   let statusCode = '';
   for (let i = 0; i < maxAttempts; i += 1) {
     try {
-      const status = await graphGet(`/${containerId}`, pageToken, {
+      const status = await graphGetFn(`/${containerId}`, pageToken, {
         fields: 'status_code,status',
       });
       statusCode = String(status?.status_code || status?.status || '').toUpperCase();
@@ -1574,9 +1733,9 @@ async function waitForIgContainer(containerId, pageToken, { maxAttempts = 30, in
 
 function mapPublishPermissionError(err) {
   const msg = formatGraphError(err);
-  if (/permission|instagram_content_publish|(#10)|(#200)/i.test(msg)) {
+  if (/permission|instagram_content_publish|instagram_business_content_publish|(#10)|(#200)/i.test(msg)) {
     return new Error(
-      `${msg} Reconnect Facebook after adding instagram_content_publish (and instagram_basic) to the Login for Business configuration.`
+      `${msg} Reconnect Instagram (or Facebook) and approve content publish permissions.`
     );
   }
   return new Error(msg);
@@ -1590,7 +1749,13 @@ async function publishInstagramMedia(
   clientId,
   { mediaType = 'IMAGE', imageUrl = '', videoUrl = '', imageUrls = [], caption = '' } = {}
 ) {
-  const { pageToken, igUserId, igUsername } = await resolveIgPublishContext(clientId);
+  const {
+    pageToken,
+    igUserId,
+    igUsername,
+    graphPost: igPost = graphPost,
+    graphGetFn = graphGet,
+  } = await resolveIgPublishContext(clientId);
   const type = String(mediaType || 'IMAGE').toUpperCase();
   const captionText = String(caption || '').slice(0, 2200);
 
@@ -1615,7 +1780,7 @@ async function publishInstagramMedia(
       }
       const childIds = [];
       for (const url of urls) {
-        const child = await graphPost(`/${igUserId}/media`, pageToken, {
+        const child = await igPost(`/${igUserId}/media`, pageToken, {
           image_url: url,
           is_carousel_item: true,
         });
@@ -1624,6 +1789,7 @@ async function publishInstagramMedia(
         const childStatus = await waitForIgContainer(childId, pageToken, {
           maxAttempts: 20,
           intervalMs: 1500,
+          graphGetFn,
         });
         if (childStatus !== 'FINISHED' && childStatus !== 'PUBLISHED') {
           throw new Error(
@@ -1632,7 +1798,7 @@ async function publishInstagramMedia(
         }
         childIds.push(childId);
       }
-      const parent = await graphPost(`/${igUserId}/media`, pageToken, {
+      const parent = await igPost(`/${igUserId}/media`, pageToken, {
         media_type: 'CAROUSEL',
         children: childIds.join(','),
         caption: captionText,
@@ -1642,7 +1808,7 @@ async function publishInstagramMedia(
       if (!/^https?:\/\//i.test(video)) {
         throw new Error('videoUrl must be a public http(s) URL Meta can fetch');
       }
-      const created = await graphPost(`/${igUserId}/media`, pageToken, {
+      const created = await igPost(`/${igUserId}/media`, pageToken, {
         media_type: type === 'REELS' ? 'REELS' : 'VIDEO',
         video_url: video,
         caption: captionText,
@@ -1654,7 +1820,7 @@ async function publishInstagramMedia(
       if (!/^https?:\/\//i.test(url)) {
         throw new Error('Upload an image on Khana or provide a public image URL');
       }
-      const created = await graphPost(`/${igUserId}/media`, pageToken, {
+      const created = await igPost(`/${igUserId}/media`, pageToken, {
         image_url: url,
         caption: captionText,
       });
@@ -1673,6 +1839,7 @@ async function publishInstagramMedia(
   const statusCode = await waitForIgContainer(containerId, pageToken, {
     maxAttempts: pollAttempts,
     intervalMs: type === 'VIDEO' || type === 'REELS' ? 4000 : 2000,
+    graphGetFn,
   });
   if (statusCode !== 'FINISHED' && statusCode !== 'PUBLISHED') {
     throw metaClientError(
@@ -1682,7 +1849,7 @@ async function publishInstagramMedia(
 
   let publishedId;
   try {
-    const published = await graphPost(`/${igUserId}/media_publish`, pageToken, {
+    const published = await igPost(`/${igUserId}/media_publish`, pageToken, {
       creation_id: containerId,
     });
     publishedId = String(published?.id || '').trim();
@@ -1720,12 +1887,19 @@ async function publishInstagramVideoBuffer(
     throw new Error('Direct video upload supports VIDEO or REELS');
   }
 
-  const { pageToken, igUserId, igUsername } = await resolveIgPublishContext(clientId);
+  const {
+    pageToken,
+    igUserId,
+    igUsername,
+    graphPost: igPost = graphPost,
+    graphGetFn = graphGet,
+    apiHost = 'facebook',
+  } = await resolveIgPublishContext(clientId);
   const captionText = String(caption || '').slice(0, 2200);
 
   let containerId;
   try {
-    const created = await graphPost(`/${igUserId}/media`, pageToken, {
+    const created = await igPost(`/${igUserId}/media`, pageToken, {
       media_type: type,
       upload_type: 'resumable',
       caption: captionText,
@@ -1736,8 +1910,11 @@ async function publishInstagramVideoBuffer(
   }
   if (!containerId) throw new Error('Meta did not return a resumable media container id');
 
-  const versionMatch = String(META_GRAPH_BASE).match(/\/(v\d+\.\d+)\/?$/i);
-  const apiVersion = versionMatch?.[1] || 'v25.0';
+  const InstagramOAuthService = require('./InstagramOAuthService');
+  const apiVersion =
+    apiHost === 'instagram'
+      ? InstagramOAuthService.IG_GRAPH_VERSION
+      : (String(META_GRAPH_BASE).match(/\/(v\d+\.\d+)\/?$/i)?.[1] || 'v25.0');
   try {
     await axios.post(
       `https://rupload.facebook.com/ig-api-upload/${apiVersion}/${containerId}`,
@@ -1761,6 +1938,7 @@ async function publishInstagramVideoBuffer(
   const statusCode = await waitForIgContainer(containerId, pageToken, {
     maxAttempts: 60,
     intervalMs: 4000,
+    graphGetFn,
   });
   if (!['FINISHED', 'PUBLISHED'].includes(statusCode)) {
     throw new Error(`Instagram video is still processing (${statusCode}). Try again shortly.`);
@@ -1768,7 +1946,7 @@ async function publishInstagramVideoBuffer(
 
   let publishedId;
   try {
-    const published = await graphPost(`/${igUserId}/media_publish`, pageToken, {
+    const published = await igPost(`/${igUserId}/media_publish`, pageToken, {
       creation_id: containerId,
     });
     publishedId = String(published?.id || '').trim();
