@@ -30,9 +30,13 @@ const DASHBOARD_URL = (process.env.DASHBOARD_URL || 'https://khanatechnologies.c
 const IG_GRAPH_BASE = process.env.META_INSTAGRAM_GRAPH_BASE || 'https://graph.instagram.com';
 const IG_GRAPH_VERSION = process.env.META_INSTAGRAM_GRAPH_VERSION || 'v25.0';
 
+// Keep in sync with App Dashboard → Instagram Business login Embed URL scopes.
 const IG_SCOPES = [
   'instagram_business_basic',
   'instagram_business_content_publish',
+  'instagram_business_manage_comments',
+  'instagram_business_manage_messages',
+  'instagram_business_manage_insights',
 ].join(',');
 
 function resolveInstagramOAuthRedirectUri() {
