@@ -166,19 +166,53 @@ async function exchangeCodeForShortToken(code) {
   return { accessToken, userId, permissions };
 }
 
+function formatIgApiError(err) {
+  const data = err?.response?.data;
+  const msg =
+    data?.error_message ||
+    data?.error?.message ||
+    data?.message ||
+    err?.message ||
+    'Instagram API request failed';
+  // Meta returns this for accounts that are not app testers / not Access-verified yet.
+  // It is NOT literally about HTTP GET vs POST.
+  if (/unsupported request.*method type:\s*get/i.test(msg)) {
+    return (
+      'Instagram rejected this account for API access (Meta error: Unsupported request). ' +
+      'Until App Review + Access Verification are approved for live users: ' +
+      'Meta App Dashboard → App roles → Roles → Instagram Testers → Add the Instagram username, ' +
+      'then open Instagram → Settings → Apps and websites → Tester Invites → Accept. ' +
+      'Also check App Dashboard → Verifications → Access verification (Tech Provider).'
+    );
+  }
+  return String(msg);
+}
+
 async function exchangeLongLivedToken(shortToken) {
-  const { data } = await axios.get(`${IG_GRAPH_BASE}/access_token`, {
-    params: {
-      grant_type: 'ig_exchange_token',
-      client_secret: IG_APP_SECRET,
-      access_token: shortToken,
-    },
-    timeout: 25000,
-  });
-  return {
-    accessToken: data?.access_token || shortToken,
-    expiresIn: Number(data?.expires_in) || 60 * 24 * 60 * 60,
-  };
+  try {
+    const { data } = await axios.get(`${IG_GRAPH_BASE}/access_token`, {
+      params: {
+        grant_type: 'ig_exchange_token',
+        client_secret: IG_APP_SECRET,
+        access_token: shortToken,
+      },
+      timeout: 25000,
+    });
+    return {
+      accessToken: data?.access_token || shortToken,
+      expiresIn: Number(data?.expires_in) || 60 * 24 * 60 * 60,
+      longLived: Boolean(data?.access_token),
+    };
+  } catch (err) {
+    // Some accounts get code 100 on long-lived exchange while short token still works for testers.
+    console.warn('[instagram oauth] long-lived exchange failed:', formatIgApiError(err));
+    return {
+      accessToken: shortToken,
+      expiresIn: 60 * 60, // short-lived ~1 hour
+      longLived: false,
+      exchangeError: formatIgApiError(err),
+    };
+  }
 }
 
 async function refreshLongLivedToken(token) {
@@ -226,14 +260,35 @@ async function completeOAuth({ code, state }) {
     if (!code) throw new Error('Missing authorization code');
     clientId = verifyState(state);
     const short = await exchangeCodeForShortToken(code);
-    const { accessToken, expiresIn } = await exchangeLongLivedToken(short.accessToken);
-    const profile = await fetchIgProfile(accessToken);
+    const exchanged = await exchangeLongLivedToken(short.accessToken);
+    const accessToken = exchanged.accessToken;
+    const expiresIn = exchanged.expiresIn;
+
+    let profile = {};
+    try {
+      profile = await fetchIgProfile(accessToken);
+    } catch (err) {
+      const friendly = formatIgApiError(err);
+      // If we at least have user_id from the code exchange, save the connection.
+      if (!short.userId) {
+        throw new Error(friendly);
+      }
+      console.warn('[instagram oauth] /me failed, using token exchange user_id:', friendly);
+      // Surface tester guidance even when we can save a partial connection.
+      if (/Unsupported request|Instagram rejected this account/i.test(friendly)) {
+        throw new Error(friendly);
+      }
+    }
+
     const igUserId =
       String(profile?.user_id || profile?.id || short.userId || '').trim();
     const igUsername = String(profile?.username || '').trim();
 
     if (!igUserId) {
-      throw new Error('Instagram did not return a professional account id');
+      throw new Error(
+        exchanged.exchangeError ||
+          'Instagram did not return a professional account id. Add the account as an Instagram Tester and retry.'
+      );
     }
 
     const client = await Client.findOne({ clientID: clientId });
@@ -283,10 +338,7 @@ async function completeOAuth({ code, state }) {
       authMethod: 'instagram_login',
     };
   } catch (err) {
-    const msg = err?.response?.data?.error_message
-      || err?.response?.data?.error?.message
-      || err.message
-      || 'Instagram connection failed';
+    const msg = formatIgApiError(err);
     recordEventSafe({
       clientId,
       integration: 'meta_oauth',
