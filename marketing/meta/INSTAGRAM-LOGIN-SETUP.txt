@@ -10,13 +10,20 @@ without a Facebook Page. Boosts and Meta ads still need Connect Facebook.
    - Copy Instagram App ID + Instagram App Secret
      (may match META_APP_ID / META_APP_SECRET on newer apps)
 
-2) Valid OAuth Redirect URI (exact match)
-   https://khanaconnect.onrender.com/api/v1/saas/meta/instagram/oauth/callback
+2) Valid OAuth Redirect URI (exact match — Instagram Business Login ONLY)
+   Path: Instagram → API setup with Instagram login → 4. Set up Instagram business login
+         → Business login settings → OAuth redirect URIs
+   Paste EXACTLY (watch trailing slash — Meta often adds one):
+   https://khanaconnect.onrender.com/api/v1/saas/meta/instagram/oauth/callback/
+   Do NOT only add this under Facebook Login → Valid OAuth Redirect URIs.
+   After Save, reopen the field and copy whatever Meta shows (with or without /).
 
 3) Render env (khanaconnect service)
-   META_INSTAGRAM_APP_ID=<Instagram App ID>
-   META_INSTAGRAM_APP_SECRET=<Instagram App Secret>
-   META_INSTAGRAM_OAUTH_REDIRECT_URI=https://khanaconnect.onrender.com/api/v1/saas/meta/instagram/oauth/callback
+   META_INSTAGRAM_APP_ID=<Instagram App ID from this Instagram API screen, NOT Facebook App ID>
+   META_INSTAGRAM_APP_SECRET=<Instagram App Secret from the same screen>
+   META_INSTAGRAM_OAUTH_REDIRECT_URI=<paste the EXACT URI Meta shows after save>
+   Example if Meta kept the trailing slash:
+   META_INSTAGRAM_OAUTH_REDIRECT_URI=https://khanaconnect.onrender.com/api/v1/saas/meta/instagram/oauth/callback/
    (Optional fallbacks: META_APP_ID / META_APP_SECRET are used if Instagram-specific vars are unset.)
 
 4) Permissions requested by Khana

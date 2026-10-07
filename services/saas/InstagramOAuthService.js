@@ -36,6 +36,8 @@ const IG_SCOPES = [
 ].join(',');
 
 function resolveInstagramOAuthRedirectUri() {
+  // Must match App Dashboard → Instagram → API setup with Instagram login →
+  // Business login settings → OAuth redirect URIs EXACTLY (incl. trailing slash).
   if (process.env.META_INSTAGRAM_OAUTH_REDIRECT_URI) {
     return String(process.env.META_INSTAGRAM_OAUTH_REDIRECT_URI).trim();
   }
@@ -47,7 +49,8 @@ function resolveInstagramOAuthRedirectUri() {
     'https://khanaconnect.onrender.com'
   ).replace(/\/$/, '');
   const api = (process.env.API_URL || '/api/v1').replace(/\/$/, '');
-  return `${base}${api}/saas/meta/instagram/oauth/callback`;
+  // Meta often appends a trailing slash when you save the URI — default with slash.
+  return `${base}${api}/saas/meta/instagram/oauth/callback/`;
 }
 
 const IG_OAUTH_REDIRECT_URI = resolveInstagramOAuthRedirectUri();
