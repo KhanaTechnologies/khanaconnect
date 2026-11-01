@@ -2,7 +2,9 @@ const Customer = require('../models/customer');
 const { Order } = require('../models/order');
 const Email = require('../models/Email');
 const Booking = require('../models/booking');
-const { isAbandonedCart } = require('./revenueCommandCenter');
+// Resolved lazily: revenueCommandCenter requires this module, so a top-level
+// destructure would capture undefined (circular dependency).
+const isAbandonedCart = (customer) => require('./revenueCommandCenter').isAbandonedCart(customer);
 
 const MS_DAY = 24 * 60 * 60 * 1000;
 const RECOVERY_WINDOW_MS = 14 * MS_DAY;

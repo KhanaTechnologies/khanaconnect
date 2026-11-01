@@ -3,7 +3,10 @@ const Customer = require('../models/customer');
 const { Order } = require('../models/order');
 const { mergeRevenueSettings } = require('./revenueDefaults');
 const { resolveRevenueCapabilities, moduleAllowed } = require('./revenueCapabilities');
-const { getAbandonedCarts, resolveSegmentCustomers } = require('./revenueCommandCenter');
+// Resolved lazily: revenueCommandCenter requires this module, so a top-level
+// destructure would capture undefined (circular dependency).
+const getAbandonedCarts = (...args) => require('./revenueCommandCenter').getAbandonedCarts(...args);
+const resolveSegmentCustomers = (...args) => require('./revenueCommandCenter').resolveSegmentCustomers(...args);
 const { getAbandonedBookings } = require('./revenueMetrics');
 const { sendCartReminderEmail } = require('../utils/cartReminderEmail');
 const {
