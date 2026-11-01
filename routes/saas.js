@@ -1063,7 +1063,8 @@ router.get('/whatsapp/inbox/messages/:wamid/media', requireRoles('owner', 'manag
   const media = await WhatsAppInboxService.downloadMessageMedia(req.tenant.clientId, req.params.wamid);
   res.setHeader('Content-Type', media.mimeType);
   res.setHeader('Content-Length', media.buffer.length);
-  res.setHeader('Cache-Control', 'private, max-age=300');
+  // Media for a wamid never changes — let the browser keep it instead of re-proxying it from Meta.
+  res.setHeader('Cache-Control', 'private, max-age=86400, immutable');
   if (media.filename) {
     res.setHeader('Content-Disposition', `inline; filename="${String(media.filename).replace(/"/g, '')}"`);
   }

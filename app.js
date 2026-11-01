@@ -1,10 +1,7 @@
-const { config } = require('dotenv');
 const path = require('path');
 var express = require('express');
 const app = express();
 var cookieParser = require('cookie-parser');
-var logger = require('morgan');
-const bodyParser = require("body-parser");
 const morgan = require('morgan');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -15,6 +12,7 @@ require('dotenv/config');
 const authJwt = require('./helpers/jwt');
 const errorHandler = require('./helpers/error-handler');
 const { mongoSanitize } = require('./middleware/mongoSanitize');
+const bandwidthMeter = require('./middleware/bandwidthMeter');
 
 // Tracking System Imports
 const trackingRoutes = require('./routes/trackingEvents');
@@ -131,20 +129,35 @@ const trackingLimiter = rateLimit({
  * ========================
  */
 
+// Bandwidth meter — first, so it sees every response (incl. CORS rejections) and,
+// being ahead of compression(), counts the compressed bytes actually sent.
+app.use(bandwidthMeter.bandwidthMeter);
+
+// Alert at most once per blocked origin per hour (bots can retry thousands of times).
+const CORS_ALERT_INTERVAL_MS = 60 * 60 * 1000;
+const corsAlertSentAt = new Map();
+
+function alertBlockedOrigin(origin) {
+  const last = corsAlertSentAt.get(origin) || 0;
+  if (Date.now() - last < CORS_ALERT_INTERVAL_MS) return;
+  if (corsAlertSentAt.size > 500) corsAlertSentAt.clear();
+  corsAlertSentAt.set(origin, Date.now());
+
+  failureEmail.sendErrorEmail({
+    subject: 'CORS Blocked Request',
+    html: `<h3>CORS Blocked Request</h3><p><strong>Origin:</strong> ${origin}</p>`
+  }).catch(e => console.error('Failed to send CORS alert email:', e));
+}
+
 // Enhanced CORS with whitelist
-app.use(cors({
+const corsOptions = {
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
-    
+
     if (ALLOWED_ORIGINS.indexOf(origin) === -1) {
       const msg = `The CORS policy does not allow access from: ${origin}`;
       console.warn(`🚫 Blocked CORS request from: ${origin}`);
-      
-      failureEmail.sendErrorEmail({
-        subject: 'CORS Blocked Request',
-        html: `<h3>CORS Blocked Request</h3><p><strong>Origin:</strong> ${origin}</p>`
-      }).catch(e => console.error('Failed to send CORS alert email:', e));
-      
+      alertBlockedOrigin(origin);
       return callback(new Error(msg), false);
     }
     return callback(null, true);
@@ -152,9 +165,12 @@ app.use(cors({
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Client-ID', 'X-Session-ID', 'X-Anonymous-ID']
-}));
+};
 
-app.options('*', cors());
+app.use(cors(corsOptions));
+
+// Preflight uses the same whitelist (bare cors() would answer any origin with *).
+app.options('*', cors(corsOptions));
 
 // Enhanced Helmet security
 app.use(helmet({
@@ -195,7 +211,6 @@ app.use(express.urlencoded({ extended: true, limit: '10mb', parameterLimit: 100 
 app.use(mongoSanitize);
 
 app.use(cookieParser());
-app.use(logger('combined'));
 app.use(morgan('combined'));
 
 // Request size limiting
@@ -216,15 +231,24 @@ function setPublicUploadHeaders(res) {
   res.set('Cross-Origin-Resource-Policy', 'cross-origin');
 }
 
+// Uploaded files get a unique timestamped name per upload and are never edited in place,
+// so browsers / CDNs / email proxies can keep them for 30 days instead of re-downloading daily.
+const IMMUTABLE_UPLOAD_CACHE = 'public, max-age=2592000, immutable';
+
 app.use("/public/uploads", express.static(path.join(__dirname, "public/uploads"), {
   setHeaders: (res) => {
     setPublicUploadHeaders(res);
+    res.set('Cache-Control', IMMUTABLE_UPLOAD_CACHE);
     res.set('X-Frame-Options', 'DENY');
   }
 }));
 
 app.use("/public/email", express.static(path.join(__dirname, "public/email"), {
-  setHeaders: setPublicUploadHeaders,
+  setHeaders: (res) => {
+    setPublicUploadHeaders(res);
+    // Shared email assets (logo) are fetched on every email open — cache for a week.
+    res.set('Cache-Control', 'public, max-age=604800');
+  },
 }));
 
 app.use('/public/admin', express.static(path.join(__dirname, 'public/admin'), {
@@ -339,6 +363,7 @@ app.use(`${api}/bookings`, bookingsRouter);
 app.use(`${api}/storefront/bookings`, publicBookingRouter);
 app.use(`${api}/staff`, staffRouter);
 app.use(`${api}/services`, serviceRouter);
+app.use(`${api}/admin/bandwidth`, require('./routes/adminBandwidth'));
 app.use(`${api}/admin`, adminRouter);
 app.use(`${api}/admin/site-analytics`, adminSiteAnalyticsRouter);
 app.use(`${api}/resources`, resourcesRouter); 
@@ -372,6 +397,7 @@ mongoose.connect(process.env.CONNECTION_STRING, {
 })
 .then(async () => {
   console.log('✅ DB Connected!');
+  bandwidthMeter.startFlushing();
 
   const { resolvePublicBaseUrl } = require('./helpers/publicBaseUrl');
   const publicBase = resolvePublicBaseUrl();
@@ -475,7 +501,7 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('💥 UNHANDLED REJECTION:', reason);
   failureEmail.sendErrorEmail({
     subject: 'UNHANDLED REJECTION',
-    html: `<pre>${reason.stack || reason}</pre>`
+    html: `<pre>${reason?.stack || reason}</pre>`
   }).catch(e => console.error('Failed to send unhandledRejection email:', e));
 });
 
@@ -489,6 +515,7 @@ app.use(failureEmail.globalErrorHandler);
 
 const PORT = process.env.PORT || 3000;
 const server = http.createServer(app);
+bandwidthMeter.attachServer(server);
 
 // Socket.IO
 const io = new Server(server, { 
@@ -545,12 +572,22 @@ const gracefulShutdown = async (signal) => {
     await new Promise(resolve => setTimeout(resolve, 5000));
   }
   
-  server.close(() => {
+  try {
+    await bandwidthMeter.stopFlushing();
+  } catch (e) {
+    console.error('Error flushing bandwidth meter:', e.message);
+  }
+
+  server.close(async () => {
     console.log('HTTP server closed');
-    mongoose.connection.close(false, () => {
+    // Mongoose 7+ dropped the close() callback — without await this never exited cleanly.
+    try {
+      await mongoose.connection.close(false);
       console.log('MongoDB connection closed');
-      process.exit(0);
-    });
+    } catch (e) {
+      console.error('Error closing MongoDB connection:', e.message);
+    }
+    process.exit(0);
   });
 
   setTimeout(() => {

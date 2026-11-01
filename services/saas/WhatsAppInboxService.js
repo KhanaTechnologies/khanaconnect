@@ -843,14 +843,17 @@ class WhatsAppInboxService {
     if (!contact) throw httpError('Invalid contact WhatsApp number', 400);
 
     const lim = Math.min(Math.max(Number(limit) || 100, 1), 200);
-    const messages = await SaasWhatsAppMessage.find({
-      client_id: clientId,
-      contact_wa_id: contact,
-      deleted_at: null,
-    })
-      .sort({ timestamp: 1 })
-      .limit(lim)
-      .lean();
+    // Newest `lim` messages, returned oldest → newest (ascending sort + limit kept only the oldest).
+    const messages = (
+      await SaasWhatsAppMessage.find({
+        client_id: clientId,
+        contact_wa_id: contact,
+        deleted_at: null,
+      })
+        .sort({ timestamp: -1 })
+        .limit(lim)
+        .lean()
+    ).reverse();
 
     await SaasWhatsAppMessage.updateMany(
       { client_id: clientId, contact_wa_id: contact, direction: 'inbound', read_at: null, deleted_at: null },
