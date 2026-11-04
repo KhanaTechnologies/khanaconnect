@@ -15,6 +15,7 @@ const { wrapRoute } = require('../helpers/failureEmail');
 const { clientEmailBrandingPayload } = require('../helpers/clientEmailBranding');
 const { getJwtSecret, verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const { resolvePlatformAdmin } = require('../middleware/requireAdmin');
+const { resolveSessionFromToken } = require('../helpers/teamAuth');
 const router = express.Router();
 const { findCustomerByEmail, replaceCustomerCart } = require('../helpers/customerCart');
 const { encrypt, decrypt } = require('../helpers/encryption');
@@ -81,13 +82,16 @@ async function requireStorefrontSubscription(req, res, next) {
 
 const validatePaidStorefrontToken = [validateTokenAndExtractClientID, requireStorefrontSubscription];
 
-function isStaffCustomerRequest(req) {
+/** Staff = a team session whose member is still active on this tenant (re-checked, not trusted from the token). */
+async function isStaffCustomerRequest(req) {
   const claims = req.authClaims || {};
-  return !!(claims.memberId || claims.loginType === 'team');
+  if (!claims.memberId) return false;
+  const session = await resolveSessionFromToken(claims);
+  return !!(session?.member && session.client.clientID === req.clientID);
 }
 
-function requireStaffOrSelfCustomer(req, res, next) {
-  if (isStaffCustomerRequest(req)) return next();
+async function requireStaffOrSelfCustomer(req, res, next) {
+  if (await isStaffCustomerRequest(req)) return next();
   const selfId = String(req.customerID || '');
   if (!selfId) {
     return res.status(403).json({ error: 'Customer sign-in required' });
@@ -98,8 +102,8 @@ function requireStaffOrSelfCustomer(req, res, next) {
   return next();
 }
 
-function requireStaffCustomerAccess(req, res, next) {
-  if (isStaffCustomerRequest(req)) return next();
+async function requireStaffCustomerAccess(req, res, next) {
+  if (await isStaffCustomerRequest(req)) return next();
   return res.status(403).json({ error: 'Staff sign-in required' });
 }
 
@@ -163,7 +167,7 @@ const normalizeEmailDomain = (email) => {
  */
 router.get('/wishlists', validatePaidStorefrontToken, wrapRoute(async (req, res) => {
   let customerID = String(req.query.customerID || '').trim();
-  if (!isStaffCustomerRequest(req)) {
+  if (!(await isStaffCustomerRequest(req))) {
     if (!req.customerID) {
       return res.status(403).json({ error: 'Customer sign-in required' });
     }

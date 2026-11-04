@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const { mailTlsOptions } = require('../helpers/mailTls');
 const Product = require('../models/product');
 const { decrypt } = require('../helpers/encryption'); // Add this import
 const { resolveSmtpHost, resolveSmtpPort, resolveSmtpSecure } = require('../helpers/mailHost');
@@ -232,8 +233,9 @@ async function sendWithRetry(getTransporter, mailOptions, retries = 5, delayMs =
 }
 
 function getFormattedClientName(clientName) {
+    // Split only camelCase joins ("HerBeauty" → "Her Beauty"); acronyms like "ABC" stay intact.
     return clientName
-        ? 'The ' + clientName.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase()).trim() + ' Team'
+        ? 'The ' + clientName.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/^./, str => str.toUpperCase()).trim() + ' Team'
         : 'The Khana Technologies Team';
 }
 
@@ -254,10 +256,7 @@ function createTransporter(bEmail, BEPass) {
             user: decryptedEmail,
             pass: decryptedPass
         },
-        tls: {
-            rejectUnauthorized: false,
-            minVersion: 'TLSv1.2'
-        },
+        tls: mailTlsOptions(host),
         // Pooled reuse can hit ECONNRESET when the host closes idle sockets; fresh transport per send is safer for bursty booking mail.
         pool: false,
         connectionTimeout: 30000,
@@ -1334,14 +1333,8 @@ async function sendContactUsEmail(contactData, bEmail, BEPass, clientName, email
         `
             <p style="margin:0 0 16px;">Hi ${safeName},</p>
             <p style="margin:0 0 16px;">Thank you for reaching out to us. We have received your message and will get back to you as soon as possible.</p>
-            ${infoPanel({
-                title: 'Your message summary',
-                html: `
-                    <p style="margin:0 0 8px;"><strong>Subject:</strong> ${safeSubject}</p>
-                    <p style="margin:0 0 8px;"><strong>Message:</strong></p>
-                    <p style="margin:0;white-space:pre-line;padding:12px;background:#f5f5f5;border-radius:6px;">${safeMessage}</p>
-                `,
-            })}
+            ${/* The visitor's text is deliberately not echoed: the form accepts any "To" address,
+                 so echoing it would let spammers send their content from this mailbox. */ ''}
             ${warnPanel({
                 title: 'Response time',
                 html: '<p style="margin:0 0 8px;">We typically respond within 24–48 hours during business days.</p><p style="margin:0;">If your matter is urgent, please call us directly.</p>',
@@ -1361,7 +1354,8 @@ async function sendContactUsEmail(contactData, bEmail, BEPass, clientName, email
         {
             from: decryptedEmail,
             to: decryptedEmail,
-            subject: `Contact Form: ${subject}`,
+            replyTo: email, // hitting Reply answers the customer, not the business itself
+            subject: `Contact Form: ${subject} — ${name}`,
             ...businessBody,
         },
         5,

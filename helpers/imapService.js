@@ -1,5 +1,6 @@
 // helpers/imapService.js
 const { ImapFlow } = require('imapflow');
+const { mailTlsOptions } = require('./mailTls');
 const { simpleParser } = require('mailparser');
 const Email = require('../models/Email');
 const { resolveImapHost, resolveImapPort } = require('./mailHost');
@@ -60,10 +61,7 @@ async function fetchClientEmails(client) {
         user: client.businessEmail, 
         pass: client.businessEmailPassword 
       },
-      tls: {
-        rejectUnauthorized: false,
-        minVersion: 'TLSv1.2'
-      },
+      tls: mailTlsOptions(host),
       connectionTimeout: 30000,
       greetingTimeout: 30000,
       logger: {
@@ -263,7 +261,7 @@ async function fetchClientSentEmails(client) {
         user: client.businessEmail,
         pass: client.businessEmailPassword,
       },
-      tls: { rejectUnauthorized: false, minVersion: 'TLSv1.2' },
+      tls: mailTlsOptions(host),
       connectionTimeout: 30000,
       greetingTimeout: 30000,
       logger: {

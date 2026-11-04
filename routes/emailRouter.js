@@ -340,6 +340,28 @@ async function validateClient(req, res, next) {
   return dashboardEmailAuth(req, res, () => attachEmailClient(req, res, next));
 }
 
+/**
+ * Public contact forms post with the website's storefront token. Dashboard auth rejects
+ * storefront tokens on POST, which silently broke every contact form — so /contact only
+ * needs to know which client the website belongs to (rate-limited separately).
+ */
+async function validateContactClient(req, res, next) {
+  try {
+    const auth = String(req.headers.authorization || '');
+    if (!auth.startsWith('Bearer ')) {
+      return res.status(401).json({ ok: false, message: 'Website token missing' });
+    }
+    const { decoded } = verifyJwtWithAnySecret(jwt, auth.slice(7).trim());
+    if (!decoded?.clientID || decoded.purpose) {
+      return res.status(403).json({ ok: false, message: 'Invalid website token' });
+    }
+    req.clientId = decoded.clientID;
+    return attachEmailClient(req, res, next);
+  } catch (_err) {
+    return res.status(401).json({ ok: false, message: 'Invalid website token' });
+  }
+}
+
 async function validateClientNewsletter(req, res, next) {
   return dashboardNewsletterAuth(req, res, () => attachEmailClient(req, res, next));
 }
@@ -2807,19 +2829,25 @@ router.get('/health', validateClient, wrapRoute(async (req, res) => {
  * Endpoint for contact forms from authenticated clients
  * Sends email to business and auto-reply to customer
  */
-router.post('/contact', contactFormLimiter, validateClient, wrapRoute(async (req, res) => {
+router.post('/contact', contactFormLimiter, validateContactClient, wrapRoute(async (req, res) => {
     try {
-        const { 
-            name, 
-            email, 
-            phone, 
-            message,
-            business,
-            websiteType,
-            budget,
-            timeline,
-            features
-        } = req.body;
+        const clip = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+        const name = clip(req.body.name, 120);
+        const email = clip(req.body.email, 254);
+        const phone = clip(req.body.phone, 40);
+        const message = clip(req.body.message, 5000);
+        const business = clip(req.body.business, 200);
+        const websiteType = clip(req.body.websiteType, 100);
+        const budget = clip(req.body.budget, 100);
+        const timeline = clip(req.body.timeline, 100);
+        const features = Array.isArray(req.body.features)
+            ? req.body.features.filter((f) => typeof f === 'string').slice(0, 30).map((f) => f.slice(0, 80))
+            : [];
+
+        // Honeypot: a hidden "hp_field" input real visitors never see or fill; bots do. Pretend success.
+        if (clip(req.body.hp_field, 200)) {
+            return res.status(200).json({ ok: true, message: 'Thank you for contacting us. We will get back to you soon.' });
+        }
 
         // Validate required fields
         if (!name || !email || !message) {
@@ -2887,9 +2915,11 @@ router.post('/contact', contactFormLimiter, validateClient, wrapRoute(async (req
 
     } catch (error) {
         console.error('❌ Contact form submission failed:', error.message);
+        // `details` reaches the alert email; browsers only get the generic message in production.
         res.status(500).json({
             ok: false,
-            message: 'Failed to process your message. Please try again later.'
+            message: 'Failed to process your message. Please try again later.',
+            details: `Contact form for ${req.client?.clientID}: ${error.message}`,
         });
     }
 }));

@@ -489,12 +489,19 @@ app.use('*', (req, res) => {
 });
 
 // Uncaught Error Handling
+// After an uncaught exception the process state is unknown (half-written requests, broken
+// sockets), so alert and exit; Render restarts a clean instance within seconds.
 process.on('uncaughtException', (err) => {
   console.error('💥 UNCAUGHT ERROR:', err);
+  const exit = () => process.exit(1);
+  setTimeout(exit, 5000).unref();
   failureEmail.sendErrorEmail({
-    subject: 'UNCAUGHT EXCEPTION',
-    html: `<pre>${err.stack}</pre>`
-  }).catch(e => console.error('Failed to send uncaughtException email:', e));
+    subject: 'UNCAUGHT EXCEPTION (server restarting)',
+    html: `<pre>${String(err?.stack || err).replace(/</g, '&lt;')}</pre>`,
+    dedupe: false,
+  })
+    .catch(e => console.error('Failed to send uncaughtException email:', e))
+    .finally(exit);
 });
 
 process.on('unhandledRejection', (reason, promise) => {

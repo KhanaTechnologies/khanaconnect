@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
 const nodemailer = require('nodemailer');
+const { mailTlsOptions } = require('./mailTls');
 const MailComposer = require('nodemailer/lib/mail-composer');
 const { ImapFlow } = require('imapflow');
 const Email = require('../models/Email');
@@ -213,10 +214,7 @@ function createSendTransporter(config) {
       user: config.user,
       pass: config.pass,
     },
-    tls: {
-      rejectUnauthorized: false,
-      minVersion: 'TLSv1.2',
-    },
+    tls: mailTlsOptions(config.host),
     pool: false,
     connectionTimeout: 30000,
     greetingTimeout: 30000,
@@ -300,7 +298,7 @@ async function saveToSentFolder(clientConfig, mailLike) {
       secure: true,
       auth: { user, pass },
       logger: false,
-      tls: { rejectUnauthorized: false }
+      tls: mailTlsOptions(imapHost)
     });
 
     await imap.connect();

@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const { mailTlsOptions } = require('./mailTls');
 const { decrypt } = require('./encryption');
 const { sanitizeHostInput } = require('./mailHost');
 
@@ -58,10 +59,7 @@ function createSystemSmtpTransport() {
       user: cfg.user,
       pass: cfg.pass,
     },
-    tls: {
-      rejectUnauthorized: false,
-      minVersion: 'TLSv1.2',
-    },
+    tls: mailTlsOptions(cfg.host),
     pool: false,
     connectionTimeout: 30000,
     greetingTimeout: 30000,

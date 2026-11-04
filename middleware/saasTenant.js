@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const { resolvePlatformAdmin } = require('./requireAdmin');
+const TeamMember = require('../models/teamMember');
 
 function resolveBearer(req) {
   const auth = req.headers.authorization || '';
@@ -9,7 +10,7 @@ function resolveBearer(req) {
   return auth.slice(7).trim();
 }
 
-function tenantResolver(req, res, next) {
+async function tenantResolver(req, res, next) {
   try {
     const token = resolveBearer(req);
     let claims = {};
@@ -34,8 +35,19 @@ function tenantResolver(req, res, next) {
       return res.status(403).json({ ok: false, message: 'Tenant mismatch' });
     }
 
+    // Team tokens live for a day: re-check the member so disabling / demoting someone applies
+    // immediately, and use their current role rather than the one baked into the token.
+    let memberOrgRole = claims.orgRole;
+    if (claims.memberId) {
+      const member = await TeamMember.findById(claims.memberId).select('clientID status orgRole').lean();
+      if (!member || member.clientID !== tokenClientId || member.status !== 'active') {
+        return res.status(401).json({ ok: false, message: 'Invalid or expired session. Please sign in again.' });
+      }
+      memberOrgRole = member.orgRole;
+    }
+
     let inferredRole = 'user';
-    const orgRole = String(claims.orgRole || '').toLowerCase();
+    const orgRole = String(memberOrgRole || '').toLowerCase();
     if (claims.customerID || claims.loginType === 'customer' || claims.buyerId || claims.role === 'b2b') {
       inferredRole = 'user';
     } else if (claims.purpose) {
@@ -58,7 +70,7 @@ function tenantResolver(req, res, next) {
     };
     next();
   } catch (e) {
-    return res.status(401).json({ ok: false, message: 'Unauthorized tenant context', error: e.message });
+    return res.status(401).json({ ok: false, message: 'Unauthorized tenant context' });
   }
 }
 
