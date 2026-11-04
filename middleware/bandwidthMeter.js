@@ -172,6 +172,11 @@ function bandwidthMeter(req, res, next) {
       add(bucket, 'client', clientId, 1, bytesOut, bytesIn);
       add(bucket, 'agent', classifyAgent(req.headers['user-agent']), 1, bytesOut, bytesIn);
       add(bucket, 'status', status, 1, bytesOut, bytesIn);
+      if (res.statusCode >= 400) {
+        // Which requests fail, with the exact code — the status classes alone can't explain it.
+        const failedRoute = isStaticPath(rawPath) ? `${req.method} ${rawPath.slice(0, 120)}` : normalizeRoute(req.method, rawPath);
+        add(bucket, 'failed', `${failedRoute} · ${res.statusCode}`, 1, bytesOut, bytesIn);
+      }
       if (req.storefrontToken) {
         add(bucket, 'apitoken', `${normalizeRoute(req.method, rawPath)} · ${status}`, 1, bytesOut, bytesIn);
       }

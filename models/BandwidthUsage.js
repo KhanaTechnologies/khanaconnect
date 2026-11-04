@@ -11,7 +11,8 @@ const bandwidthUsageSchema = new mongoose.Schema(
     dim: {
       type: String,
       // apitoken: routes called with a storefront API token (what public websites rely on).
-      enum: ['total', 'wire', 'route', 'file', 'origin', 'client', 'agent', 'status', 'apitoken'],
+      // failed: endpoint + exact status code for 4xx/5xx responses.
+      enum: ['total', 'wire', 'route', 'file', 'origin', 'client', 'agent', 'status', 'apitoken', 'failed'],
       required: true,
     },
     key: { type: String, required: true, trim: true },
