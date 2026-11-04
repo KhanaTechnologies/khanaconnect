@@ -31,17 +31,6 @@ const authenticateStoreToken = (req, res, next) => {
 
 const validateClient = createDashboardAuth('preorder');
 
-// Admin check middleware
-const requireAdmin = (req, res, next) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ 
-      success: false,
-      error: 'Admin access required' 
-    });
-  }
-  next();
-};
-
 // Validation for interest campaign signup (SIMPLE FORM)
 const interestSignupValidation = [
   body('campaignId').isMongoId().withMessage('Valid campaign ID is required'),

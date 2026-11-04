@@ -14,6 +14,7 @@ const { sendCartReminderEmail } = require('../utils/cartReminderEmail');
 const { wrapRoute } = require('../helpers/failureEmail');
 const { clientEmailBrandingPayload } = require('../helpers/clientEmailBranding');
 const { getJwtSecret, verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
+const { resolvePlatformAdmin } = require('../middleware/requireAdmin');
 const router = express.Router();
 const { findCustomerByEmail, replaceCustomerCart } = require('../helpers/customerCart');
 const { encrypt, decrypt } = require('../helpers/encryption');
@@ -110,10 +111,8 @@ const requireAdmin = async (req, res, next) => {
 
     const { decoded } = verifyJwtWithAnySecret(jwt, token);
 
-    const client = await Client.findOne({ clientID: decoded.clientID });
-    if (!client) return res.status(404).json({ error: 'Client not found' });
-
-    if (client.role !== 'admin') {
+    // Platform-admin sessions only: shopper / storefront tokens of the admin client must not pass.
+    if (!(await resolvePlatformAdmin(decoded))) {
       return res.status(403).json({ error: 'Admin access required' });
     }
 

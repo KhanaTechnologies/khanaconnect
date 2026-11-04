@@ -172,6 +172,9 @@ function bandwidthMeter(req, res, next) {
       add(bucket, 'client', clientId, 1, bytesOut, bytesIn);
       add(bucket, 'agent', classifyAgent(req.headers['user-agent']), 1, bytesOut, bytesIn);
       add(bucket, 'status', status, 1, bytesOut, bytesIn);
+      if (req.storefrontToken) {
+        add(bucket, 'apitoken', `${normalizeRoute(req.method, rawPath)} · ${status}`, 1, bytesOut, bytesIn);
+      }
     } catch (err) {
       console.error('[bandwidthMeter] record failed:', err.message);
     }

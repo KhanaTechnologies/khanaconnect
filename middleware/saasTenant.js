@@ -1,6 +1,7 @@
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
-const Client = require('../models/client');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
+const { resolvePlatformAdmin } = require('./requireAdmin');
 
 function resolveBearer(req) {
   const auth = req.headers.authorization || '';
@@ -61,23 +62,29 @@ function tenantResolver(req, res, next) {
   }
 }
 
+function safeEqual(a, b) {
+  const A = Buffer.from(String(a), 'utf8');
+  const B = Buffer.from(String(b), 'utf8');
+  return A.length === B.length && crypto.timingSafeEqual(A, B);
+}
+
 /**
- * Platform admin gate. JWTs historically omit `role`, so we also check Client.role in DB
- * (same pattern as middleware/requireAdmin.js).
+ * Platform admin gate: SAAS_ADMIN_API_KEY, or a platform-admin dashboard session
+ * (see resolvePlatformAdmin — shopper / storefront tokens of the admin client do not pass).
  */
 async function adminOnly(req, res, next) {
   try {
     const role = String(req.tenant?.role || '').toLowerCase();
     const adminApiKey = process.env.SAAS_ADMIN_API_KEY || '';
     const incomingApiKey = String(req.headers['x-admin-api-key'] || '');
-    if (role === 'admin' || (adminApiKey && incomingApiKey === adminApiKey)) {
+    if (role === 'admin' || (adminApiKey && safeEqual(incomingApiKey, adminApiKey))) {
       return next();
     }
 
-    const clientId = String(req.tenant?.clientId || '').trim();
-    if (clientId) {
-      const client = await Client.findOne({ clientID: clientId }).select('role').lean();
-      if (client?.role === 'admin') {
+    const token = resolveBearer(req);
+    if (token) {
+      const { decoded } = verifyJwtWithAnySecret(jwt, token);
+      if (await resolvePlatformAdmin(decoded)) {
         req.tenant.role = 'admin';
         return next();
       }

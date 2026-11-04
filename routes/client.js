@@ -20,7 +20,7 @@ const { authenticateClientLogin } = require('../helpers/teamLogin');
 const { resolveSessionFromToken, requireTeamSession, requireTeamManager } = require('../helpers/teamAuth');
 const { createDashboardAuth } = require('../helpers/dashboardAuth');
 const { requireSelfOrAdmin } = require('../middleware/requireSelfOrAdmin');
-const { requireAdmin: requirePlatformAdmin } = require('../middleware/requireAdmin');
+const { requireAdmin: requirePlatformAdmin, resolvePlatformAdmin } = require('../middleware/requireAdmin');
 const { publicClientPayload, stripClientSecrets } = require('../helpers/publicClientPayload');
 const {
   applyLegalAcceptanceFromRequest,
@@ -48,8 +48,6 @@ function generateToken(client) {
     clientID: client.clientID,
     companyName: client.companyName,
     merchant_id: client.merchant_id,
-    merchant_key: client.merchant_key,
-    passphrase: client.passphrase,
     role: client.role || 'client',
   };
   return jwt.sign(payload, secret, { expiresIn: '1y' });
@@ -58,17 +56,14 @@ function generateToken(client) {
 // Middleware to authenticate token (dashboard team sessions)
 const authenticateToken = createDashboardAuth('sales');
 
-// Admin check middleware
+// Admin check middleware — platform-admin sessions only (see middleware/requireAdmin.js)
 async function requireAdmin(req, res, next) {
   try {
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Unauthorized' });
 
     const { decoded } = verifyJwtWithAnySecret(jwt, token);
-    const client = await Client.findOne({ clientID: decoded.clientID });
-    if (!client) return res.status(404).json({ error: 'Client not found' });
-
-    if (client.role !== 'admin') {
+    if (!(await resolvePlatformAdmin(decoded))) {
       return res.status(403).json({ error: 'Admin access required' });
     }
 
@@ -725,8 +720,6 @@ router.post('/migrate/switch-to-secret-encryption', requireAdmin, wrapRoute(asyn
           clientID: client.clientID,
           companyName: client.companyName,
           merchant_id: client.merchant_id,
-          merchant_key: client.merchant_key,
-          passphrase: client.passphrase
         },
         getJwtSecret(),
         { expiresIn: '1y' }

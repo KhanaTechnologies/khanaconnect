@@ -20,8 +20,6 @@ function generateToken(client) {
         clientID: client.clientID,
         companyName: client.companyName,
         merchant_id: client.merchant_id,
-        merchant_key: client.merchant_key,
-        passphrase: client.passphrase,
     };
     return jwt.sign(payload, secret, { expiresIn: '1y' });
 }

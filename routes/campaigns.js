@@ -40,17 +40,6 @@ const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 }, fileFilt
 
 const validateClient = createDashboardAuth('preorder');
 
-// Admin check middleware
-const requireAdmin = (req, res, next) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ 
-      success: false,
-      error: 'Admin access required' 
-    });
-  }
-  next();
-};
-
 // FIXED: Validation rules based on campaign type - now returns a middleware function
 const campaignValidation = (req, res, next) => {
   // First, check if body exists

@@ -10,7 +10,8 @@ const bandwidthUsageSchema = new mongoose.Schema(
     bucket: { type: Date, required: true },
     dim: {
       type: String,
-      enum: ['total', 'wire', 'route', 'file', 'origin', 'client', 'agent', 'status'],
+      // apitoken: routes called with a storefront API token (what public websites rely on).
+      enum: ['total', 'wire', 'route', 'file', 'origin', 'client', 'agent', 'status', 'apitoken'],
       required: true,
     },
     key: { type: String, required: true, trim: true },

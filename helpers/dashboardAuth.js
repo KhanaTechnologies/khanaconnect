@@ -11,6 +11,9 @@ const {
   readOnlyBlockedResponse,
 } = require('./readOnlyAccess');
 
+/** Modules a public storefront never needs (business inbox, newsletter lists, email templates). */
+const STOREFRONT_BLOCKED_MODULES = new Set(['email_center', 'newsletter', 'email_builder']);
+
 /**
  * Dashboard API auth + team member permission enforcement.
  * @param {string|string[]|null} moduleKey - one key, or any-of list (e.g. ['newsletter','email_center'])
@@ -68,6 +71,16 @@ function createDashboardAuth(moduleKey = null) {
         }
 
         if (session.isApiToken) {
+          // Storefront tokens ship in public website code: never let them read inboxes / subscriber lists.
+          // (The password-only platform-admin login also lands here and keeps its access.)
+          if (req.user.loginType !== 'platform_admin') {
+            req.storefrontToken = true; // recorded by the bandwidth meter as 'apitoken' usage
+            if (moduleKeys.length && moduleKeys.every((key) => STOREFRONT_BLOCKED_MODULES.has(key))) {
+              return res.status(403).json({
+                error: 'Storefront tokens cannot access this data. Sign in to the dashboard instead.',
+              });
+            }
+          }
           const method = String(req.method || '').toUpperCase();
           if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
             return res.status(403).json({

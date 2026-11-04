@@ -23,7 +23,7 @@ const {
 const { diffBookingForCustomer, normalizeCustomerNotifyChanges } = require('../utils/bookingEmailHelpers');
 const { clientEmailBrandingPayload } = require('../helpers/clientEmailBranding');
 const WhatsAppService = require('../services/saas/WhatsAppService');
-const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
+const { verifyJwtWithAnySecret, getJwtSecret } = require('../helpers/jwtSecret');
 const { createDashboardAuth } = require('../helpers/dashboardAuth');
 const { recordTeamActivityFromRequest } = require('../helpers/teamActivity');
 const { autoAdvancePastBookings } = require('../helpers/bookingStatus');
@@ -1489,11 +1489,16 @@ router.post('/recurring', validateClient, wrapRoute(async (req, res) => {
   res.status(201).json({ created: created.length, bookings: created });
 }));
 
+/** Never fall back to a hardcoded string — forged manage links could cancel any booking. */
+function bookingManageSecret() {
+  return process.env.BOOKING_MANAGE_SECRET || getJwtSecret();
+}
+
 // Customer manage token (cancel / reschedule link)
 router.post('/:id/manage-token', validateClient, wrapRoute(async (req, res) => {
   const booking = await Booking.findOne({ _id: req.params.id, clientID: req.clientId });
   if (!booking) return res.status(404).json({ error: 'Booking not found' });
-  const secret = process.env.BOOKING_MANAGE_SECRET || process.env.JWT_SECRET || 'booking-manage';
+  const secret = bookingManageSecret();
   const token = jwt.sign(
     { bookingId: String(booking._id), clientID: req.clientId, purpose: 'booking_manage' },
     secret,
@@ -1510,7 +1515,7 @@ router.post('/:id/manage-token', validateClient, wrapRoute(async (req, res) => {
 router.post('/manage/cancel', wrapRoute(async (req, res) => {
   const token = req.body?.token || req.query?.token;
   if (!token) return res.status(400).json({ error: 'token required' });
-  const secret = process.env.BOOKING_MANAGE_SECRET || process.env.JWT_SECRET || 'booking-manage';
+  const secret = bookingManageSecret();
   let decoded;
   try {
     decoded = jwt.verify(token, secret);
@@ -1531,7 +1536,7 @@ router.post('/manage/reschedule', wrapRoute(async (req, res) => {
   const token = req.body?.token;
   const { date, time, duration } = req.body || {};
   if (!token || !date || !time) return res.status(400).json({ error: 'token, date, and time required' });
-  const secret = process.env.BOOKING_MANAGE_SECRET || process.env.JWT_SECRET || 'booking-manage';
+  const secret = bookingManageSecret();
   let decoded;
   try {
     decoded = jwt.verify(token, secret);
