@@ -17,6 +17,12 @@ const {
 const googleService = require('../services/googleService');
 const { encrypt, decrypt } = require('../helpers/encryption'); // ✅ Import from helper
 const { authenticateClientLogin } = require('../helpers/teamLogin');
+const {
+  SESSION_PLACEHOLDER,
+  canUseSessionCookie,
+  setSessionCookie,
+  clearSessionCookie,
+} = require('../helpers/sessionCookie');
 const { resolveSessionFromToken, requireTeamSession, requireTeamManager } = require('../helpers/teamAuth');
 const { createDashboardAuth } = require('../helpers/dashboardAuth');
 const { requireSelfOrAdmin } = require('../middleware/requireSelfOrAdmin');
@@ -1882,11 +1888,21 @@ router.post('/login', loginLimiter, wrapRoute(async (req, res) => {
     return res.status(result.status || 400).json({ error: result.message });
   }
 
+  // On the API's own subdomain, keep the session in an HttpOnly cookie and give the
+  // dashboard only a placeholder (see helpers/sessionCookie.js).
+  if (canUseSessionCookie(req) && result.body?.token) {
+    const { decoded } = verifyJwtWithAnySecret(jwt, result.body.token);
+    const expiresAt = decoded.exp * 1000;
+    setSessionCookie(res, result.body.token, expiresAt);
+    return res.status(200).send({ ...result.body, token: SESSION_PLACEHOLDER, sessionExpiresAt: expiresAt });
+  }
+
   res.status(200).send(result.body);
 }));
 
 // Client logout
 router.post('/logout', wrapRoute(async (req, res) => {
+  clearSessionCookie(res); // always drop the cookie, even if the session already expired
   const auth = req.headers.authorization;
   if (!auth || !auth.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized' });

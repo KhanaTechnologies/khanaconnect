@@ -13,6 +13,7 @@ const authJwt = require('./helpers/jwt');
 const errorHandler = require('./helpers/error-handler');
 const { mongoSanitize } = require('./middleware/mongoSanitize');
 const bandwidthMeter = require('./middleware/bandwidthMeter');
+const { sessionCookieAuth } = require('./helpers/sessionCookie');
 
 // Tracking System Imports
 const trackingRoutes = require('./routes/trackingEvents');
@@ -211,6 +212,8 @@ app.use(express.urlencoded({ extended: true, limit: '10mb', parameterLimit: 100 
 app.use(mongoSanitize);
 
 app.use(cookieParser());
+// Dashboard sessions via HttpOnly cookie on api.khanatechnologies.co.za (helpers/sessionCookie.js)
+app.use(sessionCookieAuth(ALLOWED_ORIGINS));
 app.use(morgan('combined'));
 
 // Request size limiting
