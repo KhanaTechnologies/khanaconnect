@@ -9,7 +9,7 @@ const { flush, liveStats } = require('../middleware/bandwidthMeter');
 const GB = 1024 ** 3;
 const INCLUDED_GB = Number(process.env.RENDER_BANDWIDTH_INCLUDED_GB) || 5;
 const OVERAGE_PER_GB = Number(process.env.RENDER_BANDWIDTH_OVERAGE_PER_GB) || 0.15;
-const TOP_DIMS = ['route', 'file', 'origin', 'client', 'agent', 'status', 'apitoken', 'failed'];
+const TOP_DIMS = ['route', 'file', 'origin', 'client', 'agent', 'status', 'apitoken', 'failed', 'outbound'];
 
 function startOfUtcDay(date) {
   const d = new Date(date);

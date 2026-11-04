@@ -12,7 +12,8 @@ const bandwidthUsageSchema = new mongoose.Schema(
       type: String,
       // apitoken: routes called with a storefront API token (what public websites rely on).
       // failed: endpoint + exact status code for 4xx/5xx responses.
-      enum: ['total', 'wire', 'route', 'file', 'origin', 'client', 'agent', 'status', 'apitoken', 'failed'],
+      // outbound: bytes sent on connections this server opens, by destination host (Render "service-initiated").
+      enum: ['total', 'wire', 'route', 'file', 'origin', 'client', 'agent', 'status', 'apitoken', 'failed', 'outbound'],
       required: true,
     },
     key: { type: String, required: true, trim: true },

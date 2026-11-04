@@ -17,7 +17,7 @@ const OTHER_KEY = '(other)';
 const startedAt = new Date();
 let pending = new Map(); // `${bucketMs}|${dim}|${key}` -> { requests, bytesOut, bytesIn }
 const pendingKeyCounts = new Map(); // `${bucketMs}|${dim}` -> number of keys
-const live = { requests: 0, bytesOut: 0, bytesIn: 0, wireBytesOut: 0 };
+const live = { requests: 0, bytesOut: 0, bytesIn: 0, wireBytesOut: 0, outboundBytesOut: 0 };
 let flushTimer = null;
 let flushing = false;
 
@@ -207,6 +207,59 @@ function collectWireBytes(socket) {
   sockets.set(socket, now);
 }
 
+/**
+ * Outbound ("service-initiated") traffic: bytes this server sends on connections it opens —
+ * MongoDB Atlas, SMTP/IMAP, Meta, GitHub, Cloudinary. Render bills these separately from HTTP
+ * responses. Tag every outgoing socket with its destination host and sample bytesWritten.
+ */
+const outboundSockets = new Map(); // socket -> { host, counted }
+let outboundTracking = false;
+
+function outboundHost(args) {
+  const first = Array.isArray(args[0]) ? args[0][0] : args[0];
+  if (first && typeof first === 'object') {
+    if (first.path) return '(local socket)';
+    return String(first.servername || first.host || 'localhost').toLowerCase();
+  }
+  return String(typeof args[1] === 'string' ? args[1] : 'localhost').toLowerCase();
+}
+
+function collectOutbound(socket) {
+  const entry = outboundSockets.get(socket);
+  if (!entry) return;
+  const now = socket.bytesWritten || 0;
+  const delta = now - entry.counted;
+  if (delta > 0) {
+    live.outboundBytesOut += delta;
+    add(hourBucket(), 'outbound', entry.host.slice(0, 120), 0, delta, 0);
+  }
+  entry.counted = now;
+}
+
+function trackOutbound() {
+  if (outboundTracking) return;
+  outboundTracking = true;
+  const net = require('net');
+  const originalConnect = net.Socket.prototype.connect;
+  net.Socket.prototype.connect = function trackedConnect(...args) {
+    try {
+      if (!outboundSockets.has(this)) {
+        outboundSockets.set(this, { host: outboundHost(args), counted: 0 });
+        this.once('close', () => {
+          collectOutbound(this);
+          outboundSockets.delete(this);
+        });
+      }
+    } catch (_) {
+      /* never break a connection over metering */
+    }
+    return originalConnect.apply(this, args);
+  };
+}
+
+// Start on require: app.js loads this before mongoose.connect(), so DB sockets are tagged too.
+trackOutbound();
+
 function attachServer(server) {
   server.on('connection', (socket) => {
     sockets.set(socket, 0);
@@ -219,6 +272,7 @@ function attachServer(server) {
 
 async function flush() {
   for (const socket of sockets.keys()) collectWireBytes(socket);
+  for (const socket of outboundSockets.keys()) collectOutbound(socket);
   if (flushing || !pending.size) return;
   if (mongoose.connection.readyState !== 1) return; // keep accumulating until DB is up
 

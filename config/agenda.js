@@ -365,7 +365,11 @@ async function startJobScheduler() {
       collection: process.env.AGENDA_COLLECTION || 'agendaJobs',
       options: { dbName: process.env.MONGODB_DB_NAME || 'KhanaConnect_ProdDB' },
     },
-    processEvery: process.env.AGENDA_PROCESS_EVERY || '5 seconds',
+    // Each poll runs one MongoDB find-and-lock per job type (14 of them). At 5 seconds that was
+    // ~240k queries/day — ~5 GB/month of Render "service-initiated" bandwidth on its own.
+    // Jobs this server creates still start immediately (Agenda runs a just-saved job that is due
+    // before the next poll), and each poll looks ahead to run upcoming jobs on time.
+    processEvery: process.env.AGENDA_PROCESS_EVERY || '1 minute',
     maxConcurrency: Number(process.env.AGENDA_MAX_CONCURRENCY || 20),
     defaultConcurrency: Number(process.env.AGENDA_DEFAULT_CONCURRENCY || 5),
     defaultLockLifetime: Number(process.env.AGENDA_LOCK_MS || 10 * 60 * 1000),
