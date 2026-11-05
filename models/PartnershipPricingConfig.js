@@ -71,6 +71,8 @@ const partnershipPricingConfigSchema = new mongoose.Schema(
     addOns: { type: [addOnSchema], default: [] },
     faqs: { type: [faqSchema], default: [] },
     comparisonFeatures: { type: [comparisonRowSchema], default: [] },
+    /** Launch offer banner; defaults live in helpers/partnershipPricingDefaults.js. */
+    foundingOffer: { type: mongoose.Schema.Types.Mixed, default: undefined },
     planBuilder: {
       includedSeats: { type: mongoose.Schema.Types.Mixed, default: {} },
       extraSeatMonthlyFee: { type: Number, default: 99 },

@@ -134,6 +134,7 @@ router.put('/partnership-pricing', authenticateAdmin, wrapRoute(async (req, res)
     'addOns',
     'faqs',
     'comparisonFeatures',
+    'foundingOffer',
     'pricingConfigVersion',
   ];
 
@@ -145,6 +146,7 @@ router.put('/partnership-pricing', authenticateAdmin, wrapRoute(async (req, res)
   doc.markModified('addOns');
   doc.markModified('faqs');
   doc.markModified('comparisonFeatures');
+  doc.markModified('foundingOffer');
   await doc.save();
   invalidateQuotePricingCache();
 

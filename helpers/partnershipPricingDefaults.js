@@ -2,6 +2,19 @@ const { DEFAULT_PLAN_BUILDER, mergePlanBuilderConfig } = require('./planBuilderP
 
 const PRICING_CONFIG_VERSION = 17;
 
+/**
+ * Launch offer for the first partners: shown as a banner on the homepage and
+ * pricing page while enabled and spots remain. Edited at /dashboard/website-pricing.
+ */
+const DEFAULT_FOUNDING_OFFER = {
+  enabled: true,
+  title: 'Founding partner offer',
+  details:
+    'No setup fee and your monthly fee locked for 12 months. In return, we ask for an honest review after 90 days and permission to share your results.',
+  spotsTotal: 5,
+  spotsTaken: 0,
+};
+
 /** Default partnership pricing for the SA market. */
 const DEFAULT_PARTNERSHIP_PRICING = {
   pricingConfigVersion: PRICING_CONFIG_VERSION,
@@ -260,6 +273,7 @@ const DEFAULT_PARTNERSHIP_PRICING = {
       sortOrder: 6,
     },
   ],
+  foundingOffer: { ...DEFAULT_FOUNDING_OFFER },
   planBuilder: {
     includedSeats: { ...DEFAULT_PLAN_BUILDER.includedSeats },
     extraSeatMonthlyFee: DEFAULT_PLAN_BUILDER.extraSeatMonthlyFee,
@@ -283,6 +297,19 @@ const DEFAULT_PARTNERSHIP_PRICING = {
   ],
 };
 
+function mergeFoundingOffer(src) {
+  const o = { ...DEFAULT_FOUNDING_OFFER, ...(src && typeof src === 'object' ? src : {}) };
+  const spotsTotal = Math.max(0, Math.round(Number(o.spotsTotal) || 0));
+  const spotsTaken = Math.min(spotsTotal, Math.max(0, Math.round(Number(o.spotsTaken) || 0)));
+  return {
+    enabled: !!o.enabled,
+    title: String(o.title || '').slice(0, 80),
+    details: String(o.details || '').slice(0, 400),
+    spotsTotal,
+    spotsTaken,
+  };
+}
+
 function mergePartnershipPricing(doc) {
   const src = doc && typeof doc.toObject === 'function' ? doc.toObject() : doc || {};
   const defaults = DEFAULT_PARTNERSHIP_PRICING;
@@ -300,6 +327,7 @@ function mergePartnershipPricing(doc) {
         ? src.comparisonFeatures
         : defaults.comparisonFeatures,
     planBuilder: mergePlanBuilderConfig({ planBuilder: src.planBuilder || defaults.planBuilder }),
+    foundingOffer: mergeFoundingOffer(src.foundingOffer),
     pricingConfigVersion: src.pricingConfigVersion ?? defaults.pricingConfigVersion,
     updatedAt: src.updatedAt,
     updatedBy: src.updatedBy,
