@@ -1,16 +1,17 @@
 const { DEFAULT_PLAN_BUILDER, mergePlanBuilderConfig } = require('./planBuilderPricing');
 
-const PRICING_CONFIG_VERSION = 15;
+const PRICING_CONFIG_VERSION = 17;
 
 /** Default partnership pricing for the SA market. */
 const DEFAULT_PARTNERSHIP_PRICING = {
   pricingConfigVersion: PRICING_CONFIG_VERSION,
-  showPublishedPrices: false,
+  showPublishedPrices: true,
   currency: 'ZAR',
   currencySymbol: 'R',
   billingNote:
-    'Pricing depends on scope and features. Request a personalised estimate for exact setup and monthly fees — most partnerships start from R450/month after go-live. Each plan includes monthly WhatsApp/ads credits (unused expire at month-end); top up prepaid packs when you need more.',
-  vatNote: '',
+    'Monthly fees are billed after go-live. The setup fee can be paid up front or split over 6 equal monthly payments. Each plan includes monthly WhatsApp/ads credits (unused expire at month-end); top up prepaid packs when you need more.',
+  vatNote:
+    'Khana is not registered for VAT. Setup fees, monthly fees, and credit packs do not have VAT added.',
   tiers: [
     {
       id: 'starter',
@@ -20,15 +21,15 @@ const DEFAULT_PARTNERSHIP_PRICING = {
         'Get online fast with a professional presence. A good fit when you are launching and need reliability without enterprise pricing.',
       setupFee: 1999,
       monthlyFee: 450,
-      setupLabel: 'Setup quoted on enquiry',
-      monthlyLabel: 'From R450/mo',
+      setupLabel: 'R1,999 setup',
+      setupInstalments: 6,
+      monthlyLabel: 'R450/mo',
       featured: false,
       active: true,
       sortOrder: 0,
       highlights: [
         'Up to 5-page business website',
-        'Online store',
-        'Online booking system',
+        'Online store or booking system',
         '50 WhatsApp/ads credits included each month (unused expire)',
         'WhatsApp confirmations & updates (we help set up)',
         'Managed hosting & SSL',
@@ -45,8 +46,9 @@ const DEFAULT_PARTNERSHIP_PRICING = {
         'For established small businesses that need a polished site with ongoing management and local support.',
       setupFee: 3499,
       monthlyFee: 650,
-      setupLabel: 'Setup quoted on enquiry',
-      monthlyLabel: 'Quoted on enquiry',
+      setupLabel: 'R3,499 setup',
+      setupInstalments: 6,
+      monthlyLabel: 'R650/mo',
       featured: false,
       active: true,
       sortOrder: 1,
@@ -54,12 +56,12 @@ const DEFAULT_PARTNERSHIP_PRICING = {
         'Up to 10-page website',
         'Everything in Starter',
         '100 WhatsApp/ads credits included each month (unused expire)',
-        'Online store & booking system',
+        'Online store or booking system',
         'WhatsApp customer alerts',
         'Blog or news section',
         'SEO-ready structure',
         'Priority email support',
-        'Quarterly content update allowance',
+        'One small content update per quarter, using text and images you supply',
       ],
     },
     {
@@ -70,8 +72,9 @@ const DEFAULT_PARTNERSHIP_PRICING = {
         'Our most popular plan. Full Revenue Command Center to recover sales, segment customers, and run campaigns on top of your store or bookings.',
       setupFee: 6999,
       monthlyFee: 899,
-      setupLabel: 'Setup quoted on enquiry',
-      monthlyLabel: 'Quoted on enquiry',
+      setupLabel: 'R6,999 setup',
+      setupInstalments: 6,
+      monthlyLabel: 'R899/mo',
       featured: true,
       active: true,
       sortOrder: 2,
@@ -94,19 +97,20 @@ const DEFAULT_PARTNERSHIP_PRICING = {
         'For growing businesses running products and appointments together, with full revenue and marketing tools.',
       setupFee: 14999,
       monthlyFee: 1799,
-      setupLabel: 'Setup quoted on enquiry',
-      monthlyLabel: 'Quoted on enquiry',
+      setupLabel: 'R14,999 setup',
+      setupInstalments: 6,
+      monthlyLabel: 'R1,799/mo',
       featured: false,
       active: true,
       sortOrder: 3,
       highlights: [
         'Everything in Growth',
         '500 WhatsApp/ads credits included each month (unused expire)',
-        'Store + bookings combined',
-        'Mixed-business dashboard permissions',
-        'Advanced campaigns & preorder tools',
-        'Bundles, upsells & social proof',
-        'Dedicated onboarding manager',
+        'Store and bookings together',
+        'Guided onboarding with your team',
+        'Advanced campaigns and preorder tools',
+        'Bundles, upsells, and social proof',
+        'Priority support',
       ],
     },
     {
@@ -136,17 +140,17 @@ const DEFAULT_PARTNERSHIP_PRICING = {
     {
       id: 'mixed-module',
       name: 'Mixed business module',
-      description: 'Add bookings to a store or products to a booking site',
-      monthlyFee: 299,
+      description: 'Not sold separately. Store and bookings together is the Scale plan.',
+      monthlyFee: 0,
       onceOffFee: null,
       pricingType: 'monthly',
-      active: true,
+      active: false,
       sortOrder: 0,
     },
     {
       id: 'revenue-tools',
       name: 'Revenue Command Center',
-      description: 'Cart recovery, customer segments, campaigns, and revenue insights (add-on for store or bookings)',
+      description: 'For an existing Starter or Launch account. Already included on Growth and Scale.',
       monthlyFee: 99,
       onceOffFee: null,
       pricingType: 'monthly',
@@ -210,7 +214,7 @@ const DEFAULT_PARTNERSHIP_PRICING = {
     {
       question: 'How much does Khana cost?',
       answer:
-        'We quote based on your scope — website size, store, bookings, team seats, and add-ons. Use the plan estimator on our site for a ballpark figure, then book a short call to confirm. Most partnerships start from R450/month after launch, and include monthly WhatsApp/ads credits (unused expire). Extra usage is topped up with prepaid credit packs.',
+        'Starter is R450/month, Launch R650, Growth R899 and Scale R1,799, plus a once-off setup fee that you can split over 6 months. Custom systems and Enterprise are quoted on scope. Every plan includes monthly WhatsApp/ads credits (unused expire); extra usage is topped up with prepaid credit packs.',
       sortOrder: 0,
     },
     {
@@ -228,7 +232,7 @@ const DEFAULT_PARTNERSHIP_PRICING = {
     {
       question: 'Can I start small and upgrade later?',
       answer:
-        'Yes. Many partners begin on Starter or Launch and upgrade to Growth or Scale when ready to sell or take bookings. We migrate your existing content into the expanded platform.',
+        'Yes. Starter and Launch already include a store or bookings. Move to Growth when you want revenue tools, and to Scale when you want the store and bookings together.',
       sortOrder: 2,
     },
     {
@@ -274,7 +278,8 @@ const DEFAULT_PARTNERSHIP_PRICING = {
     { label: 'Customer segments & promos', starter: false, launch: false, growth: true, scale: true, enterprise: true },
     { label: 'Preorder & advanced campaigns', starter: false, launch: false, growth: true, scale: true, enterprise: true },
     { label: 'Custom requested integrations (within reason)', starter: false, launch: false, growth: false, scale: false, enterprise: true },
-    { label: 'Dedicated account manager', starter: false, launch: false, growth: false, scale: true, enterprise: true },
+    { label: 'Guided onboarding', starter: false, launch: false, growth: true, scale: true, enterprise: true },
+    { label: 'Dedicated account manager', starter: false, launch: false, growth: false, scale: false, enterprise: true },
   ],
 };
 

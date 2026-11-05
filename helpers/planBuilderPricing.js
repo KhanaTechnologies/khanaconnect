@@ -121,9 +121,16 @@ function resolveTierId(selections) {
   }
 
   const established = selections.siteSize === 'established';
+  const revenue = !!selections.needsRevenueTools && (store || bookings);
 
+  // Both modules is the Scale offer (mixed store + bookings). Do not also add the mixed-module fee.
   if (store && bookings) {
-    return established ? 'scale' : 'launch';
+    return 'scale';
+  }
+
+  // Revenue Command Center is included on Growth — recommend that plan instead of a cheaper tier plus an add-on.
+  if (revenue) {
+    return 'growth';
   }
 
   if (store || bookings) {
@@ -135,8 +142,8 @@ function resolveTierId(selections) {
 
 const TIERS_WITH_REVENUE_INCLUDED = new Set(['growth', 'scale']);
 
-/** Monthly add-ons billed separately — custom monthly is the partnership base via resolveMonthlyPartnershipFee. */
-const MONTHLY_ADDON_SKIP_IDS = new Set(['custom-system']);
+/** Monthly add-ons billed separately. Mixed store + bookings is the Scale plan, not a second fee. */
+const MONTHLY_ADDON_SKIP_IDS = new Set(['custom-system', 'mixed-module']);
 
 function applyRevenueToolsAddOn(selections, tierId, addOnLines, monthlyAddOns) {
   const store = !!selections.needsStore;
@@ -181,10 +188,11 @@ function applyCustomSystemSetup(selections, addOnLines) {
 }
 
 function resolveMonthlyPartnershipFee(tier, selections) {
-  if (selections.needsCustom) {
+  const fee = tier.monthlyFee ?? 0;
+  // Custom-only quotes use the R450 base in the custom branch. A store or bookings plan keeps its own monthly fee.
+  if (selections.needsCustom && !selections.needsStore && !selections.needsBookings) {
     return PLAN_BUILDER_PRICES.customSystemMonthly;
   }
-  const fee = tier.monthlyFee ?? 0;
   return Math.max(MIN_MONTHLY_PARTNERSHIP, fee);
 }
 
@@ -207,7 +215,7 @@ function buildWebsiteRebuildNote(selections) {
   if (url) note += ` (${url})`;
   if (path === 'keep_hosting_free_rebuild') {
     note +=
-      '. You chose to keep your hosting and domain with a Khana website rebuild — your plan setup fee is waived on this estimate (custom add-ons may still apply).';
+      '. You chose to keep your hosting and domain. This estimate takes R1,999 off the plan setup fee. Custom add-ons are still quoted separately.';
   } else if (path === 'full_khana') {
     note +=
       '. You asked about a full Khana platform rebuild with store, bookings, revenue tools, and branded email on one managed partnership.';
@@ -221,23 +229,15 @@ function buildWebsiteRebuildNote(selections) {
 
 function applyExistingWebsiteSetupWaiver(selections, tierSetupFee, addOnLines) {
   const path = resolveExistingWebsitePath(selections);
-  if (path !== 'keep_hosting_free_rebuild' || !(tierSetupFee > 0)) {
+  const waiver = Math.min(1999, Number(tierSetupFee) || 0);
+  if (path !== 'keep_hosting_free_rebuild' || !(waiver > 0)) {
     return 0;
   }
   addOnLines.push({
-    name: 'Website rebuild — keep your hosting & domain (setup included)',
-    onceOff: 0,
+    name: 'Keep your hosting and domain — R1,999 off setup',
+    onceOff: -waiver,
   });
-  addOnLines.push({
-    name: `Plan setup fee waived (${formatZarForNote(tierSetupFee)})`,
-    onceOff: 0,
-  });
-  return tierSetupFee;
-}
-
-function formatZarForNote(amount) {
-  if (amount == null || Number.isNaN(Number(amount))) return 'on enquiry';
-  return `R${Number(amount).toLocaleString('en-ZA')}`;
+  return waiver;
 }
 
 function appendEstimateNotes(selections, parts) {

@@ -51,6 +51,16 @@ router.get('/overview', authenticateClient, wrapRoute(async (req, res) => {
   res.json({ success: true, ...overview });
 }));
 
+// ─── Value summary (dashboard home): sales, bookings, recovered carts ───
+router.get('/value-summary', authenticateClient, wrapRoute(async (req, res) => {
+  const { buildValueReport } = require('../helpers/valueReport');
+  const days = Math.min(Math.max(parseInt(req.query.days, 10) || 30, 1), 365);
+  const to = new Date();
+  const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000);
+  const report = await buildValueReport(req.clientId, from, to);
+  res.json({ success: true, days, ...report });
+}));
+
 // ─── Settings ───
 router.get('/settings', authenticateClient, wrapRoute(async (req, res) => {
   const client = await loadClient(req.clientId);

@@ -1,5 +1,7 @@
 const mongoose = require('mongoose');
 
+const { Schema } = mongoose;
+
 const tierSchema = new mongoose.Schema(
   {
     id: { type: String, required: true },
@@ -10,6 +12,8 @@ const tierSchema = new mongoose.Schema(
     monthlyFee: { type: Number, default: null },
     setupLabel: { type: String, default: '' },
     monthlyLabel: { type: String, default: '' },
+    /** Setup fee may be paid in this many equal monthly instalments (0 = up front only). */
+    setupInstalments: { type: Number, default: 0, min: 0, max: 24 },
     featured: { type: Boolean, default: false },
     active: { type: Boolean, default: true },
     sortOrder: { type: Number, default: 0 },
@@ -44,11 +48,12 @@ const faqSchema = new mongoose.Schema(
 const comparisonRowSchema = new mongoose.Schema(
   {
     label: { type: String, required: true },
-    starter: { type: Boolean, default: false },
-    launch: { type: Boolean, default: false },
-    growth: { type: Boolean, default: false },
-    scale: { type: Boolean, default: false },
-    enterprise: { type: Boolean, default: false },
+    // true/false for a tick or cross, or a short value such as "50" (WhatsApp credits per month).
+    starter: { type: Schema.Types.Mixed, default: false },
+    launch: { type: Schema.Types.Mixed, default: false },
+    growth: { type: Schema.Types.Mixed, default: false },
+    scale: { type: Schema.Types.Mixed, default: false },
+    enterprise: { type: Schema.Types.Mixed, default: false },
   },
   { _id: false, strict: false }
 );

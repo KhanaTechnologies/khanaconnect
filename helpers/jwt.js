@@ -102,6 +102,7 @@ const authJwt = () => {
         methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
       },
       { url: new RegExp(`^${apiEsc}/public/partnership-pricing/?$`), methods: ['GET', 'OPTIONS'] },
+      { url: new RegExp(`^${apiEsc}/public/case-studies/?$`), methods: ['GET', 'OPTIONS'] },
       { url: new RegExp(`^${apiEsc}/public/partnership-quote/[^/]+/?$`), methods: ['GET', 'PATCH', 'OPTIONS'] },
       { url: new RegExp(`^${apiEsc}/public/partnership-quote/[^/]+/submit/?$`), methods: ['POST', 'OPTIONS'] },
       { url: new RegExp(`^${apiEsc}/legal/policies/?$`), methods: ['GET', 'OPTIONS'] },

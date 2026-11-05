@@ -89,6 +89,10 @@ const clientSchema = new Schema({
   emailPrimaryColor: { type: String, default: '', trim: true },
   /** Public URL for logo in transactional email banner. Empty = company name text. */
   emailLogoUrl: { type: String, default: '', trim: true },
+  /** Monthly "what Khana did for you" email (jobs/handlers/processMonthlyValueReports.js). */
+  valueReportEmails: { type: Boolean, default: true },
+  /** Last month reported, as 'YYYY-MM' — stops duplicate sends. */
+  valueReportLastSent: { type: String, default: '' },
   /** Monthly partnership billing — access gated when paidUntil lapses. */
   subscription: {
     status: {

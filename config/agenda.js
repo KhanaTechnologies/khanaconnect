@@ -16,6 +16,7 @@ const JOB_NAMES = {
   SOCIAL_POST: 'meta-social:publish',
   WHATSAPP_WINDOW_ALERT: 'whatsapp-inbox:window-close-alert',
   MONTHLY_INCLUDED_CREDITS: 'billing:monthly-included-credits',
+  MONTHLY_VALUE_REPORTS: 'reports:monthly-value',
 };
 
 let agendaInstance = null;
@@ -121,6 +122,7 @@ function registerJobHandlers(agenda) {
   const { processScheduledSocialPost } = require('../jobs/handlers/processScheduledSocialPost');
   const { processWhatsAppWindowCloseAlerts } = require('../jobs/handlers/processWhatsAppWindowCloseAlerts');
   const { processMonthlyIncludedCredits } = require('../jobs/handlers/processMonthlyIncludedCredits');
+  const { processMonthlyValueReports } = require('../jobs/handlers/processMonthlyValueReports');
 
   agenda.define(
     JOB_NAMES.EVENT_BATCH,
@@ -314,6 +316,12 @@ function registerJobHandlers(agenda) {
     }
   );
 
+  agenda.define(
+    JOB_NAMES.MONTHLY_VALUE_REPORTS,
+    { concurrency: 1, lockLifetime: Number(process.env.AGENDA_LOCK_MS || 30 * 60 * 1000) },
+    async () => processMonthlyValueReports()
+  );
+
   agenda.on('start', (job) => {
     if (job.attrs.name === JOB_NAMES.OUTBOUND_EMAIL) {
       console.log(`📤 Outbound email job ${job.attrs._id} started`);
@@ -401,6 +409,10 @@ async function startJobScheduler() {
   const monthlyCreditsInterval = process.env.MONTHLY_INCLUDED_CREDITS_INTERVAL || '1 day';
   await agendaInstance.every(monthlyCreditsInterval, JOB_NAMES.MONTHLY_INCLUDED_CREDITS, {});
   console.log(`💳 Monthly included credits job scheduled every ${monthlyCreditsInterval}`);
+
+  const valueReportInterval = process.env.MONTHLY_VALUE_REPORT_INTERVAL || '6 hours';
+  await agendaInstance.every(valueReportInterval, JOB_NAMES.MONTHLY_VALUE_REPORTS, {});
+  console.log(`📈 Monthly value report job scheduled every ${valueReportInterval}`);
 
   console.log('✅ MongoDB job scheduler (Agenda) started');
   return agendaInstance;

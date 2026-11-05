@@ -48,7 +48,13 @@ async function getOrCreateConfig() {
     doc.markModified('addOns');
     doc.markModified('faqs');
     doc.markModified('comparisonFeatures');
-    await doc.save();
+    try {
+      await doc.save();
+    } catch (err) {
+      // A bad saved row must not take the public pricing page down; serve the
+      // migrated config from memory and retry the save on the next request.
+      console.error('[pricing] config migration save failed:', err.message);
+    }
   }
 
   return doc;
