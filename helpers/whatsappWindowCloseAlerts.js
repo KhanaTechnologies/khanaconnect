@@ -9,6 +9,19 @@ const { sendWhatsAppWindowCloseAlertEmail } = require('../utils/sendWhatsAppWind
 const SESSION_HOURS = Number(process.env.WHATSAPP_SESSION_HOURS || 24);
 const WARN_HOURS = Number(process.env.WHATSAPP_WINDOW_ALERT_HOURS || 4);
 const MAX_THREADS_PER_EMAIL = 20;
+/**
+ * Messages the platform sends on its own. They do not count as the business replying,
+ * so a chat that only got an auto-reply or an order/booking message still raises an alert.
+ */
+const AUTOMATIC_TEMPLATES = [
+  'order_confirmation',
+  'order_status_update',
+  'booking_confirmation',
+  'booking_reminder',
+  'booking_reminder_actions',
+  'account_verification',
+  'owner_new_activity',
+];
 
 function isAlertsDisabled() {
   const flag = process.env.WHATSAPP_WINDOW_ALERTS_DISABLED;
@@ -69,6 +82,8 @@ async function findUnansweredClosingThreads(clientId, { now = new Date() } = {})
           contact_wa_id: { $in: contactIds },
           direction: 'outbound',
           deleted_at: null,
+          'raw.auto_reply': { $ne: true },
+          template_name: { $nin: AUTOMATIC_TEMPLATES },
         },
       },
       { $group: { _id: '$contact_wa_id', lastOutboundAt: { $max: '$timestamp' } } },

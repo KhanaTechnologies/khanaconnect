@@ -452,7 +452,15 @@ class WhatsAppNotifyService {
     }
 
     try {
-      await WhatsAppInboxService.sendTextReply({ clientId: tenant, to: from, text: reply });
+      // A reschedule request still needs a person to reply, so mark our answer as automatic:
+      // the missed-message email then fires if nobody follows up. A Confirm tap needs nothing more.
+      await WhatsAppInboxService.sendTextReply({
+        clientId: tenant,
+        to: from,
+        text: reply,
+        autoReplyMeta:
+          action === 'reschedule' ? { ruleId: 'booking_reschedule', triggerWamid: String(rawMsg?.id || '') } : null,
+      });
     } catch (e) {
       console.warn('[whatsapp notify] button reply not sent:', e.message);
     }
