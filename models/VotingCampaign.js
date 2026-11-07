@@ -334,7 +334,6 @@ const votingCampaignSchema = new mongoose.Schema({
 votingCampaignSchema.index({ clientId: 1, campaignStatus: 1 });
 votingCampaignSchema.index({ clientId: 1, campaignType: 1 });
 votingCampaignSchema.index({ clientId: 1, startDate: 1, endDate: 1 });
-votingCampaignSchema.index({ campaignId: 1 });
 votingCampaignSchema.index({ campaignStatus: 1, endDate: 1 });
 votingCampaignSchema.index({ 'items.itemId': 1 });
 votingCampaignSchema.index({ 'items.images.url': 1 });

@@ -259,7 +259,6 @@ const preorderPledgeSchema = new mongoose.Schema({
 });
 
 // Indexes
-preorderPledgeSchema.index({ preorderId: 1 });
 preorderPledgeSchema.index({ userId: 1, createdAt: -1 });
 preorderPledgeSchema.index({ productId: 1, status: 1 });
 preorderPledgeSchema.index({ campaignId: 1, status: 1 });

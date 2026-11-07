@@ -308,7 +308,6 @@ const campaignSchema = new mongoose.Schema({
 campaignSchema.index({ clientId: 1, status: 1 });
 campaignSchema.index({ clientId: 1, campaignType: 1 });
 campaignSchema.index({ clientId: 1, startDate: 1, endDate: 1 });
-campaignSchema.index({ campaignId: 1 });
 campaignSchema.index({ status: 1, endDate: 1 });
 campaignSchema.index({ categories: 1 });
 
