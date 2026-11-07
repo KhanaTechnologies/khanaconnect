@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const Client = require('../../models/client');
 const SaasBillingAccount = require('../../models/SaasBillingAccount');
 const SaasTransaction = require('../../models/SaasTransaction');
+const SaasUsageEvent = require('../../models/SaasUsageEvent');
 const PricingService = require('./PricingService');
 const { listCreditPacks, prepaidCheaperHint, getCreditPack, creditsForTopupPayment } = require('../../helpers/creditPacks');
 const {
@@ -601,6 +602,60 @@ class BillingService {
         pool: 'purchased',
       },
     });
+  }
+
+  /**
+   * Give back the credits for one usage event (e.g. a WhatsApp message Meta reports as failed).
+   * If billing has not run yet, the queued event is voided so it is never charged.
+   * Credits return to the pools they came from. Safe to call more than once.
+   */
+  static async refundUsage({ clientId, sourceRef, reason = '' }) {
+    const id = String(clientId || '').trim();
+    const ref = String(sourceRef || '').trim();
+    if (!id || !ref) return { refunded: 0, skipped: 'missing ids' };
+
+    const voided = await SaasUsageEvent.updateOne(
+      { client_id: id, source_ref: ref, status: 'queued', 'metadata.voided': { $ne: true } },
+      { $set: { 'metadata.voided': true, 'metadata.voidReason': String(reason).slice(0, 300) } }
+    );
+    if (voided.modifiedCount) return { refunded: 0, voided: true };
+
+    const deduction = await SaasTransaction.findOne({
+      client_id: id,
+      reference: ref,
+      type: 'deduction',
+      'metadata.refunded': { $ne: true },
+    });
+    const credits = Number(deduction?.credits || 0);
+    if (!deduction || credits <= 0) return { refunded: 0, skipped: 'nothing charged' };
+
+    // Claim first so two webhook deliveries for the same message cannot refund twice.
+    const claim = await SaasTransaction.updateOne(
+      { _id: deduction._id, 'metadata.refunded': { $ne: true } },
+      { $set: { 'metadata.refunded': true, 'metadata.refundReason': String(reason).slice(0, 300) } }
+    );
+    if (!claim.modifiedCount) return { refunded: 0, skipped: 'already refunded' };
+
+    const fromIncluded = Number(deduction.metadata?.fromIncluded ?? credits) || 0;
+    const fromPurchased = Number(deduction.metadata?.fromPurchased ?? 0) || 0;
+    const account = await this.ensureAccount(id);
+    account.included_credit_balance = Number(account.included_credit_balance || 0) + fromIncluded;
+    account.purchased_credit_balance = Number(account.purchased_credit_balance || 0) + fromPurchased;
+    account.total_spent = Math.max(0, Number((Number(account.total_spent || 0) - credits).toFixed(4)));
+    syncTotalBalance(account);
+    await account.save();
+
+    await SaasTransaction.create({
+      client_id: id,
+      type: 'refund',
+      amount: credits,
+      credits,
+      method: 'internal',
+      reference: `refund-${ref}`,
+      status: 'success',
+      metadata: { refundOf: ref, reason: String(reason).slice(0, 300), fromIncluded, fromPurchased },
+    });
+    return { refunded: credits };
   }
 
   static async chargeUsage({ clientId, service, messageType, units = 1, sourceRef, metadata = {} }) {

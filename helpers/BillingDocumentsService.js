@@ -325,7 +325,7 @@ class BillingDocumentsService {
 
     let opening = 0;
     for (const t of allBefore) {
-      if (t.type === 'topup') opening += Number(t.credits || 0);
+      if (t.type === 'topup' || t.type === 'refund') opening += Number(t.credits || 0);
       else if (t.type === 'deduction') opening -= Number(t.credits || 0);
     }
     opening = Number(opening.toFixed(4));
@@ -346,12 +346,16 @@ class BillingDocumentsService {
     for (const t of rows) {
       const meta = t.metadata || {};
       const isTopup = t.type === 'topup';
+      const isRefund = t.type === 'refund';
       const credits = Number(t.credits || 0);
       const applied = t.status === 'success';
       if (applied && isTopup) {
         running += credits;
         creditsIn += credits;
         zarIn += Number(t.amount || 0);
+      } else if (applied && isRefund) {
+        running += credits;
+        creditsIn += credits;
       } else if (applied && !isTopup) {
         running -= credits;
         creditsOut += credits;
@@ -366,9 +370,11 @@ class BillingDocumentsService {
               ? `Included credits expired (unused) · ${t.reference}`
               : isTopup
                 ? `Top-up ${t.method}${meta.packId ? ` (${meta.packId})` : ''}${meta.invoiceNumber ? ` · ${meta.invoiceNumber}` : ''} · ${t.reference}`
-                : `Usage ${meta.service || 'service'}${meta.messageType ? `/${meta.messageType}` : ''} · ${t.reference}`,
-        creditsIn: isTopup && applied ? credits : 0,
-        creditsOut: !isTopup && applied ? credits : 0,
+                : isRefund
+                  ? `Refund: ${meta.reason || 'message not delivered'} · ${t.reference}`
+                  : `Usage ${meta.service || 'service'}${meta.messageType ? `/${meta.messageType}` : ''} · ${t.reference}`,
+        creditsIn: (isTopup || isRefund) && applied ? credits : 0,
+        creditsOut: !isTopup && !isRefund && applied ? credits : 0,
         amountZar: isTopup ? Number(t.amount || 0) : 0,
         status: t.status,
         balanceAfter: applied ? Number(running.toFixed(4)) : null,

@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const saasTransactionSchema = new mongoose.Schema(
   {
     client_id: { type: String, required: true, index: true },
-    type: { type: String, enum: ['topup', 'deduction'], required: true, index: true },
+    type: { type: String, enum: ['topup', 'deduction', 'refund'], required: true, index: true },
     amount: { type: Number, required: true, min: 0 },
     credits: { type: Number, required: true, min: 0 },
     method: {

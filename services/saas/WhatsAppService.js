@@ -427,9 +427,21 @@ class WhatsAppService {
       );
     }
 
-    await this.assertCreditsAvailable(clientId, messageType);
-
     const { account, resolvedClientId } = await this.getClientAccount(clientId);
+
+    // Meta does not bill utility templates sent while the customer's 24-hour window is open,
+    // so neither do we.
+    let freeInWindow = false;
+    if (messageType === 'utility') {
+      try {
+        const WhatsAppNotifyService = require('./WhatsAppNotifyService');
+        freeInWindow = await WhatsAppNotifyService.isServiceWindowOpen(clientId, e164, account.phone_number_id);
+      } catch {
+        freeInWindow = false;
+      }
+    }
+    if (!freeInWindow) await this.assertCreditsAvailable(clientId, messageType);
+
     const token = decrypt(account.access_token_encrypted);
     const url = `${WA_API_BASE}/${account.phone_number_id}/messages`;
 
@@ -506,12 +518,29 @@ class WhatsAppService {
       console.warn('[whatsapp] inbox outbound record failed:', inboxErr.message);
     }
 
-    await this.recordWhatsAppUsage({
-      clientId: billingClientId,
-      messageType,
-      sourceRef: messageId,
-      metadata: { to: e164, templateName, resolvedClientId, channel: 'template' },
-    });
+    if (freeInWindow) {
+      // Still counted in usage stats, never billed.
+      try {
+        await SaasUsageEvent.create({
+          client_id: billingClientId,
+          service: 'whatsapp',
+          message_type: messageType,
+          units: 1,
+          source_ref: String(messageId),
+          status: 'processed',
+          metadata: { to: e164, templateName, channel: 'template', freeInWindow: true, billedCredits: 0 },
+        });
+      } catch (usageErr) {
+        console.warn('[whatsapp] usage record failed:', usageErr.message);
+      }
+    } else {
+      await this.recordWhatsAppUsage({
+        clientId: billingClientId,
+        messageType,
+        sourceRef: messageId,
+        metadata: { to: e164, templateName, resolvedClientId, channel: 'template' },
+      });
+    }
 
     return response.data;
   }
@@ -543,13 +572,15 @@ class WhatsAppService {
         bodyTextParams([
           companyName || 'Store',
           orderRef || '—',
-          status || 'updated',
+          // "processing" → "being prepared", "shipped" → "on its way"
+          require('./WhatsAppNotifyService').orderStatusWords(status),
         ]),
       ],
     });
   }
 
   static async notifyBookingConfirmation({ clientId, to, companyName, bookingRef, when }) {
+    const { displayRef } = require('./WhatsAppNotifyService');
     return this.sendTemplateMessage({
       clientId,
       to,
@@ -558,7 +589,7 @@ class WhatsAppService {
       components: [
         bodyTextParams([
           companyName || 'Business',
-          bookingRef || '—',
+          displayRef(bookingRef),
           when || '—',
         ]),
       ],
@@ -566,18 +597,33 @@ class WhatsAppService {
   }
 
   static async notifyBookingReminder({ clientId, to, companyName, bookingRef, when }) {
+    const WhatsAppNotifyService = require('./WhatsAppNotifyService');
+    const id = String(bookingRef || '').trim();
+    const params = bodyTextParams([
+      companyName || 'Business',
+      WhatsAppNotifyService.displayRef(id),
+      when || '—',
+    ]);
+    // Real bookings get Confirm / Reschedule buttons once that template is approved.
+    // Waitlist notices (no booking id) keep the plain reminder.
+    if (
+      /^[a-f0-9]{24}$/i.test(id) &&
+      (await WhatsAppNotifyService.hasApprovedTemplate(clientId, WhatsAppNotifyService.REMINDER_ACTIONS_TEMPLATE))
+    ) {
+      return this.sendTemplateMessage({
+        clientId,
+        to,
+        templateName: WhatsAppNotifyService.REMINDER_ACTIONS_TEMPLATE,
+        messageType: 'utility',
+        components: [params, ...WhatsAppNotifyService.reminderButtons(id)],
+      });
+    }
     return this.sendTemplateMessage({
       clientId,
       to,
       templateName: 'booking_reminder',
       messageType: 'utility',
-      components: [
-        bodyTextParams([
-          companyName || 'Business',
-          bookingRef || '—',
-          when || '—',
-        ]),
-      ],
+      components: [params],
     });
   }
 
@@ -600,7 +646,14 @@ class WhatsAppService {
    * Soft-fail wrapper: never throws to callers. Returns { ok, skipped?, error?, data? }.
    * @param {'order_confirmation'|'order_status'|'booking_confirmation'|'booking_reminder'|'verification'} kind
    */
-  static async safeNotify(kind, opts) {
+  static async safeNotify(kind, opts, { attempt = 1 } = {}) {
+    const WhatsAppNotifyService = require('./WhatsAppNotifyService');
+    if (attempt === 1) {
+      // Owner alert is independent of whether the customer message goes out.
+      WhatsAppNotifyService.afterCustomerNotify(kind, opts).catch((e) =>
+        console.warn('[whatsapp] owner alert hook failed:', e.message)
+      );
+    }
     try {
       const clientId = opts.clientId;
       if (!(await this.clientAllowsNotifications(clientId))) {
@@ -631,10 +684,16 @@ class WhatsAppService {
         default:
           throw new Error(`Unknown WhatsApp notify kind: ${kind}`);
       }
+      WhatsAppNotifyService.recordSuccess(clientId).catch(() => {});
       return { ok: true, data };
     } catch (err) {
-      console.error(`[whatsapp] ${kind} failed:`, err.response?.data || err.message);
-      return { ok: false, error: err.message };
+      console.error(`[whatsapp] ${kind} failed (attempt ${attempt}):`, err.response?.data || err.message);
+      try {
+        return await WhatsAppNotifyService.handleSendFailure(kind, opts, err, attempt);
+      } catch (hookErr) {
+        console.warn('[whatsapp] failure handling failed:', hookErr.message);
+        return { ok: false, error: err.message };
+      }
     }
   }
 
@@ -658,21 +717,12 @@ class WhatsAppService {
     return this.safeNotify('verification', opts);
   }
 
+  /** "Thu, 6 Nov 2026 at 10:00 (Gel overlay with Thandi)", in South African time. */
   static formatBookingWhen(booking) {
-    if (!booking) return '—';
     try {
-      const d = new Date(booking.date);
-      const dateStr = Number.isNaN(d.getTime())
-        ? String(booking.date || '—')
-        : d.toLocaleDateString('en-ZA', {
-            weekday: 'short',
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric',
-          });
-      return booking.time ? `${dateStr} ${booking.time}` : dateStr;
+      return require('./WhatsAppNotifyService').formatBookingWhen(booking);
     } catch {
-      return String(booking.date || '—');
+      return String(booking?.date || '—');
     }
   }
 
@@ -1098,6 +1148,8 @@ class WhatsAppService {
       'booking_confirmation',
       'booking_reminder',
       'account_verification',
+      'booking_reminder_actions',
+      'owner_new_activity',
     ];
     const byName = new Map(templates.map((t) => [t.name, t]));
     const requiredStatus = required.map((name) => ({
@@ -1161,6 +1213,17 @@ class WhatsAppService {
         ok: clientId === 'Khana' || creditBalance > 0,
       },
     ];
+    const failingSends = Number(account?.notify_failure_count || 0);
+    if (account) {
+      checks.push({
+        id: 'recent_sends',
+        label:
+          failingSends > 0
+            ? `Last ${failingSends === 1 ? 'automatic message' : `${failingSends} automatic messages`} failed`
+            : 'Automatic messages sending',
+        ok: failingSends === 0,
+      });
+    }
     const score = Math.round((checks.filter((c) => c.ok).length / checks.length) * 100);
 
     return {
@@ -1173,6 +1236,15 @@ class WhatsAppService {
       waba_id: account?.waba_id || '',
       mode: account?.mode || '',
       notifications_enabled: !!client?.whatsapp?.notificationsEnabled,
+      owner_alerts_enabled: !!client?.whatsapp?.ownerAlertsEnabled,
+      owner_alert_phone: client?.whatsapp?.ownerAlertPhone || '',
+      send_failures: {
+        count: failingSends,
+        last_error: failingSends > 0 ? account?.last_notify_error || '' : '',
+        last_kind: failingSends > 0 ? account?.last_notify_error_kind || '' : '',
+        last_at: failingSends > 0 ? account?.last_notify_error_at || null : null,
+        last_ok_at: account?.last_notify_ok_at || null,
+      },
       credit_balance: creditBalance,
       templates: {
         total: templates.length,
@@ -1197,6 +1269,9 @@ class WhatsAppService {
             : null,
         clientId !== 'Khana' && creditBalance <= 0
           ? 'Top up WhatsApp credits so order/booking notifications and tests can send.'
+          : null,
+        failingSends > 0
+          ? `Automatic messages are failing: ${account?.last_notify_error || 'see WhatsApp Manager'}. Customers still get the email.`
           : null,
         approvedRequired < required.length
           ? 'Open WA Templates → Install Khana pack, then Sync until templates show APPROVED.'

@@ -114,6 +114,45 @@ function listWhatsAppTemplateStarters() {
       ],
     },
     {
+      // Sent instead of booking_reminder once approved: the customer can confirm or ask to move it in one tap.
+      id: 'booking_reminder_actions',
+      name: 'booking_reminder_actions',
+      language: lang,
+      category: 'UTILITY',
+      description: 'Booking reminder with Confirm / Reschedule buttons — business, booking ref, when',
+      components: [
+        {
+          type: 'BODY',
+          text: 'Reminder from {{1}}:\n\nYour booking {{2}} is on {{3}}.\n\nTap Confirm if you are coming, or Reschedule if you need a different time.',
+          example: { body_text: [['Demo Salon', '#A1B2C3', 'Thu, 6 Nov 2026 at 10:00 (Gel overlay)']] },
+        },
+        {
+          type: 'BUTTONS',
+          buttons: [
+            { type: 'QUICK_REPLY', text: 'Confirm' },
+            { type: 'QUICK_REPLY', text: 'Reschedule' },
+          ],
+        },
+      ],
+    },
+    {
+      // Goes to the business owner's own phone, not to customers.
+      id: 'owner_new_activity',
+      name: 'owner_new_activity',
+      language: lang,
+      category: 'UTILITY',
+      description: 'Owner alert — what happened, business, details (new booking, new order, reschedule request)',
+      components: [
+        {
+          type: 'BODY',
+          text: 'Heads up: {{1}} for {{2}}.\n\n{{3}}\n\nOpen your dashboard for the full details.',
+          example: {
+            body_text: [['New booking', 'Demo Salon', 'Naledi M. · Gel overlay · Thu, 6 Nov 2026 at 10:00']],
+          },
+        },
+      ],
+    },
+    {
       id: 'account_verification',
       name: 'account_verification',
       language: lang,

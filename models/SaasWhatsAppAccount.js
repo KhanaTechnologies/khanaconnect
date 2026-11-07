@@ -32,6 +32,14 @@ const saasWhatsAppAccountSchema = new mongoose.Schema(
     last_conversion_at: { type: Date, default: null },
     last_conversion_event_name: { type: String, default: '', trim: true },
     last_conversion_error: { type: String, default: '', trim: true },
+    /** Automatic order/booking messages: failures since the last successful send (reset on success). */
+    notify_failure_count: { type: Number, default: 0 },
+    last_notify_error: { type: String, default: '', trim: true },
+    last_notify_error_kind: { type: String, default: '', trim: true },
+    last_notify_error_at: { type: Date, default: null },
+    last_notify_ok_at: { type: Date, default: null },
+    /** When the owner was last emailed about failing messages (at most once a day). */
+    notify_failure_email_at: { type: Date, default: null },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );

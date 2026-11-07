@@ -344,6 +344,10 @@ const clientSchema = new Schema({
     defaultMessage: { type: String, default: '', trim: true },
     /** Automated Cloud API template notifications (orders, bookings, OTP) */
     notificationsEnabled: { type: Boolean, default: false },
+    /** Send the owner a WhatsApp for each new booking / order / reschedule request. */
+    ownerAlertsEnabled: { type: Boolean, default: false },
+    /** Owner's own phone for those alerts, digits-only E.164 (e.g. 27821234567). */
+    ownerAlertPhone: { type: String, default: '', trim: true },
   },
 
   /** B2B module — security & multi-warehouse settings */

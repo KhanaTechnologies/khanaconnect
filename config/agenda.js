@@ -17,6 +17,7 @@ const JOB_NAMES = {
   WHATSAPP_WINDOW_ALERT: 'whatsapp-inbox:window-close-alert',
   MONTHLY_INCLUDED_CREDITS: 'billing:monthly-included-credits',
   MONTHLY_VALUE_REPORTS: 'reports:monthly-value',
+  WHATSAPP_NOTIFY_RETRY: 'whatsapp:notify-retry',
 };
 
 let agendaInstance = null;
@@ -313,6 +314,19 @@ function registerJobHandlers(agenda) {
         }
         throw err;
       }
+    }
+  );
+
+  // Retry of an automatic order/booking WhatsApp that failed for a temporary reason.
+  // safeNotify schedules the next attempt itself, so this never throws.
+  agenda.define(
+    JOB_NAMES.WHATSAPP_NOTIFY_RETRY,
+    { concurrency: 2, lockLifetime: 5 * 60 * 1000 },
+    async (job) => {
+      const { kind, opts, attempt } = job.attrs.data || {};
+      if (!kind || !opts) return;
+      const WhatsAppService = require('../services/saas/WhatsAppService');
+      await WhatsAppService.safeNotify(kind, opts, { attempt: Number(attempt) || 2 });
     }
   );
 
