@@ -353,17 +353,17 @@ router.post('/', validateClient, wrapRoute(async (req, res) => {
                     );
                 }
                 console.log('✅ Background confirmation email sent successfully');
-
-                WhatsAppService.safeNotifyBookingConfirmation({
-                    clientId: booking.clientID || client.clientID,
-                    to: booking.customerPhone || populatedBooking.customerPhone,
-                    companyName: displayName || client.companyName,
-                    bookingRef: String(booking._id || populatedBooking._id),
-                    when: WhatsAppService.formatBookingWhen(populatedBooking || booking),
-                }).catch(() => {});
             } else {
-                console.log('📧 [DEV MODE] Confirmation email would be sent to:', booking.customerEmail);
+                console.log('📧 Confirmation email skipped — business mailbox is not configured:', booking.customerEmail);
             }
+
+            WhatsAppService.safeNotifyBookingConfirmation({
+                clientId: booking.clientID || client.clientID,
+                to: booking.customerPhone || populatedBooking.customerPhone,
+                companyName: displayName || client.companyName,
+                bookingRef: String(booking._id || populatedBooking._id),
+                when: WhatsAppService.formatBookingWhen(populatedBooking || booking),
+            }).catch(() => {});
         } catch (emailError) {
             console.error('⚠️ Background email failed:', emailError.message);
         }
@@ -656,15 +656,19 @@ router.put('/:id', validateClient, wrapRoute(async (req, res) => {
                         // Only send immediate notification if appointment is within 2 hours
                         if (hoursUntilAppointment <= 2 && hoursUntilAppointment > 0) {
                             console.log(`📧 Sending background notification for today's rescheduled booking ${booking._id}`);
-                            await sendBookingConfirmationEmail(
-                                booking,
-                                client.businessEmail,
-                                client.businessEmailPassword,
-                                client.clientName || booking.clientID,
-                                client.emailSignature || '',
-                                clientEmailBrandingPayload(client)
-                            );
-                            console.log(`✅ Background notification sent for booking ${booking._id}`);
+                            try {
+                                await sendBookingConfirmationEmail(
+                                    booking,
+                                    client.businessEmail,
+                                    client.businessEmailPassword,
+                                    client.clientName || booking.clientID,
+                                    client.emailSignature || '',
+                                    clientEmailBrandingPayload(client)
+                                );
+                                console.log(`✅ Background notification sent for booking ${booking._id}`);
+                            } catch (emailError) {
+                                console.error(`⚠️ Background email failed for booking ${booking._id}:`, emailError.message);
+                            }
 
                             WhatsAppService.safeNotifyBookingConfirmation({
                                 clientId: booking.clientID || client.clientID,

@@ -34,6 +34,7 @@ const saasCrmTaskSchema = new mongoose.Schema(
     customer_name: { type: String, default: '', trim: true },
     customer_email: { type: String, default: '', trim: true },
     customer_phone: { type: String, default: '', trim: true },
+    linked_whatsapp_contact: { type: String, default: '', trim: true, index: true },
     completed_at: { type: Date, default: null },
     cancelled_at: { type: Date, default: null },
   },

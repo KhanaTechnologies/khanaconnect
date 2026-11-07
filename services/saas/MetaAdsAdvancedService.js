@@ -18,7 +18,10 @@ const {
   deleteMetaCampaignQuietly,
   resolveInsightsWindow,
   insightsGraphDateParams,
+  assertAdsPermissions,
 } = require('./MetaAdsService');
+
+const AGENCY_META_BUSINESS_ID = String(process.env.AGENCY_META_BUSINESS_ID || '').trim();
 
 const META_GRAPH_BASE = process.env.META_GRAPH_BASE || 'https://graph.facebook.com/v25.0';
 
@@ -42,6 +45,75 @@ function throwMeta(err, context = 'Meta API request failed') {
   const msg = formatGraphError(err);
   console.error(`[meta ads] ${context}:`, msg, err?.response?.data || '');
   throw httpError(msg || context, 400);
+}
+
+function isAgencyBusiness(businessId) {
+  return !!AGENCY_META_BUSINESS_ID && String(businessId || '') === AGENCY_META_BUSINESS_ID;
+}
+
+function hasAdminRole(business) {
+  return (Array.isArray(business?.permitted_roles) ? business.permitted_roles : []).some((r) =>
+    /ADMIN/i.test(String(r))
+  );
+}
+
+/** Prefer the client's own Business Manager — never Khana's agency portfolio. */
+function pickClientBusiness(businesses, storedBizId = '') {
+  const own = (Array.isArray(businesses) ? businesses : []).filter(
+    (b) => b?.id && !isAgencyBusiness(b.id)
+  );
+  const stored = storedBizId ? own.find((b) => String(b.id) === String(storedBizId)) : null;
+  return own.find((b) => hasAdminRole(b) && stored && String(b.id) === String(stored.id))
+    || own.find((b) => hasAdminRole(b))
+    || stored
+    || own[0]
+    || null;
+}
+
+function absoluteHttps(raw) {
+  const value = String(raw || '').trim();
+  if (/^https:\/\//i.test(value)) return value.replace(/\/$/, '');
+  return '';
+}
+
+/**
+ * Meta rejects tiny daily budgets after the campaign is created.
+ * Match boosts: at least 20 in the ad account currency (R20 for ZAR).
+ */
+function assertDailyBudget(dailyBudget) {
+  const budgetNum = Number(dailyBudget);
+  if (!Number.isFinite(budgetNum) || budgetNum <= 0) {
+    throw httpError('A daily budget is required');
+  }
+  if (Math.round(budgetNum * 100) < 100) {
+    throw httpError('Minimum daily budget is 1.00');
+  }
+  if (budgetNum < 20) {
+    throw httpError(
+      'Daily budget is below Meta’s typical account minimum. Use at least 20 in your ad account currency (for example R20).'
+    );
+  }
+  return { budgetNum, cents: Math.round(budgetNum * 100) };
+}
+
+async function assertNotSharedAdAccount(client) {
+  const adAccountId = normalizeAdAccountId(client.metaAds?.adAccountId);
+  const clientId = String(client.clientID || '');
+  if (!adAccountId || clientId === 'Khana') return adAccountId;
+  const sharedOwner = await findAdAccountOwner(adAccountId, clientId);
+  if (sharedOwner) {
+    throw httpError(
+      `This Meta ad account is already used by another workspace. Create or select this client’s own ad account so ads, audiences, and catalogs stay separate.`,
+      409
+    );
+  }
+  return adAccountId;
+}
+
+/** Check Khana credits before any Meta object is created, so a decline does not leave a live campaign. */
+async function assertCampaignCredits(clientId) {
+  const BillingService = require('./BillingService');
+  await BillingService.assertCreditsForAction(clientId, 'ads_service_fee', 'setup', 1);
 }
 
 /**
@@ -71,25 +143,18 @@ async function createAdAccountForClient(clientId, { name = '', currency = 'ZAR',
     );
   }
 
-  // Prefer a BM where the user is ADMIN (required to create ad accounts).
-  const adminBiz =
-    businesses.find((b) =>
-      (Array.isArray(b.permitted_roles) ? b.permitted_roles : []).some((r) =>
-        /ADMIN/i.test(String(r))
-      )
-    ) || null;
+  // Prefer a client-owned BM where the user is ADMIN. Never create under Khana's agency portfolio.
   const storedBizId = String(client.metaAds.metaBusinessId || '').trim();
-  const stored = storedBizId ? businesses.find((b) => String(b.id) === storedBizId) : null;
-  const business = adminBiz || stored || businesses[0];
+  const business = pickClientBusiness(businesses, isAgencyBusiness(storedBizId) ? '' : storedBizId);
+  if (!business) {
+    throw httpError(
+      'No client Business Portfolio found on this Facebook login. Create your own in Meta Business Settings (do not use Khana’s portfolio), then reconnect Facebook and try again.',
+      400
+    );
+  }
   const businessId = String(business.id);
 
-  if (
-    adminBiz == null &&
-    !(Array.isArray(business.permitted_roles)
-      ? business.permitted_roles
-      : []
-    ).some((r) => /ADMIN/i.test(String(r)))
-  ) {
+  if (!hasAdminRole(business)) {
     throw httpError(
       `You need admin access on Meta Business “${business.name || businessId}” to create an ad account. Ask a Business admin to grant you access, or create the account in Meta Ads Manager.`,
       403
@@ -181,7 +246,7 @@ async function createAdAccountForClient(clientId, { name = '', currency = 'ZAR',
     businessName: business.name || '',
     currency: currencyCode,
     timezoneId: tz,
-    timezone: 'Africa/Johannesburg',
+    timezone: tz === 141 ? 'Africa/Johannesburg' : '',
     ownershipType: 'client',
     billingNote:
       'Ad spend is charged by Meta to YOUR card (not Khana). Khana charges a separate ads service fee from your Khana credits when you create or boost campaigns.',
@@ -202,8 +267,9 @@ async function createAdAccountForClient(clientId, { name = '', currency = 'ZAR',
  * business edge — fall back to /me/businesses from the connected Facebook Login.
  */
 async function resolveBusinessIdForCatalog(client, token) {
-  if (client.metaAds?.metaBusinessId) {
-    return String(client.metaAds.metaBusinessId);
+  const stored = String(client.metaAds?.metaBusinessId || '').trim();
+  if (stored && !isAgencyBusiness(stored)) {
+    return stored;
   }
 
   const adAccountId = normalizeAdAccountId(client.metaAds?.adAccountId);
@@ -218,7 +284,7 @@ async function resolveBusinessIdForCatalog(client, token) {
 
   try {
     const biz = await graphGet('/me/businesses', token, { fields: 'id,name' });
-    const first = (biz?.data || [])[0];
+    const first = pickClientBusiness(biz?.data || []);
     if (first?.id) return String(first.id);
   } catch (err) {
     console.warn('[meta ads] /me/businesses failed:', formatGraphError(err));
@@ -318,7 +384,38 @@ function buildMetaDeepLinks({ adAccountId, businessId, pageId } = {}) {
  * Setup hub: what is ready, what still needs Meta (payment/policy),
  * and one-click links so clients don't hunt through Business Manager.
  */
+function disconnectedSetup() {
+  return {
+    checklist: {
+      facebookConnected: false,
+      pageSelected: false,
+      adAccountSelected: false,
+      pixelLinked: false,
+      instagramLinked: false,
+      paymentReady: null,
+      accountActive: null,
+      whatsappReady: false,
+      catalogSynced: false,
+    },
+    paymentHint: 'Connect Facebook to set up ads. Ad spend bills to your Meta card. Khana charges a separate service fee from your credits when you create a campaign.',
+    account: null,
+    links: buildMetaDeepLinks({}),
+    nextSteps: [
+      { id: 'connect', label: 'Connect Facebook', action: 'connect_facebook' },
+    ],
+    pageName: '',
+    adAccountName: '',
+    instagramConnected: false,
+    instagramUsername: '',
+    catalogId: '',
+  };
+}
+
 async function getSetupHub(clientId) {
+  const existing = await Client.findOne({ clientID: clientId }).select('metaAds.accessToken').lean();
+  if (!existing) throw httpError('Client not found', 404);
+  if (!existing.metaAds?.accessToken) return disconnectedSetup();
+
   const client = await loadClientWithMeta(clientId);
   const token = String(client.metaAds.accessToken);
   const adAccountId = normalizeAdAccountId(client.metaAds.adAccountId);
@@ -348,7 +445,10 @@ async function getSetupHub(clientId) {
     pageSelected: !!pageId,
     adAccountSelected: !!adAccountId,
     pixelLinked: !!client.metaAds.pixelId,
-    instagramLinked: !!client.metaAds.instagramUserId,
+    instagramLinked: !!(
+      client.metaAds.instagramUserId ||
+      client.metaAds.instagramLoginAccessToken
+    ),
     paymentReady: null,
     accountActive: null,
     whatsappReady: !!(client.whatsapp?.phoneE164 || client.whatsapp?.enabled),
@@ -591,7 +691,15 @@ async function listLocalCampaigns(clientId) {
     .select('metaAds.campaigns metaAds.adAccountId metaAds.accessToken')
     .lean();
   const local = Array.isArray(client?.metaAds?.campaigns) ? client.metaAds.campaigns : [];
-  const { campaigns: fromMeta, ok: metaOk } = await listMetaAdAccountCampaigns(clientId);
+  let fromMeta = [];
+  let metaOk = false;
+  try {
+    const listed = await listMetaAdAccountCampaigns(clientId);
+    fromMeta = listed.campaigns;
+    metaOk = listed.ok;
+  } catch (err) {
+    console.warn('[meta ads] campaign list skipped:', err.message);
+  }
   const metaById = new Map(fromMeta.map((c) => [String(c.metaCampaignId), c]));
   const metaIds = new Set(metaById.keys());
 
@@ -653,7 +761,7 @@ async function listLocalCampaigns(clientId) {
     campaigns,
     syncedFrom: showFullMetaList ? 'meta' : 'workspace',
     adAccountWarning: sharedOwner
-      ? `This Meta ad account is already used by workspace ${sharedOwner}. Create or select this client’s own ad account so you do not see or create ads on ${sharedOwner}.`
+      ? 'This Meta ad account is already used by another workspace. Create or select this client’s own ad account so you do not see or create ads on that workspace.'
       : '',
   };
 }
@@ -687,6 +795,8 @@ async function findCampaignSubdoc(client, campaignId) {
 
 async function updateCampaignStatus(clientId, { campaignId, status }) {
   const client = await loadClientWithMeta(clientId);
+  assertAdsPermissions(client);
+  await assertNotSharedAdAccount(client);
   const token = String(client.metaAds.accessToken);
   const { sub, source } = await findCampaignSubdoc(client, campaignId);
 
@@ -770,6 +880,8 @@ async function updateCampaignStatus(clientId, { campaignId, status }) {
 
 async function updateCampaignBudget(clientId, { campaignId, dailyBudget }) {
   const client = await loadClientWithMeta(clientId);
+  assertAdsPermissions(client);
+  await assertNotSharedAdAccount(client);
   const token = String(client.metaAds.accessToken);
   const { sub, source } = await findCampaignSubdoc(client, campaignId);
 
@@ -852,8 +964,9 @@ async function createCustomAudienceFromCustomers(
   { name, preset = 'all', description = '' } = {}
 ) {
   const client = await loadClientWithMeta(clientId);
+  assertAdsPermissions(client);
   const token = String(client.metaAds.accessToken);
-  const adAccountId = normalizeAdAccountId(client.metaAds.adAccountId);
+  const adAccountId = await assertNotSharedAdAccount(client);
   if (!adAccountId) throw new Error('Select an ad account first');
 
   const audienceName =
@@ -897,16 +1010,23 @@ async function createCustomAudienceFromCustomers(
 
   // Upload in chunks of 10k (Meta limit per request is higher; keep modest)
   const CHUNK = 5000;
+  const sessionId = Date.now();
   let matchedApprox = 0;
   try {
     for (let i = 0; i < rows.length; i += CHUNK) {
       const chunk = rows.slice(i, i + CHUNK);
-      const payload = {
-        schema,
-        data: chunk,
-      };
+      const batchSeq = Math.floor(i / CHUNK) + 1;
       const session = await graphPostJson(`/${audienceId}/users`, token, {
-        payload,
+        session: {
+          session_id: sessionId,
+          batch_seq: batchSeq,
+          last_batch_flag: i + CHUNK >= rows.length,
+          estimated_num_total: rows.length,
+        },
+        payload: {
+          schema,
+          data: chunk,
+        },
       });
       matchedApprox += Number(session?.num_received || chunk.length);
     }
@@ -1026,12 +1146,13 @@ async function createClickToWhatsAppCampaign(
   } = {}
 ) {
   const client = await loadClientWithMeta(clientId);
+  assertAdsPermissions(client);
   const token = String(client.metaAds.accessToken);
   const pageToken = client.metaAds.pageAccessToken
     ? String(client.metaAds.pageAccessToken)
     : token;
   const pageId = client.metaAds.pageId;
-  const adAccountId = normalizeAdAccountId(client.metaAds.adAccountId);
+  const adAccountId = await assertNotSharedAdAccount(client);
   if (!pageId) throw new Error('Select a Facebook Page first');
   if (!adAccountId) throw new Error('Select an ad account first');
 
@@ -1042,11 +1163,10 @@ async function createClickToWhatsAppCampaign(
     );
   }
 
-  const budgetNum = Number(dailyBudget);
-  if (!Number.isFinite(budgetNum) || budgetNum <= 0) throw new Error('daily_budget is required');
-  const cents = Math.round(budgetNum * 100);
+  const { budgetNum, cents } = assertDailyBudget(dailyBudget);
   const durationDays = Math.min(Math.max(Number(days) || 7, 1), 30);
   const adStatus = String(status).toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'PAUSED';
+  await assertCampaignCredits(clientId);
   const campaignName = buildReadableCampaignName(client, 'WhatsApp', { name, caption: message });
   const targeting = buildTargetingSpec({
     country,
@@ -1184,28 +1304,35 @@ async function createClickToWhatsAppCampaign(
       });
       adId = ad.id;
     } catch (err2) {
+      await deleteMetaCampaignQuietly(campaignId, token);
       throw new Error(formatGraphError(err2?.response ? err2 : err));
     }
   }
 
-  return pushLocalCampaign(clientId, {
-    name: campaignName,
-    objective: 'WHATSAPP',
-    budget: budgetNum,
-    status: adStatus === 'ACTIVE' ? 'active' : 'paused',
-    campaign_type: 'whatsapp',
-    meta_campaign_id: String(campaignId),
-    meta_adset_id: String(adSetId),
-    meta_ad_id: String(adId),
-    meta_creative_id: String(creativeId || ''),
-    targeting,
-  });
+  try {
+    return await pushLocalCampaign(clientId, {
+      name: campaignName,
+      objective: 'WHATSAPP',
+      budget: budgetNum,
+      status: adStatus === 'ACTIVE' ? 'active' : 'paused',
+      campaign_type: 'whatsapp',
+      meta_campaign_id: String(campaignId),
+      meta_adset_id: String(adSetId),
+      meta_ad_id: String(adId),
+      meta_creative_id: String(creativeId || ''),
+      targeting,
+    });
+  } catch (err) {
+    await deleteMetaCampaignQuietly(campaignId, token);
+    throw err;
+  }
 }
 
 async function uploadAdImage(clientId, { buffer, filename = 'creative.jpg' }) {
   const client = await loadClientWithMeta(clientId);
+  assertAdsPermissions(client);
   const token = String(client.metaAds.accessToken);
-  const adAccountId = normalizeAdAccountId(client.metaAds.adAccountId);
+  const adAccountId = await assertNotSharedAdAccount(client);
   if (!adAccountId) throw new Error('Select an ad account first');
   if (!buffer?.length) throw new Error('Image file is required');
 
@@ -1254,29 +1381,33 @@ async function createLeadAd(
   } = {}
 ) {
   const client = await loadClientWithMeta(clientId);
+  assertAdsPermissions(client);
   const token = String(client.metaAds.accessToken);
   const pageToken = client.metaAds.pageAccessToken
     ? String(client.metaAds.pageAccessToken)
     : token;
   const pageId = client.metaAds.pageId;
-  const adAccountId = normalizeAdAccountId(client.metaAds.adAccountId);
+  const adAccountId = await assertNotSharedAdAccount(client);
   if (!pageId) throw new Error('Select a Facebook Page first');
   if (!adAccountId) throw new Error('Select an ad account first');
   if (!imageHash) throw new Error('Upload a creative image first (image_hash required)');
 
-  const budgetNum = Number(dailyBudget);
-  if (!Number.isFinite(budgetNum) || budgetNum <= 0) throw new Error('daily_budget is required');
-  const cents = Math.round(budgetNum * 100);
+  const { budgetNum, cents } = assertDailyBudget(dailyBudget);
   const durationDays = Math.min(Math.max(Number(days) || 7, 1), 30);
   const adStatus = String(status).toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'PAUSED';
+  await assertCampaignCredits(clientId);
   const campaignName = buildReadableCampaignName(client, 'Leads', {
     name,
     caption: headline || body,
   });
+  const storefront = absoluteHttps(client.return_url);
   const privacyUrl =
-    String(privacyPolicyUrl || '').trim() ||
-    `${String(client.return_url || '').replace(/\/$/, '')}/privacy` ||
-    'https://www.facebook.com/privacy/explanation';
+    absoluteHttps(privacyPolicyUrl) || (storefront ? `${storefront}/privacy` : '');
+  if (!privacyUrl) {
+    throw httpError(
+      'Lead ads need a public https privacy policy. Set your website URL in account settings, or pass a privacy policy URL.'
+    );
+  }
 
   const targeting = buildTargetingSpec({
     country,
@@ -1298,7 +1429,7 @@ async function createLeadAd(
         title: 'Thank you',
         body: String(thankYouMessage).slice(0, 200),
         button_type: 'VIEW_WEBSITE',
-        website_url: String(client.return_url || privacyUrl),
+        website_url: storefront || privacyUrl,
       }),
       questions: JSON.stringify([
         { type: 'FULL_NAME' },
@@ -1364,7 +1495,8 @@ async function createLeadAd(
     throw new Error(formatGraphError(err));
   }
 
-  return pushLocalCampaign(clientId, {
+  try {
+    return await pushLocalCampaign(clientId, {
     name: campaignName,
     objective: 'OUTCOME_LEADS',
     budget: budgetNum,
@@ -1376,11 +1508,17 @@ async function createLeadAd(
     meta_creative_id: String(creativeId || ''),
     meta_form_id: String(formId || ''),
     targeting,
-  });
+    });
+  } catch (err) {
+    await deleteMetaCampaignQuietly(campaignId, token);
+    throw err;
+  }
 }
 
 async function ensureProductCatalog(clientId, { name } = {}) {
   const client = await loadClientWithMeta(clientId);
+  assertAdsPermissions(client);
+  await assertNotSharedAdAccount(client);
   const token = String(client.metaAds.accessToken);
 
   if (client.metaAds.catalogId) {
@@ -1475,14 +1613,18 @@ async function syncProductCatalog(clientId, { limit = 200 } = {}) {
     .select('productName description price images sku slug countInStock brand')
     .limit(Math.min(Math.max(Number(limit) || 200, 1), 500));
 
-  const baseUrl = String(client.return_url || '').replace(/\/$/, '');
+  const baseUrl = absoluteHttps(client.return_url);
+  if (!baseUrl) {
+    throw httpError(
+      'Set your website URL (https) in account settings before syncing a catalog. Meta needs a public product page for each item.',
+      400
+    );
+  }
   const requests = products
     .map((p) => {
       const retailerId = String(p.sku || p._id);
       const image = Array.isArray(p.images) && p.images[0] ? String(p.images[0]).trim() : '';
-      const link = baseUrl
-        ? `${baseUrl}/products/${p.slug || p._id}`
-        : `https://www.facebook.com/${retailerId}`;
+      const link = `${baseUrl}/products/${p.slug || p._id}`;
       const availability = Number(p.countInStock) > 0 ? 'in stock' : 'out of stock';
       const price = `${Number(p.price || 0).toFixed(2)} ZAR`;
       const imageLink = /^https?:\/\//i.test(image) ? image : '';
@@ -1496,7 +1638,7 @@ async function syncProductCatalog(clientId, { limit = 200 } = {}) {
           availability,
           condition: 'new',
           price,
-          link: /^https?:\/\//i.test(link) ? link : `https://www.facebook.com/${retailerId}`,
+          link,
           image_link: imageLink,
           brand: String(p.brand || client.companyName || 'Brand').slice(0, 100),
         },
@@ -1552,19 +1694,23 @@ async function createCatalogSalesCampaign(
   } = {}
 ) {
   const client = await loadClientWithMeta(clientId);
+  assertAdsPermissions(client);
   const token = String(client.metaAds.accessToken);
   const pageId = client.metaAds.pageId;
-  const adAccountId = normalizeAdAccountId(client.metaAds.adAccountId);
+  const adAccountId = await assertNotSharedAdAccount(client);
   const catalogId = client.metaAds.catalogId;
+  const storefront = absoluteHttps(client.return_url);
   if (!pageId) throw new Error('Select a Facebook Page first');
   if (!adAccountId) throw new Error('Select an ad account first');
   if (!catalogId) throw new Error('Sync your product catalog first');
+  if (!storefront) {
+    throw httpError('Set your website URL (https) in account settings before creating a catalog sales campaign');
+  }
 
-  const budgetNum = Number(dailyBudget);
-  if (!Number.isFinite(budgetNum) || budgetNum <= 0) throw new Error('daily_budget is required');
-  const cents = Math.round(budgetNum * 100);
+  const { budgetNum, cents } = assertDailyBudget(dailyBudget);
   const durationDays = Math.min(Math.max(Number(days) || 7, 1), 30);
   const adStatus = String(status).toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'PAUSED';
+  await assertCampaignCredits(clientId);
   const campaignName = buildReadableCampaignName(client, 'Catalog', { name });
   const pixelId = client.metaAds.pixelId ? String(client.metaAds.pixelId) : '';
   if (!pixelId) {
@@ -1632,7 +1778,7 @@ async function createCatalogSalesCampaign(
           call_to_action: { type: 'SHOP_NOW' },
           name: '{{product.name}}',
           description: '{{product.price}}',
-          link: String(client.return_url || '').replace(/\/$/, '') || 'https://facebook.com',
+          link: storefront,
         },
       }),
     });
@@ -1650,7 +1796,8 @@ async function createCatalogSalesCampaign(
     throw new Error(formatGraphError(err));
   }
 
-  return pushLocalCampaign(clientId, {
+  try {
+    return await pushLocalCampaign(clientId, {
     name: campaignName,
     objective: 'OUTCOME_SALES',
     budget: budgetNum,
@@ -1661,7 +1808,11 @@ async function createCatalogSalesCampaign(
     meta_ad_id: String(adId),
     meta_creative_id: String(creativeId || ''),
     targeting: { ...targeting, product_set_id: productSetId },
-  });
+    });
+  } catch (err) {
+    await deleteMetaCampaignQuietly(campaignId, token);
+    throw err;
+  }
 }
 
 async function pushLocalCampaign(clientId, campaignDoc) {

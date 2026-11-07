@@ -120,7 +120,11 @@ class ReminderService {
                         emailSig
                     );
                 }
+            } catch (emailError) {
+                console.error(`❌ Reminder email failed for booking ${booking._id}:`, emailError.message);
+            }
 
+            try {
                 WhatsAppService.safeNotifyBookingReminder({
                     clientId: booking.clientID || client.clientID,
                     to: booking.customerPhone,
@@ -188,14 +192,18 @@ class ReminderService {
 
             if (shouldSendServiceReminder && !hasServiceReminder) {
                 console.log(`✉️ Sending ${reminderType} service reminder for booking ${booking._id}`);
-                
-                await sendBookingReminderEmail(
-                    booking,
-                    client.businessEmail,
-                    client.businessEmailPassword,
-                    client.clientName || booking.clientID,
-                    client.emailSignature || ''
-                );
+
+                try {
+                    await sendBookingReminderEmail(
+                        booking,
+                        client.businessEmail,
+                        client.businessEmailPassword,
+                        client.clientName || booking.clientID,
+                        client.emailSignature || ''
+                    );
+                } catch (emailError) {
+                    console.error(`❌ Service reminder email failed for booking ${booking._id}:`, emailError.message);
+                }
 
                 WhatsAppService.safeNotifyBookingReminder({
                     clientId: booking.clientID || client.clientID,

@@ -414,6 +414,27 @@ class WhatsAppInboxService {
             }
           }
           try {
+            await this.notifyAssigneeOfInbound({
+              clientId: threadClientId,
+              contactWaId: from,
+              contactName,
+            });
+          } catch (assignErr) {
+            console.warn('[whatsapp inbox] assignee task update failed:', assignErr.message);
+          }
+          // Confirm / Reschedule taps on booking reminders are answered here, not by the auto-responder.
+          let bookingButtonHandled = false;
+          try {
+            const WhatsAppNotifyService = require('./WhatsAppNotifyService');
+            bookingButtonHandled = await WhatsAppNotifyService.handleBookingButtonReply({
+              clientId: threadClientId,
+              contactWaId: from,
+              rawMsg: msg,
+            });
+          } catch (btnErr) {
+            console.warn('[whatsapp inbox] booking button reply failed:', btnErr.message);
+          }
+          if (!bookingButtonHandled) try {
             const WhatsAppAutoResponderService = require('./WhatsAppAutoResponderService');
             // Prefer WABA owner (phone mapping) so shared-number reattribution
             // does not skip Khana ad leads when the last outbound was another client.
@@ -505,6 +526,18 @@ class WhatsAppInboxService {
         }
       );
       if (updated.modifiedCount) statusUpdates += 1;
+      if (status === 'failed' && updated.modifiedCount) {
+        try {
+          const WhatsAppNotifyService = require('./WhatsAppNotifyService');
+          await WhatsAppNotifyService.onDeliveryFailed({
+            wamid,
+            error: errMsg,
+            code: Array.isArray(st.errors) && st.errors[0] ? st.errors[0].code : null,
+          });
+        } catch (failErr) {
+          console.warn('[whatsapp inbox] failed-status follow-up skipped:', failErr.message);
+        }
+      }
     }
 
     if (archiveId) {
@@ -1541,7 +1574,15 @@ class WhatsAppInboxService {
     };
   }
 
+  static async teamCanAssign(clientId) {
+    const count = await TeamMember.countDocuments({ clientID: clientId, status: 'active' });
+    return count >= 2;
+  }
+
   static async listAssignees(clientId) {
+    const canAssign = await this.teamCanAssign(clientId);
+    if (!canAssign) return { canAssign: false, assignees: [] };
+
     const members = await TeamMember.find({
       clientID: clientId,
       status: 'active',
@@ -1550,15 +1591,18 @@ class WhatsAppInboxService {
       .sort({ orgRole: 1, firstName: 1 })
       .limit(100);
 
-    return members.map((m) => {
-      const json = m.toJSON ? m.toJSON() : m;
-      return {
-        id: String(json._id),
-        name: json.displayName || [json.firstName, json.lastName].filter(Boolean).join(' ') || json.email,
-        email: json.email,
-        org_role: json.orgRole,
-      };
-    });
+    return {
+      canAssign: true,
+      assignees: members.map((m) => {
+        const json = m.toJSON ? m.toJSON() : m;
+        return {
+          id: String(json._id),
+          name: json.displayName || [json.firstName, json.lastName].filter(Boolean).join(' ') || json.email,
+          email: json.email,
+          org_role: json.orgRole,
+        };
+      }),
+    };
   }
 
   static async assignThread({ clientId, contactWaId, memberId }) {
@@ -1566,6 +1610,9 @@ class WhatsAppInboxService {
     if (!contact) throw httpError('Invalid contact WhatsApp number', 400);
 
     const memberIdStr = String(memberId || '').trim();
+    if (memberIdStr && !(await this.teamCanAssign(clientId))) {
+      throw httpError('Chat assignment is available once this business has more than one team member.', 400);
+    }
     if (!memberIdStr) {
       await SaasWhatsAppThread.findOneAndUpdate(
         { client_id: clientId, contact_wa_id: contact },
@@ -1578,7 +1625,8 @@ class WhatsAppInboxService {
         },
         { upsert: true }
       );
-      return { contact_wa_id: contact, assignment: null };
+      await this.syncAssignmentTask({ clientId, contactWaId: contact, memberId: '' });
+      return { contact_wa_id: contact, assignment: null, task: null };
     }
 
     const member = await TeamMember.findOne({ _id: memberIdStr, clientID: clientId, status: 'active' });
@@ -1598,6 +1646,13 @@ class WhatsAppInboxService {
       { upsert: true, new: true }
     );
 
+    const task = await this.syncAssignmentTask({
+      clientId,
+      contactWaId: contact,
+      memberId: String(json._id),
+      memberName: name,
+    });
+
     return {
       contact_wa_id: contact,
       assignment: {
@@ -1605,7 +1660,154 @@ class WhatsAppInboxService {
         name: doc.assigned_name,
         assigned_at: doc.assigned_at,
       },
+      task,
     };
+  }
+
+  /** One open high-priority task per chat. Reassigning moves it to the new person. */
+  static async syncAssignmentTask({ clientId, contactWaId, memberId = '', memberName = '' }) {
+    const SaasCrmTask = require('../../models/SaasCrmTask');
+    const contact = String(contactWaId || '').replace(/\D/g, '');
+    if (!contact) return null;
+
+    if (!memberId) {
+      await SaasCrmTask.updateMany(
+        { client_id: clientId, linked_whatsapp_contact: contact, status: 'open' },
+        { $set: { status: 'cancelled', cancelled_at: new Date() } }
+      );
+      return null;
+    }
+
+    const existing = await SaasCrmTask.findOne({
+      client_id: clientId,
+      linked_whatsapp_contact: contact,
+      status: 'open',
+    });
+
+    const title = `WhatsApp chat assigned to you`;
+    const description = `Reply to ${contact}. This chat is on your list until you close it.`;
+    const now = new Date();
+
+    if (existing && String(existing.assignee_user_id) === String(memberId)) {
+      existing.priority = 'high';
+      existing.due_at = existing.due_at || now;
+      existing.reminder_at = now;
+      existing.reminder_status = 'pending';
+      existing.assignee_name = memberName || existing.assignee_name;
+      await existing.save();
+      return { id: String(existing._id), priority: 'high', assignee_user_id: String(memberId) };
+    }
+
+    if (existing) {
+      existing.status = 'cancelled';
+      existing.cancelled_at = now;
+      await existing.save();
+    }
+
+    const created = await SaasCrmTask.create({
+      client_id: clientId,
+      title,
+      description,
+      status: 'open',
+      priority: 'high',
+      due_at: now,
+      reminder_at: now,
+      reminder_status: 'pending',
+      assignee_name: memberName,
+      assignee_user_id: String(memberId),
+      customer_phone: contact,
+      linked_whatsapp_contact: contact,
+    });
+    return { id: String(created._id), priority: 'high', assignee_user_id: String(memberId) };
+  }
+
+  static async notifyAssigneeOfInbound({ clientId, contactWaId, contactName = '' }) {
+    const contact = normalizePhoneE164(contactWaId) || String(contactWaId || '').replace(/\D/g, '');
+    if (!contact) return;
+    const thread = await SaasWhatsAppThread.findOne({
+      client_id: clientId,
+      contact_wa_id: contact,
+    })
+      .select('assigned_member_id assigned_name stage')
+      .lean();
+    if (!thread?.assigned_member_id || thread.stage === 'closed') return;
+
+    const SaasCrmTask = require('../../models/SaasCrmTask');
+    const who = contactName ? `${contactName} (${contact})` : contact;
+    await SaasCrmTask.updateOne(
+      {
+        client_id: clientId,
+        linked_whatsapp_contact: contact,
+        assignee_user_id: String(thread.assigned_member_id),
+        status: 'open',
+      },
+      {
+        $set: {
+          priority: 'high',
+          reminder_at: new Date(),
+          reminder_status: 'pending',
+          description: `New message from ${who}. This chat is assigned to you.`,
+        },
+      }
+    );
+  }
+
+  static async listMyPriorityChats(clientId, memberId) {
+    const member = String(memberId || '').trim();
+    if (!member) return [];
+
+    const threads = await SaasWhatsAppThread.find({
+      client_id: clientId,
+      assigned_member_id: member,
+      stage: { $ne: 'closed' },
+    })
+      .sort({ assigned_at: -1 })
+      .limit(30)
+      .lean();
+    if (!threads.length) return [];
+
+    const contacts = threads.map((thread) => thread.contact_wa_id);
+    const SaasCrmTask = require('../../models/SaasCrmTask');
+    const tasks = await SaasCrmTask.find({
+      client_id: clientId,
+      assignee_user_id: member,
+      status: 'open',
+      linked_whatsapp_contact: { $in: contacts },
+    }).lean();
+    const taskByContact = new Map(tasks.map((task) => [task.linked_whatsapp_contact, task]));
+
+    const unreadRows = await SaasWhatsAppMessage.aggregate([
+      {
+        $match: {
+          client_id: clientId,
+          contact_wa_id: { $in: contacts },
+          direction: 'inbound',
+          read_at: null,
+          deleted_at: null,
+        },
+      },
+      { $group: { _id: '$contact_wa_id', unread: { $sum: 1 } } },
+    ]);
+    const unreadByContact = new Map(unreadRows.map((row) => [row._id, row.unread]));
+
+    return threads
+      .map((thread) => {
+        const unread = unreadByContact.get(thread.contact_wa_id) || 0;
+        const task = taskByContact.get(thread.contact_wa_id);
+        return {
+          contactWaId: thread.contact_wa_id,
+          assignedAt: thread.assigned_at,
+          taskId: task ? String(task._id) : '',
+          title: task?.title || 'WhatsApp chat assigned to you',
+          priority: 'high',
+          unread,
+          notification:
+            unread > 0
+              ? 'New WhatsApp message on a chat assigned to you'
+              : 'WhatsApp chat assigned to you',
+        };
+      })
+      .sort((a, b) => b.unread - a.unread || new Date(b.assignedAt || 0) - new Date(a.assignedAt || 0));
   }
 
   static async listCannedReplies(clientId) {

@@ -29,6 +29,12 @@ const {
 } = require('../helpers/teamMemberEmail');
 const { issueTeamPasswordReset, issueLegacyTeamPasswordReset } = require('../helpers/teamPasswordReset');
 const { fullPermissions, normalizePermissions, permissionsFromClient } = require('../helpers/teamPermissions');
+const DashboardNotice = require('../models/DashboardNotice');
+const {
+  noticeInput,
+  serializeNotice,
+  httpError: noticeHttpError,
+} = require('../helpers/dashboardNotices');
 
 const { wrapRoute } = require('../helpers/failureEmail'); // <- wrapRoute for automatic emails
 
@@ -541,6 +547,59 @@ router.get('/queues', requireAdmin, wrapRoute(async (req, res) => {
 
   const dashboard = await getQueueDashboard({ limitPerQueue: limit, statusFilter });
   res.json(dashboard);
+}));
+
+function assertNoticeReady(doc) {
+  if (doc.audienceType === 'plans' && !(doc.plans || []).length) {
+    throw noticeHttpError('plans is required when audienceType is plans');
+  }
+  if (doc.audienceType === 'clients' && !(doc.clientIds || []).length) {
+    throw noticeHttpError('clientIds is required when audienceType is clients');
+  }
+  if (doc.tone === 'price' && !doc.effectiveAt) {
+    throw noticeHttpError('effectiveAt is required for a price notice');
+  }
+  if (doc.publishAt && doc.expiresAt && doc.expiresAt <= doc.publishAt) {
+    throw noticeHttpError('expiresAt must be after publishAt');
+  }
+}
+
+router.get('/dashboard-notices', requireAdmin, wrapRoute(async (_req, res) => {
+  const notices = await DashboardNotice.find().sort({ publishAt: -1, createdAt: -1 }).limit(200).lean();
+  res.json({ success: true, notices: notices.map((notice) => serializeNotice(notice, { admin: true })) });
+}));
+
+router.post('/dashboard-notices', requireAdmin, wrapRoute(async (req, res) => {
+  try {
+    const input = noticeInput(req.body || {});
+    const notice = new DashboardNotice({ ...input, createdBy: req.adminClient.clientID });
+    assertNoticeReady(notice);
+    await notice.save();
+    res.status(201).json({ success: true, notice: serializeNotice(notice, { admin: true }) });
+  } catch (err) {
+    res.status(err.status || 400).json({ success: false, error: err.message || 'Could not create notice' });
+  }
+}));
+
+router.put('/dashboard-notices/:id', requireAdmin, wrapRoute(async (req, res) => {
+  try {
+    const notice = await DashboardNotice.findById(req.params.id);
+    if (!notice) return res.status(404).json({ success: false, error: 'Notice not found' });
+    Object.assign(notice, noticeInput(req.body || {}, { partial: true }));
+    assertNoticeReady(notice);
+    await notice.save();
+    res.json({ success: true, notice: serializeNotice(notice, { admin: true }) });
+  } catch (err) {
+    res.status(err.status || 400).json({ success: false, error: err.message || 'Could not update notice' });
+  }
+}));
+
+router.delete('/dashboard-notices/:id', requireAdmin, wrapRoute(async (req, res) => {
+  const notice = await DashboardNotice.findById(req.params.id);
+  if (!notice) return res.status(404).json({ success: false, error: 'Notice not found' });
+  notice.active = false;
+  await notice.save();
+  res.json({ success: true, notice: serializeNotice(notice, { admin: true }) });
 }));
 
 module.exports = router;

@@ -9,11 +9,13 @@ const LEGAL_ENTITY = {
 };
 
 const POLICY_VERSIONS = {
-  tos: 'TOS-2026-09-05',
+  tos: 'TOS-2026-10-08',
   aup: 'AUP-2026-09-05',
   takedown: 'TDN-2026-09-05',
-  publishedAt: '2026-09-05',
-  publishedLabel: '5 September 2026',
+  publishedAt: '2026-10-08',
+  publishedLabel: '8 October 2026',
+  aupPublishedLabel: '5 September 2026',
+  takedownPublishedLabel: '5 September 2026',
 };
 
 const PATHS = {
@@ -83,7 +85,7 @@ function publicLegalMeta() {
     clickwrap: {
       requiredField: 'acceptedLegalTerms',
       label:
-        'I am authorised to bind this business, and I accept the Merchant Terms of Service and Acceptable Use Policy, including the prohibition on unclassified films, adult content, and games, immediate suspension after an FPB or take-down notice, and the FPB indemnity.',
+        'I am authorised to bind this business, and I accept the Merchant Terms of Service and Acceptable Use Policy. I understand that Khana is not VAT registered so quoted fees are not plus VAT, that my estimate is the price until Khana sends notice of a change at least 30 days before it starts, that included credits expire at month-end, that Meta bills ad spend to my own card, and that WhatsApp and email send only when my account is connected and has credits. I also accept the prohibition on unclassified films, adult content, and games, immediate suspension after an FPB or take-down notice, and the FPB indemnity.',
     },
   };
 }
@@ -94,7 +96,7 @@ const TOS_SECTIONS = [
     paragraphs: [
       `${LEGAL_ENTITY.name} (Registration ${LEGAL_ENTITY.registration}) ("Khana", "we", "us") provides hosted e-commerce, bookings, and related software ("the Platform") to the business that opens an account ("you", "Merchant").`,
       `These Merchant Terms of Service, together with the Acceptable Use Policy and the take-down notice page, form a binding agreement when you tick the acceptance box, sign an order, submit a partnership estimate, or otherwise use the Platform. If you do not agree, do not use the Platform.`,
-      `Version ${POLICY_VERSIONS.tos}. Last updated ${POLICY_VERSIONS.publishedLabel}. Have South African counsel review this document before you rely on it in a dispute.`,
+      `Version ${POLICY_VERSIONS.tos}. Last updated ${POLICY_VERSIONS.publishedLabel}. The commercial rules in clause 4 apply to every partnership, including restaurants and other booking businesses.`,
     ],
   },
   {
@@ -112,9 +114,32 @@ const TOS_SECTIONS = [
     ],
   },
   {
-    heading: '4. Fees',
+    heading: '4. Fees, credits, and what is not included',
     paragraphs: [
-      'Fees are as quoted in your partnership estimate, invoice, or dashboard. Unpaid accounts may be suspended. Fees already paid are not refundable where we suspend or terminate under these Terms for your breach or a regulatory notice.',
+      '4.1 Your price is the partnership estimate, order, or invoice we send you, plus any usage shown in your dashboard. A published “from” price is a starting point for a small site. It is not a promise that every store, booking system, or custom scope costs that amount.',
+      '4.1.1 We may change monthly fees, setup fees for new work, add-on fees, credit rates, and credit-pack prices. A change applies only after we have sent you notice, by email to the address on your account or by a message in the dashboard. The notice will state the new price and the date it starts. That date will be at least 30 days after the notice, and not before your next renewal. Until that date, the price on your current estimate or invoice continues. The notice does not change a setup fee for work already started, credits you have already bought, or a month you have already paid. If you do not agree to the new price, you may cancel under clause 4.10 before it starts. Staying on the Platform after the start date is acceptance of the new price.',
+      '4.2 Khana is not registered for value-added tax. We do not add VAT to setup fees, monthly fees, or credit packs. If we are later required to register, we will tell you before the next invoice and VAT will apply only from that date. We will not backdate VAT onto fees already invoiced.',
+      '4.3 You pay two different things, and they are not the same bill. The partnership fee (setup, then a monthly fee) is for the software, hosting, and the modules on your estimate. Khana credits pay for WhatsApp messages and for Khana’s ads service fee. Your customers’ card payments, and Meta’s charge for ad spend, are not Khana fees.',
+    ],
+    bullets: [
+      'Setup is once-off for the scope on the estimate. Work you ask for after go-live, outside that scope, is quoted separately.',
+      'The monthly fee is payable in advance for each month the account stays open. It includes the plan you accepted, the included team seats on that plan, and that month’s included credits.',
+      'Extra team seats are R99 per seat per month unless your estimate says otherwise.',
+      'Standard plans, unless your estimate states different figures: Starter from R450 per month (50 credits, 1 seat, setup R1,999); Launch R650 per month (100 credits, 1 seat, setup R3,499); Growth R899 per month (200 credits, 3 seats, setup R6,999); Scale R1,799 per month (500 credits, 5 seats, setup R14,999). A business that only wants a custom module, with no store and no bookings, is quoted from R450 per month plus a R3,000 setup.',
+      'Revenue tools on Starter or Launch are a R99 monthly add-on. They are already included on Growth and Scale, so we do not add that R99 again.',
+      'Store and bookings together is the Scale plan. We do not add a separate mixed-module fee on top of Scale.',
+      'Newsletter campaigns, when included on your estimate, are R99 per month. Large catalogues (about 500 products or more) are R199 per month. B2B trade ordering is a separate project, quoted on its own, and is not part of a restaurant or standard booking plan.',
+    ],
+    after: [
+      '4.4 Included credits expire at the end of each calendar month. Unused included credits are not rolled over and are not refunded. Prepaid credit packs do not expire. We use included credits first, then prepaid credits. If the balance is too low, WhatsApp messages and new Khana ad actions do not run until you top up. A declined top-up does not create a debt for messages we did not send.',
+      '4.5 Standard credit rates, unless your estimate or the dashboard shows a current rate: booking, order, and other utility WhatsApp messages are 1 credit each; a marketing WhatsApp broadcast is 2.25 credits each; creating an ad campaign is 15 credits; boosting a post is 8 credits. A typical booking that sends both a WhatsApp confirmation and a WhatsApp reminder uses up to 2 credits. A utility message sent while the customer’s 24-hour WhatsApp conversation window is open uses no credits, because Meta does not charge for it. If WhatsApp reports that a message was not delivered, we return its credits to your balance. Prepaid packs cost less per credit than a last-minute top-up. The pack prices in the dashboard on the day you pay are the prices that apply.',
+      '4.6 Email confirmations, reminders, changes, and cancellations are included in the monthly fee. They are sent from the business mailbox you connect. If that mailbox is not connected, or the password fails, those emails do not send. That is not a failed Khana charge. WhatsApp booking and order messages send only when your own WhatsApp Business number is connected and your credit balance covers the message. Connecting one channel does not make the other channel send.',
+      '4.7 Ad spend is charged by Meta to the payment method on your own Meta ad account. Khana does not put ad spend on Khana’s card, and Khana’s monthly fee does not pay Meta. The credits in clause 4.5 are only Khana’s service fee for creating or boosting. You must add your own card in Meta before ads can deliver. We will not create an ad account under Khana’s business portfolio for your spend.',
+      '4.8 The Platform is your website, store, bookings, customer tools, email, and WhatsApp on your own brand. It does not include a public diner directory, a consumer booking app with other restaurants’ customers, Reserve with Google, table floor plans, a walk-in queue product, or SMS. If a reminder is marked SMS, we do not send an SMS. We will not charge you for an SMS we do not send.',
+      '4.9 Money your customers pay for bookings, deposits, or orders is processed by the payment provider you connect (such as PayFast). Those funds are yours, subject to that provider’s fees and rules. Khana’s fee is only the partnership and the credits. We do not add a platform fee onto your guest’s booking.',
+      '4.10 You may cancel the monthly partnership before the next renewal date by writing to us. We do not refund the month already started, and we do not refund setup once we have started the work described in the estimate, except where the estimate itself says otherwise. Prepaid credits already bought are not refundable, because they do not expire. If we suspend or close the account for your breach or for a regulatory notice, fees already paid are not refunded.',
+      '4.11 If the monthly fee or a due invoice is unpaid, we may suspend the dashboard, WhatsApp sending, and the public site until it is paid. Suspension does not by itself cancel Meta campaigns already running on your ad account. You remain responsible for those with Meta.',
+      '4.12 Meta, WhatsApp, your email host, and your payment provider are separate companies. Their outages, template rejections, ad disapprovals, and their own fees are outside the monthly partnership. We will tell you what you need to connect. We cannot complete their identity, billing, or policy steps for you.',
     ],
   },
   {
@@ -219,7 +244,7 @@ const AUP_SECTIONS = [
   {
     heading: '1. Purpose',
     paragraphs: [
-      `This Acceptable Use Policy applies to every Merchant and team member on the Platform. It is version ${POLICY_VERSIONS.aup}, last updated ${POLICY_VERSIONS.publishedLabel}. It forms part of the Merchant Terms of Service.`,
+      `This Acceptable Use Policy applies to every Merchant and team member on the Platform. It is version ${POLICY_VERSIONS.aup}, last updated ${POLICY_VERSIONS.aupPublishedLabel}. It forms part of the Merchant Terms of Service.`,
     ],
   },
   {
@@ -268,7 +293,7 @@ function takedownSections() {
     {
       heading: '1. Role',
       paragraphs: [
-        `${LEGAL_ENTITY.name} hosts merchant storefronts. We do not actively monitor all merchant content. Version ${POLICY_VERSIONS.takedown}, last updated ${POLICY_VERSIONS.publishedLabel}.`,
+        `${LEGAL_ENTITY.name} hosts merchant storefronts. We do not actively monitor all merchant content. Version ${POLICY_VERSIONS.takedown}, last updated ${POLICY_VERSIONS.takedownPublishedLabel}.`,
         ispaParagraph,
       ],
     },
@@ -311,6 +336,7 @@ function getDocument(id) {
       id: 'tos',
       title: 'Merchant Terms of Service',
       version: POLICY_VERSIONS.tos,
+      updatedLabel: POLICY_VERSIONS.publishedLabel,
       path: PATHS.tos,
       sections: TOS_SECTIONS,
     };
@@ -320,6 +346,7 @@ function getDocument(id) {
       id: 'aup',
       title: 'Acceptable Use Policy',
       version: POLICY_VERSIONS.aup,
+      updatedLabel: POLICY_VERSIONS.aupPublishedLabel,
       path: PATHS.aup,
       sections: AUP_SECTIONS,
     };
@@ -329,6 +356,7 @@ function getDocument(id) {
       id: 'takedown',
       title: 'Copyright and content take-down notices',
       version: POLICY_VERSIONS.takedown,
+      updatedLabel: POLICY_VERSIONS.takedownPublishedLabel,
       path: PATHS.takedown,
       sections: takedownSections(),
     };

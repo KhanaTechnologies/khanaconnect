@@ -7,6 +7,7 @@ const { encrypt } = require('../helpers/encryption');
 const { wrapRoute } = require('../helpers/failureEmail');
 const WhatsAppService = require('../services/saas/WhatsAppService');
 const WhatsAppInboxService = require('../services/saas/WhatsAppInboxService');
+const { normalizePhoneE164 } = require('../helpers/whatsappLink');
 const AdsService = require('../services/saas/AdsService');
 const MetaOAuthService = require('../services/saas/MetaOAuthService');
 const InstagramOAuthService = require('../services/saas/InstagramOAuthService');
@@ -575,6 +576,8 @@ router.get('/whatsapp/status', requireRoles('owner', 'manager', 'operator', 'vie
     ok: true,
     data: {
       notificationsEnabled,
+      ownerAlertsEnabled: client?.whatsapp?.ownerAlertsEnabled === true,
+      ownerAlertPhone: client?.whatsapp?.ownerAlertPhone || '',
       hasSender,
       usingOwnAccount,
       usingKhanaFallback: false,
@@ -613,12 +616,32 @@ router.get('/whatsapp/status', requireRoles('owner', 'manager', 'operator', 'vie
 
 /** Persist notifications toggle without saving the whole Account Management form. */
 router.put('/whatsapp/notifications', requireRoles('owner', 'manager'), wrapRoute(async (req, res) => {
-  const enabled = req.body?.enabled === true || req.body?.notificationsEnabled === true;
+  const body = req.body || {};
   const clientId = req.tenant.clientId;
+  const $set = {};
+
+  // Each field is optional so the owner-alert form does not switch customer notifications off.
+  if ('enabled' in body || 'notificationsEnabled' in body) {
+    $set['whatsapp.notificationsEnabled'] = body.enabled === true || body.notificationsEnabled === true;
+  }
+  if ('ownerAlertsEnabled' in body) {
+    $set['whatsapp.ownerAlertsEnabled'] = body.ownerAlertsEnabled === true;
+  }
+  if ('ownerAlertPhone' in body) {
+    const raw = String(body.ownerAlertPhone || '').trim();
+    const phone = raw ? normalizePhoneE164(raw) : '';
+    if (raw && !phone) {
+      return res.status(400).json({ ok: false, message: 'Enter a valid phone number, e.g. 082 123 4567 or +27821234567.' });
+    }
+    $set['whatsapp.ownerAlertPhone'] = String(phone || '').replace(/\D/g, '');
+  }
+  if (!Object.keys($set).length) {
+    return res.status(400).json({ ok: false, message: 'Nothing to update' });
+  }
 
   const client = await Client.findOneAndUpdate(
     { clientID: clientId },
-    { $set: { 'whatsapp.notificationsEnabled': enabled } },
+    { $set },
     { new: true }
   ).select('whatsapp companyName clientID');
 
@@ -631,6 +654,8 @@ router.put('/whatsapp/notifications', requireRoles('owner', 'manager'), wrapRout
     data: {
       clientID: client.clientID,
       notificationsEnabled: client.whatsapp?.notificationsEnabled === true,
+      ownerAlertsEnabled: client.whatsapp?.ownerAlertsEnabled === true,
+      ownerAlertPhone: client.whatsapp?.ownerAlertPhone || '',
     },
   });
 }));
@@ -969,8 +994,8 @@ router.post('/whatsapp/inbox/window-alerts/run', requireRoles('owner', 'manager'
 }));
 
 router.get('/whatsapp/inbox/assignees', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
-  const assignees = await WhatsAppInboxService.listAssignees(req.tenant.clientId);
-  res.json({ ok: true, data: { assignees } });
+  const data = await WhatsAppInboxService.listAssignees(req.tenant.clientId);
+  res.json({ ok: true, data });
 }));
 
 router.get('/whatsapp/inbox/canned', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
@@ -1019,6 +1044,19 @@ router.put('/whatsapp/inbox/threads/:contactWaId/assign', requireRoles('owner', 
     memberId,
   });
   res.json({ ok: true, data });
+}));
+
+router.get('/whatsapp/inbox/mine', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
+  const memberId = String(req.tenant?.userId || req.teamSession?.member?._id || '').trim();
+  const chats = await WhatsAppInboxService.listMyPriorityChats(req.tenant.clientId, memberId);
+  res.json({
+    ok: true,
+    data: {
+      chats,
+      count: chats.length,
+      unread: chats.reduce((sum, chat) => sum + (chat.unread || 0), 0),
+    },
+  });
 }));
 
 router.post(

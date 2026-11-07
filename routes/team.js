@@ -38,6 +38,13 @@ const {
 } = require('../helpers/teamPermissionPresets');
 const { getTeamSeatUsage, assertTeamSeatAvailable } = require('../helpers/teamSeats');
 const { normalizeDashboardThemeColor } = require('../helpers/dashboardTheme');
+const { listVisibleNotices, dismissNotice } = require('../helpers/dashboardNotices');
+const WhatsAppInboxService = require('../services/saas/WhatsAppInboxService');
+
+function dashboardClient(session) {
+  if (!session?.member || !session.client) return null;
+  return session.client;
+}
 const { serializeSubscriptionSummary, isClientSubscriptionActive } = require('../helpers/clientSubscription');
 const {
   ACTIVITY_CATEGORIES,
@@ -180,7 +187,37 @@ router.get('/me', wrapRoute(async (req, res) => {
     permissions,
     canManageTeam: manageTeam,
     assignableRoles: manageTeam ? manageableRolesFor(actorOrgRoleFromSession(req.teamSession)) : [],
+    notices: dashboardClient(req.teamSession)
+      ? await listVisibleNotices(client)
+      : [],
+    whatsappTasks: req.teamSession.member
+      ? await WhatsAppInboxService.listMyPriorityChats(client.clientID, String(req.teamSession.member._id))
+      : [],
+    canAssignWhatsapp: await WhatsAppInboxService.teamCanAssign(client.clientID),
   });
+}));
+
+router.get('/notices', wrapRoute(async (req, res) => {
+  const client = dashboardClient(req.teamSession);
+  if (!client) return res.status(403).json({ error: 'A dashboard login is required' });
+  const notices = await listVisibleNotices(client);
+  res.json({ success: true, notices });
+}));
+
+router.post('/notices/:id/dismiss', wrapRoute(async (req, res) => {
+  const client = dashboardClient(req.teamSession);
+  if (!client) return res.status(403).json({ error: 'A dashboard login is required' });
+  try {
+    const member = req.teamSession.member;
+    const data = await dismissNotice(
+      client,
+      req.params.id,
+      member?.email || member?._id || req.clientID
+    );
+    res.json({ success: true, ...data, notices: await listVisibleNotices(client) });
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, error: err.message || 'Could not dismiss notice' });
+  }
 }));
 
 router.put('/me/dashboard-theme', requireTeamManager(), wrapRoute(async (req, res) => {

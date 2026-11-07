@@ -280,7 +280,7 @@ async function updateSelection(clientId, { pageId, adAccountId }) {
     const taken = await findAdAccountOwner(normId, client.clientID);
     if (taken) {
       throw metaClientError(
-        `That Meta ad account is already used by workspace ${taken}. Pick or create this client’s own ad account — do not reuse Khana’s.`
+        `That Meta ad account is already used by another workspace. Pick or create an ad account that belongs to this business.`
       );
     }
     client.metaAds.adAccountId = normId;
@@ -2313,4 +2313,5 @@ module.exports = {
   normalizeAdAccountId,
   findAdAccountOwner,
   resolveInstagramFromPage,
+  assertAdsPermissions,
 };

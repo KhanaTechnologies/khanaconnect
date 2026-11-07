@@ -18,6 +18,7 @@ const READONLY_WRITE_ALLOW = [
   /^\/saas\/whatsapp\/templates\/sync\/?$/i,
   /^\/team\/me\/password\/?$/i,
   /^\/team\/me\/login-email\/?$/i,
+  /^\/team\/notices\/[^/]+\/dismiss\/?$/i,
 ];
 
 /** Always blocked for view-only, even if a broader allow matched. */

@@ -108,7 +108,7 @@ function renderLegalPage(docId) {
   <header>
     <div class="brand">${escapeHtml(LEGAL_ENTITY.name)}</div>
     <h1>${escapeHtml(doc.title)}</h1>
-    <div class="meta">Version ${escapeHtml(doc.version)} · Updated ${escapeHtml(POLICY_VERSIONS.publishedLabel)} · Registration ${escapeHtml(LEGAL_ENTITY.registration)}</div>
+    <div class="meta">Version ${escapeHtml(doc.version)} · Updated ${escapeHtml(doc.updatedLabel || POLICY_VERSIONS.publishedLabel)} · Registration ${escapeHtml(LEGAL_ENTITY.registration)}</div>
   </header>
   <nav>
     ${navLink(PATHS.index, 'Legal', doc.path)}
