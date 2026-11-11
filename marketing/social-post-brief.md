@@ -32,6 +32,7 @@ Do not aim posts at people who only want a cheap DIY site (Wix/Shopify self-serv
 - A WhatsApp to the owner's own phone for every new booking or order (optional)
 - Guest/customer list stays with the business
 - Local Facebook/Instagram ads can be set up; Meta bills the client's card
+- Facebook and Instagram connected in the same dashboard as orders and bookings: post, schedule, boost and see ad results without switching apps
 - We stay for support and updates
 
 ## What Khana does not do (never claim)
