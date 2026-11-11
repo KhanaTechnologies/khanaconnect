@@ -9,12 +9,63 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const { wrapRoute } = require('../helpers/failureEmail');
-const { validateItnWithPayfast } = require('../helpers/payfast');
+const { validateItnWithPayfast, payfastHost } = require('../helpers/payfast');
 const { fulfillGatewayPayment } = require('../helpers/fulfillGatewayPayment');
+const { resolveSessionFromToken } = require('../helpers/teamAuth');
+const { prepareOrderCheckout, prepareBookingCheckout } = require('../helpers/payfastCheckout');
 const Client = require('../models/client');
 const { Order } = require('../models/order');
+const Booking = require('../models/booking');
 
 const router = express.Router();
+
+/**
+ * Signed PayFast checkout, built and signed on the server so storefronts never see the
+ * client's passphrase. Needs a Bearer JWT (global authJwt): the storefront API token or a
+ * shopper token for the same business.
+ *
+ * POST /payments/payfast/checkout          { orderId,   buyer? }
+ * POST /payments/payfast/checkout/booking  { bookingId, buyer? }
+ * buyer (optional, signed): { name_first, name_last, email_address, cell_number }
+ *
+ * 200 → { success, kind, id, method: 'POST', action, host, fields }
+ * The storefront POSTs every key in `fields` (signature included, unchanged) to `action`.
+ */
+async function checkoutSession(req) {
+  const decoded = req.auth;
+  if (!decoded || !decoded.clientID) return { decoded, session: null };
+  const session = await resolveSessionFromToken(decoded);
+  return { decoded, session };
+}
+
+const checkoutDeps = { Order, Booking, payfastHost };
+
+router.post('/payfast/checkout', wrapRoute(async (req, res) => {
+  const { decoded, session } = await checkoutSession(req);
+  if (!session) return res.status(401).json({ success: false, error: 'Invalid or expired session' });
+  const body = req.body || {};
+  const result = await prepareOrderCheckout({
+    session,
+    decoded,
+    orderId: body.orderId || body.order_id || body.m_payment_id,
+    buyer: body.buyer,
+    deps: checkoutDeps,
+  });
+  return res.status(result.status).json(result.body);
+}));
+
+router.post('/payfast/checkout/booking', wrapRoute(async (req, res) => {
+  const { session } = await checkoutSession(req);
+  if (!session) return res.status(401).json({ success: false, error: 'Invalid or expired session' });
+  const body = req.body || {};
+  const result = await prepareBookingCheckout({
+    session,
+    bookingId: body.bookingId || body.booking_id,
+    buyer: body.buyer,
+    deps: checkoutDeps,
+  });
+  return res.status(result.status).json(result.body);
+}));
 
 function amountsMatch(order, amountGrossStr) {
   const gross = parseFloat(String(amountGrossStr || '').replace(',', '.'));

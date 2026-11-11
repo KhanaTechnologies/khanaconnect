@@ -27,7 +27,11 @@ const { resolveSessionFromToken, requireTeamSession, requireTeamManager } = requ
 const { createDashboardAuth } = require('../helpers/dashboardAuth');
 const { requireSelfOrAdmin } = require('../middleware/requireSelfOrAdmin');
 const { requireAdmin: requirePlatformAdmin, resolvePlatformAdmin } = require('../middleware/requireAdmin');
-const { publicClientPayload, stripClientSecrets } = require('../helpers/publicClientPayload');
+const {
+  publicClientPayload,
+  stripClientSecrets,
+  payfastPassphraseAccess,
+} = require('../helpers/publicClientPayload');
 const {
   applyLegalAcceptanceFromRequest,
   emptyLegalAcceptance,
@@ -1587,10 +1591,30 @@ router.get('/:clientId', wrapRoute(async (req, res) => {
       return res.status(403).json({ error: 'You can only access your own organization' });
     }
 
-    const clientObj = stripClientSecrets(client.toObject({ getters: true }));
+    // PayFast passphrase: owner settings view only (+ storefront tokens while the legacy
+    // browser-signing switch is on). Shoppers and other roles never get it.
+    let session = null;
+    try {
+      session = await resolveSessionFromToken(decoded);
+    } catch (_e) {
+      session = null;
+    }
+    const passAccess = payfastPassphraseAccess(session);
+    const clientObj = stripClientSecrets(client.toObject({ getters: true }), {
+      includePayfastPassphrase: passAccess.include,
+    });
     const whatsapp = publicWhatsappPayload(clientObj.whatsapp);
     clientObj.whatsapp = whatsapp;
     clientObj.whatsappChatUrl = whatsapp.chatUrl;
+
+    if (passAccess.legacy) {
+      res.set('Deprecation', 'true');
+      res.set('Link', '</api/v1/payments/payfast/checkout>; rel="successor-version"');
+      clientObj.payfastSigning = {
+        deprecated: true,
+        note: 'Browser-side PayFast signing is going away. POST /api/v1/payments/payfast/checkout with { orderId } instead.',
+      };
+    }
 
     return res.json({
       success: true,
@@ -1636,6 +1660,20 @@ router.put('/:clientId', requireSelfOrAdmin('clientId'), wrapRoute(async (req, r
   delete updates.role; // role changes only via admin routes
   delete updates.permissions; // use dedicated permissions endpoints
 
+  // Non-owner views no longer receive the passphrase; never let a form that echoes the
+  // client back blank or overwrite it. Only the owner (or platform owner) may change it.
+  if (
+    !payfastPassphraseAccess(req.teamSession).include ||
+    req.teamSession?.isApiToken ||
+    updates.passphrase == null ||
+    String(updates.passphrase).trim() === ''
+  ) {
+    delete updates.passphrase;
+  }
+  if (updates.merchant_key != null && String(updates.merchant_key).trim() === '') {
+    delete updates.merchant_key;
+  }
+
   if (updates.whatsapp && typeof updates.whatsapp === 'object') {
     updates.whatsapp = sanitizeWhatsappSettings(updates.whatsapp);
   }
@@ -1648,11 +1686,13 @@ router.put('/:clientId', requireSelfOrAdmin('clientId'), wrapRoute(async (req, r
   
   if (!updatedClient) return res.status(404).json({ error: 'Client not found' });
 
-  const clientObj = stripClientSecrets(updatedClient.toObject({ getters: true }));
+  const clientObj = stripClientSecrets(updatedClient.toObject({ getters: true }), {
+    includePayfastPassphrase: payfastPassphraseAccess(req.teamSession).include,
+  });
   const whatsapp = publicWhatsappPayload(clientObj.whatsapp);
   clientObj.whatsapp = whatsapp;
   clientObj.whatsappChatUrl = whatsapp.chatUrl;
-  
+
   res.json({
     success: true,
     message: 'Client updated successfully',

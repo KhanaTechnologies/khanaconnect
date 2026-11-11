@@ -1983,6 +1983,18 @@ function buildPaths(a) {
         },
       }),
     },
+    [`${a}/payments/payfast/checkout`]: {
+      post: op('post', 'Payments', 'Signed PayFast checkout for an order', B, {
+        description:
+          'Storefront API token or shopper token. Body `{ orderId, buyer? }` (`buyer`: `name_first`, `name_last`, `email_address`, `cell_number`). Builds the PayFast fields from the order (`amount` = `finalPrice`, `m_payment_id` = order id) and signs them with the business passphrase on the server. Returns `{ success, kind, id, method, action, host, fields }`; POST every key in `fields` unchanged to `action`. 404 unknown/other business, 409 paid/refunded/zero total/PayFast not set up.',
+      }),
+    },
+    [`${a}/payments/payfast/checkout/booking`]: {
+      post: op('post', 'Payments', 'Signed PayFast checkout for a booking deposit', B, {
+        description:
+          'Same as the order checkout, with body `{ bookingId, buyer? }`. `amount` = `payment.depositAmount`, `m_payment_id` = booking id, buyer defaults to the booking name and email.',
+      }),
+    },
 
     [`${a}/events/health`]: { get: op('get', 'Tracking', 'Tracking DB health', B) },
     [`${a}/events/batch`]: {

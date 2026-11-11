@@ -16,17 +16,39 @@ function publicClientPayload(client) {
 }
 
 /**
+ * Who may see the PayFast passphrase in a client payload.
+ *  - organisation owner (team session) or the platform owner: yes (settings view)
+ *  - storefront API token: only while PAYFAST_LEGACY_STOREFRONT_PASSPHRASE is not 'false',
+ *    so storefronts that still sign in the browser keep working until they move to
+ *    POST /payments/payfast/checkout. Set it to 'false' once every storefront has moved.
+ *  - shopper / B2B buyer / purpose tokens, other team roles: never
+ * @returns {{ include: boolean, legacy: boolean }}
+ */
+function payfastPassphraseAccess(session, env = process.env) {
+  if (!session) return { include: false, legacy: false };
+  if (session.platformAdmin) return { include: true, legacy: false };
+  if (session.member && session.orgRole === 'owner') return { include: true, legacy: false };
+  if (session.isApiToken && String(env.PAYFAST_LEGACY_STOREFRONT_PASSPHRASE || '').toLowerCase() !== 'false') {
+    return { include: true, legacy: true };
+  }
+  return { include: false, legacy: false };
+}
+
+/**
  * Strip credentials that must never leave the API.
- * PayFast merchant_key/passphrase stay for the owner's account UI.
+ * PayFast merchant_key stays (it is posted to PayFast in the open checkout form anyway).
+ * The PayFast passphrase signs checkouts, so it is removed unless the caller passes
+ * { includePayfastPassphrase: true } (owner settings view; see payfastPassphraseAccess).
  * Ad tokens / mailbox password are masked (use dedicated update endpoints to set).
  */
-function stripClientSecrets(clientObj) {
+function stripClientSecrets(clientObj, options = {}) {
   if (!clientObj || typeof clientObj !== 'object') return clientObj;
   const out = { ...clientObj };
   delete out.password;
   delete out.token;
   delete out.sessionToken;
   delete out.businessEmailPassword;
+  if (!options.includePayfastPassphrase) delete out.passphrase;
 
   if (out.metaAds && typeof out.metaAds === 'object') {
     out.metaAds = { ...out.metaAds, accessToken: out.metaAds.accessToken ? '[set]' : '' };
@@ -61,4 +83,4 @@ function stripClientSecrets(clientObj) {
   return out;
 }
 
-module.exports = { publicClientPayload, stripClientSecrets };
+module.exports = { publicClientPayload, stripClientSecrets, payfastPassphraseAccess };
