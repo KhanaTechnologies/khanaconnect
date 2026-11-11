@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { parsePlanInput } = require('./clientPlan');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const Client = require('../models/client');
@@ -101,7 +102,8 @@ function buildClientDefaults(body = {}) {
       const paidUntil = body.paidUntil ? new Date(body.paidUntil) : defaultPaidUntilForNewClient();
       return {
         status: body.subscriptionStatus || 'active',
-        plan: body.subscriptionPlan || body.plan || 'starter',
+        plan: parsePlanInput(body.subscriptionPlan || body.plan || body.tier) || 'starter',
+        extraSeats: Math.max(0, Math.floor(Number(body.extraSeats) || 0)),
         billingCycle: body.billingCycle || 'monthly',
         paidUntil,
         graceUntil: applyGracePeriod(paidUntil, DEFAULT_GRACE_DAYS),
@@ -207,7 +209,6 @@ async function createClientRecord(body, extras = {}) {
     notify_url: notUrl,
     businessEmail,
     businessEmailPassword: businessEmailPassword || loginPassword,
-    tier: tier || 'bronze',
     role: role || 'client',
     permissions: permissions ? defaultPermissions(permissions) : defaultPermissions(),
     legalAcceptance:

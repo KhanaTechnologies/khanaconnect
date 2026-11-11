@@ -1,4 +1,5 @@
 const express = require('express');
+const { planIdForClient } = require('../helpers/clientPlan');
 const router = express.Router();
 const { wrapRoute } = require('../helpers/failureEmail');
 const { requireAdmin } = require('../middleware/requireAdmin');
@@ -33,15 +34,21 @@ router.get(
   wrapRoute(async (req, res) => {
     const clients = await Client.find({})
       .select(
-        'clientID companyName role tier trackingStats createdAt permissions.dashboard'
+        'clientID companyName role subscription.plan trackingStats createdAt permissions.dashboard'
       )
       .sort({ companyName: 1 })
       .lean();
 
+    const data = clients.map(({ subscription, ...c }) => ({
+      ...c,
+      plan: planIdForClient({ subscription }),
+      tier: planIdForClient({ subscription }),
+    }));
+
     res.json({
       success: true,
-      count: clients.length,
-      data: clients,
+      count: data.length,
+      data,
     });
   })
 );

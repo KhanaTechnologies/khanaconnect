@@ -1,10 +1,13 @@
+const { normalizePlanId } = require('./monthlyCreditAllowance');
+const { parsePlanInput } = require('./clientPlan');
 const DEFAULT_GRACE_DAYS = 7;
 
 function normalizeSubscription(client) {
   const raw = client?.subscription || {};
   return {
     status: raw.status || 'active',
-    plan: raw.plan || 'starter',
+    plan: normalizePlanId(raw.plan),
+    extraSeats: Math.max(0, Math.floor(Number(raw.extraSeats) || 0)),
     billingCycle: raw.billingCycle || 'monthly',
     paidUntil: raw.paidUntil ? new Date(raw.paidUntil) : null,
     graceUntil: raw.graceUntil ? new Date(raw.graceUntil) : null,
@@ -117,9 +120,27 @@ function applyGracePeriod(paidUntil, graceDays = DEFAULT_GRACE_DAYS) {
   return end;
 }
 
+/** Sets plan / extraSeats from an admin body. Unknown plan names are rejected, not silently turned into Starter. */
+function applyPlanFields(sub, body) {
+  if (body.plan != null && String(body.plan).trim() !== '') {
+    const plan = parsePlanInput(body.plan);
+    if (!plan) {
+      throw Object.assign(new Error('plan must be one of: starter, launch, growth, scale, enterprise'), { status: 400 });
+    }
+    sub.plan = plan;
+  }
+  if (body.extraSeats != null) {
+    const n = Math.floor(Number(body.extraSeats));
+    if (!Number.isFinite(n) || n < 0) {
+      throw Object.assign(new Error('extraSeats must be 0 or more'), { status: 400 });
+    }
+    sub.extraSeats = n;
+  }
+}
+
 /**
  * Admin subscription updates.
- * Body: { action?: 'set'|'reinstate'|'extend'|'suspend', paidUntil?, billingCycle?, plan?, status?, notes?, extendMonths?, extendYears?, graceDays? }
+ * Body: { action?: 'set'|'reinstate'|'extend'|'suspend', paidUntil?, billingCycle?, plan?, extraSeats?, status?, notes?, extendMonths?, extendYears?, graceDays? }
  */
 function applySubscriptionUpdate(client, body = {}) {
   if (!client.subscription || typeof client.subscription !== 'object') {
@@ -157,7 +178,7 @@ function applySubscriptionUpdate(client, body = {}) {
     sub.lastPaymentAt = now;
     sub.suspendedAt = null;
     if (body.billingCycle) sub.billingCycle = body.billingCycle;
-    if (body.plan) sub.plan = body.plan;
+    applyPlanFields(sub, body);
     if (body.notes != null) sub.notes = String(body.notes).trim();
 
     const graceDays = body.graceDays != null ? Number(body.graceDays) : DEFAULT_GRACE_DAYS;
@@ -167,7 +188,7 @@ function applySubscriptionUpdate(client, body = {}) {
   }
 
   if (body.status) sub.status = body.status;
-  if (body.plan) sub.plan = body.plan;
+  applyPlanFields(sub, body);
   if (body.billingCycle) sub.billingCycle = body.billingCycle;
   if (body.notes != null) sub.notes = String(body.notes).trim();
   if (body.paidUntil !== undefined) {

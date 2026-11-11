@@ -1,19 +1,21 @@
 const SaasPricingRule = require('../../models/SaasPricingRule');
+const { pricingRuleKeysForPlan, planIdForClient } = require('../../helpers/clientPlan');
 const SaasUsageEvent = require('../../models/SaasUsageEvent');
 const { creditsForUnits, unitCostAtVolume, describeVolumeTiers, VOLUME_TIERS } = require('../../helpers/whatsappVolumePricing');
 
-async function pickRuleForTier(service, messageType, clientTier) {
-  const tierNorm = ['bronze', 'silver', 'gold'].includes(clientTier) ? clientTier : 'bronze';
+/** Rules are saved per plan (SaasPricingRule.tier holds a plan id, or "all"). Old bronze/silver/gold rules still match their plan. */
+async function pickRuleForTier(service, messageType, planId) {
+  const keys = pricingRuleKeysForPlan(planId);
   const candidates = await SaasPricingRule.find({
     service,
     message_type: messageType,
     active: true,
-    $or: [{ tier: tierNorm }, { tier: 'all' }, { tier: null }, { tier: { $exists: false } }],
+    $or: [{ tier: { $in: keys } }, { tier: 'all' }, { tier: null }, { tier: { $exists: false } }],
   })
     .sort({ updated_at: -1 })
     .lean();
 
-  const specific = candidates.find((r) => r.tier === tierNorm);
+  const specific = candidates.find((r) => keys.includes(r.tier));
   if (specific) return specific;
   const allTier = candidates.find((r) => !r.tier || r.tier === 'all');
   if (allTier) return allTier;
@@ -26,13 +28,13 @@ function startOfUtcMonth(d = new Date()) {
 
 class PricingService {
   /**
-   * @param {string} clientTier - Client.tier (bronze|silver|gold); drives cost and tier-specific rules.
+   * @param {string} planId - the client's plan (starter|launch|growth|scale|enterprise); picks plan-specific rules.
    */
-  static async getActiveRule(service, messageType = 'service', clientTier = 'bronze') {
-    let rule = await pickRuleForTier(service, messageType, clientTier);
+  static async getActiveRule(service, messageType = 'service', planId = 'starter') {
+    let rule = await pickRuleForTier(service, messageType, planId);
     if (rule) return rule;
 
-    rule = await pickRuleForTier(service, 'service', clientTier);
+    rule = await pickRuleForTier(service, 'service', planId);
     if (rule) return rule;
 
     throw new Error(`No active pricing rule found for ${service}:${messageType}`);
@@ -78,7 +80,12 @@ class PricingService {
       };
     }
 
-    const activeRule = rule || (await this.getActiveRule('whatsapp', messageType));
+    let activeRule = rule;
+    if (!activeRule) {
+      const Client = require('../../models/client');
+      const client = await Client.findOne({ clientID: clientId }).select('subscription.plan').lean();
+      activeRule = await this.getActiveRule('whatsapp', messageType, planIdForClient(client));
+    }
     return {
       credits: this.computeCredits(activeRule, units),
       monthCount,

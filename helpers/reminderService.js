@@ -320,7 +320,7 @@ class ReminderService {
                 customer: booking.customerName,
                 bookingType: booking.bookingType,
                 client: client.clientName,
-                tier: client.tier
+                plan: client.subscription?.plan || 'starter'
             });
 
             // Test appropriate reminder based on booking type

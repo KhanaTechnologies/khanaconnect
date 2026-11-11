@@ -42,13 +42,14 @@ Why it matters:
 2. TEAM SEAT LIMITS BY PLAN
 ---------------------------
 
-Team size follows your subscription tier:
+Team size follows your plan. You count as one of the seats.
 
-- Bronze: up to 2 team members
-- Silver: up to 5 team members
-- Gold: up to 10 team members
+- Starter: 1 seat
+- Launch: 1 seat
+- Growth: 3 seats
+- Scale: 5 seats
 
-You'll see your current usage on the Team page in the dashboard. If you need more seats, contact Khana support to discuss an upgrade.
+You'll see your current usage on the Team page in the dashboard. Need more people? Extra seats are R99 per seat per month, or you can move to a bigger plan. Contact Khana support and we'll add them.
 
 
 3. ACTIVITY LOG

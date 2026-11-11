@@ -4,10 +4,13 @@ const saasPricingRuleSchema = new mongoose.Schema(
   {
     service: { type: String, enum: ['whatsapp', 'ads_service_fee'], required: true, index: true },
     message_type: { type: String, enum: ['marketing', 'utility', 'auth', 'service', 'setup', 'management', 'optimization'], default: 'service' },
-    /** Matches Client.tier; use "all" for rules that apply to every tier. */
+    /**
+     * The plan this rule applies to (starter|launch|growth|scale|enterprise), or "all".
+     * bronze/silver/gold are kept only so rules saved before Nov 2026 still load; they match starter/launch/growth.
+     */
     tier: {
       type: String,
-      enum: ['all', 'bronze', 'silver', 'gold'],
+      enum: ['all', 'starter', 'launch', 'growth', 'scale', 'enterprise', 'bronze', 'silver', 'gold'],
       default: 'all',
       index: true,
     },

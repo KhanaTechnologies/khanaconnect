@@ -1,41 +1,48 @@
 const Client = require('../models/client');
 const TeamMember = require('../models/teamMember');
+const {
+  UNLIMITED_SEATS,
+  loadPlanBuilder,
+  seatLimitForClient,
+  planIdForClient,
+  planLabel,
+  includedSeatsForPlan,
+  extraSeatsForClient,
+} = require('./clientPlan');
 
-const TIER_SEAT_LIMITS = {
-  bronze: Number(process.env.TIER_BRONZE_TEAM_SEATS || 2),
-  silver: Number(process.env.TIER_SILVER_TEAM_SEATS || 5),
-  gold: Number(process.env.TIER_GOLD_TEAM_SEATS || 10),
-};
-
-const TIER_LABELS = {
-  bronze: 'Bronze',
-  silver: 'Silver',
-  gold: 'Gold',
-};
-
-function seatLimitForClient(client) {
-  if (!client) return TIER_SEAT_LIMITS.bronze;
-  if (client.role === 'admin') return 999;
-  return TIER_SEAT_LIMITS[client.tier] ?? TIER_SEAT_LIMITS.bronze;
-}
-
+/**
+ * Team seats follow the client's plan (subscription.plan): the plan's included seats
+ * (Website Pricing → plan builder, defaults Starter 1 · Launch 1 · Growth 3 · Scale 5 · Enterprise 10)
+ * plus subscription.extraSeats the client pays for. The owner counts as a seat.
+ */
 async function getTeamSeatUsage(clientID) {
-  const client = await Client.findOne({ clientID }).select('tier role companyName');
-  const limit = seatLimitForClient(client);
-  const used = await TeamMember.countDocuments({
-    clientID,
-    status: { $in: ['active', 'invited'] },
-  });
+  const [client, planBuilder, used] = await Promise.all([
+    Client.findOne({ clientID }).select('subscription role companyName').lean(),
+    loadPlanBuilder(),
+    TeamMember.countDocuments({
+      clientID,
+      status: { $in: ['active', 'invited'] },
+    }),
+  ]);
+  const limit = seatLimitForClient(client, planBuilder);
+  const unlimited = limit >= UNLIMITED_SEATS;
+  const plan = planIdForClient(client);
 
   return {
     clientID,
-    tier: client?.tier || 'bronze',
-    tierLabel: TIER_LABELS[client?.tier] || 'Bronze',
+    plan,
+    planLabel: planLabel(plan),
+    // Kept for older dashboard builds: these now carry the plan, not the retired metal tiers.
+    tier: plan,
+    tierLabel: planLabel(plan),
+    includedSeats: unlimited ? null : includedSeatsForPlan(plan, planBuilder),
+    extraSeats: unlimited ? 0 : extraSeatsForClient(client),
+    extraSeatMonthlyFee: planBuilder.extraSeatMonthlyFee,
     used,
-    limit: limit >= 999 ? null : limit,
-    unlimited: limit >= 999,
-    remaining: limit >= 999 ? null : Math.max(0, limit - used),
-    atLimit: limit < 999 && used >= limit,
+    limit: unlimited ? null : limit,
+    unlimited,
+    remaining: unlimited ? null : Math.max(0, limit - used),
+    atLimit: !unlimited && used >= limit,
   };
 }
 
@@ -43,8 +50,8 @@ async function assertTeamSeatAvailable(clientID) {
   const usage = await getTeamSeatUsage(clientID);
   if (usage.atLimit) {
     const err = new Error(
-      `Team seat limit reached (${usage.used}/${usage.limit} on ${usage.tierLabel} plan). ` +
-        'Remove a member or upgrade your plan to add more users.'
+      `Team seat limit reached (${usage.used}/${usage.limit} on the ${usage.planLabel} plan). ` +
+        'Remove a member, or ask us to add an extra seat or move you to a bigger plan.'
     );
     err.status = 403;
     err.seatUsage = usage;
@@ -54,8 +61,6 @@ async function assertTeamSeatAvailable(clientID) {
 }
 
 module.exports = {
-  TIER_SEAT_LIMITS,
-  TIER_LABELS,
   getTeamSeatUsage,
   assertTeamSeatAvailable,
 };

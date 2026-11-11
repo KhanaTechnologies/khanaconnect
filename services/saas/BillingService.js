@@ -11,6 +11,7 @@ const {
   periodExpiresAt,
   listAllowances,
 } = require('../../helpers/monthlyCreditAllowance');
+const { planIdForClient } = require('../../helpers/clientPlan');
 const { isClientSubscriptionActive } = require('../../helpers/clientSubscription');
 
 function httpError(message, status = 400) {
@@ -506,8 +507,8 @@ class BillingService {
 
     await this.ensureMonthlyIncludedCredits(id);
 
-    const client = await Client.findOne({ clientID: id }).select('tier').lean();
-    const tier = client?.tier || 'bronze';
+    const client = await Client.findOne({ clientID: id }).select('subscription.plan').lean();
+    const tier = planIdForClient(client);
     let need = 1;
     try {
       if (service === 'whatsapp') {
@@ -659,8 +660,8 @@ class BillingService {
   }
 
   static async chargeUsage({ clientId, service, messageType, units = 1, sourceRef, metadata = {} }) {
-    const client = await Client.findOne({ clientID: clientId }).select('tier subscription').lean();
-    const tier = client?.tier || 'bronze';
+    const client = await Client.findOne({ clientID: clientId }).select('subscription').lean();
+    const tier = planIdForClient(client);
     const rule = await PricingService.getActiveRule(service, messageType, tier);
 
     let creditsToDeduct = PricingService.computeCredits(rule, units);

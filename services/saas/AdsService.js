@@ -7,20 +7,11 @@ const META_GRAPH_BASE = process.env.META_GRAPH_BASE || 'https://graph.facebook.c
 const DEFAULT_AGENCY_BM_ID = process.env.AGENCY_META_BUSINESS_ID || '';
 const DEFAULT_OWNERSHIP = process.env.DEFAULT_AD_OWNERSHIP_TYPE === 'client' ? 'client' : 'agency';
 
-const TIER_META_CAMPAIGN_LIMIT = {
-  bronze: Number(process.env.TIER_BRONZE_META_CAMPAIGN_CAP || 5),
-  silver: Number(process.env.TIER_SILVER_META_CAMPAIGN_CAP || 25),
-  gold: 0,
-};
+const { metaCampaignCapForClient, planIdForClient, planLabel } = require('../../helpers/clientPlan');
 
 function normalizeMetaAdAccountId(raw) {
   if (!raw) return '';
   return String(raw).trim().replace(/^act_/i, '');
-}
-
-function campaignCapForTier(tier) {
-  const cap = TIER_META_CAMPAIGN_LIMIT[tier];
-  return cap !== undefined ? cap : TIER_META_CAMPAIGN_LIMIT.bronze;
 }
 
 class AdsService {
@@ -53,16 +44,18 @@ class AdsService {
     const BillingService = require('./BillingService');
     await BillingService.assertCreditsForAction(clientId, 'ads_service_fee', 'setup', 1);
 
-    const client = await Client.findOne({ clientID: clientId }).select('metaAds tier');
+    const client = await Client.findOne({ clientID: clientId }).select('metaAds subscription');
     if (!client) throw new Error('Client not found');
 
     const adId = normalizeMetaAdAccountId(client.metaAds?.adAccountId);
     if (!adId) throw new Error('Attach a Meta ad account first (Client.metaAds.adAccountId or POST /saas/ads/accounts)');
 
-    const cap = campaignCapForTier(client.tier);
+    const cap = metaCampaignCapForClient(client);
     const current = Array.isArray(client.metaAds?.campaigns) ? client.metaAds.campaigns.length : 0;
     if (cap > 0 && current >= cap) {
-      throw new Error(`Campaign limit reached for ${client.tier} tier (${cap}). Upgrade to create more.`);
+      throw new Error(
+        `Campaign limit reached on the ${planLabel(planIdForClient(client))} plan (${cap}). Move to a bigger plan to create more.`
+      );
     }
 
     const token =

@@ -1,4 +1,5 @@
 const bcrypt = require('bcryptjs');
+const { planIdForClient, planLabel } = require('./clientPlan');
 const Client = require('../models/client');
 const TeamMember = require('../models/teamMember');
 const { signTeamSessionToken } = require('./teamAuth');
@@ -61,7 +62,9 @@ function buildLoginResponse(client, member, token) {
     },
     role: platformAdminSession ? 'admin' : 'client',
     orgRole: member?.orgRole || null,
-    tier: client.tier,
+    plan: planIdForClient(client),
+    planLabel: planLabel(planIdForClient(client)),
+    tier: planIdForClient(client),
     email: member?.email || null,
     name: member?.displayName || client.companyName,
     companyName: client.companyName || client.clientID,

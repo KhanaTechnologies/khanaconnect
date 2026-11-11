@@ -78,11 +78,6 @@ const clientSchema = new Schema({
   teamLegacyResetToken: { type: String, select: false, default: null },
   teamLegacyResetExpires: { type: Date, default: null },
   teamLegacyResetEmail: encryptedString,
-  tier:  {type: String, 
-    enum: ["bronze", "silver" , "gold"],
-    required: true, 
-    default: "bronze"
-  },
   /** Hex brand color for dashboard UI (e.g. #3b6fc9). Empty = Khana default. */
   dashboardThemeColor: { type: String, default: '', trim: true },
   /** Hex accent for emails (newsletters + transactional). Empty = dashboard theme, then Khana default. */
@@ -100,7 +95,10 @@ const clientSchema = new Schema({
       enum: ['trialing', 'active', 'past_due', 'suspended', 'canceled'],
       default: 'active',
     },
+    /** starter | launch | growth | scale | enterprise. Sets seats, credits, Meta campaign limits and pricing rules (helpers/clientPlan.js). */
     plan: { type: String, default: 'starter', trim: true },
+    /** Paid extra team seats on top of the plan's included seats. */
+    extraSeats: { type: Number, default: 0, min: 0 },
     billingCycle: {
       type: String,
       enum: ['monthly', 'quarterly', 'yearly', 'custom'],

@@ -1,4 +1,5 @@
 const express = require('express');
+const { parsePlanInput, planIdForClient, planSummary } = require('../helpers/clientPlan');
 const multer = require('multer');
 const { tenantResolver, adminOnly, requireRoles } = require('../middleware/saasTenant');
 const { idempotencyGuard } = require('../middleware/saasIdempotency');
@@ -2474,7 +2475,13 @@ router.post('/admin/whatsapp/register', adminOnly, wrapRoute(async (req, res) =>
 router.post('/admin/pricing', adminOnly, wrapRoute(async (req, res) => {
   const { service, message_type, tier, cost_per_unit, markup_percentage, active = true, notes = '' } = req.body;
   if (!service) return res.status(400).json({ ok: false, message: 'service is required' });
-  const tierVal = tier && ['all', 'bronze', 'silver', 'gold'].includes(tier) ? tier : 'all';
+  let tierVal = 'all';
+  if (tier != null && String(tier).trim() !== '' && String(tier).trim().toLowerCase() !== 'all') {
+    tierVal = parsePlanInput(tier);
+    if (!tierVal) {
+      return res.status(400).json({ ok: false, message: 'tier must be "all" or a plan: starter, launch, growth, scale, enterprise' });
+    }
+  }
   const rule = await SaasPricingRule.create({
     service,
     message_type: message_type || 'service',
@@ -2544,7 +2551,7 @@ router.get('/admin/whatsapp-usage', adminOnly, wrapRoute(async (req, res) => {
 
   const clientIds = [...new Set(clientAgg.map((r) => r._id).filter(Boolean))];
   const clients = await Client.find({ clientID: { $in: clientIds } })
-    .select('clientID companyName whatsapp.notificationsEnabled tier')
+    .select('clientID companyName whatsapp.notificationsEnabled subscription.plan')
     .lean();
   const clientMap = Object.fromEntries(clients.map((c) => [c.clientID, c]));
   const billingMap = Object.fromEntries(billingAccounts.map((b) => [b.client_id, b]));
@@ -2570,7 +2577,8 @@ router.get('/admin/whatsapp-usage', adminOnly, wrapRoute(async (req, res) => {
     return {
       clientId: row._id,
       companyName: c.companyName || row._id,
-      tier: c.tier || 'bronze',
+      plan: planIdForClient(c),
+      tier: planIdForClient(c),
       notificationsEnabled: c.whatsapp?.notificationsEnabled === true,
       hasCloudAccount: accountClientIds.has(row._id),
       total: row.total,
@@ -2632,7 +2640,7 @@ router.get('/overview', requireRoles('owner', 'manager', 'billing_admin', 'viewe
   const [billing, waAccounts, clientSnap] = await Promise.all([
     SaasBillingAccount.findOne({ client_id: clientId }).lean(),
     SaasWhatsAppAccount.countDocuments({ client_id: clientId, status: 'active' }),
-    Client.findOne({ clientID: clientId }).select('metaAds.adAccountId metaAds.campaigns tier').lean(),
+    Client.findOne({ clientID: clientId }).select('metaAds.adAccountId metaAds.campaigns subscription.plan').lean(),
   ]);
   const ad_accounts = clientSnap?.metaAds?.adAccountId ? 1 : 0;
   const campaigns = Array.isArray(clientSnap?.metaAds?.campaigns) ? clientSnap.metaAds.campaigns.length : 0;
@@ -2644,7 +2652,8 @@ router.get('/overview', requireRoles('owner', 'manager', 'billing_admin', 'viewe
       whatsapp_accounts: waAccounts,
       ad_accounts,
       campaigns,
-      tier: clientSnap?.tier || 'bronze',
+      ...planSummary(clientSnap),
+      tier: planIdForClient(clientSnap),
       model_defaults: {
         ad_ownership: process.env.DEFAULT_AD_OWNERSHIP_TYPE === 'client' ? 'client' : 'agency',
       },

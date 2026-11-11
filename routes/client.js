@@ -1,4 +1,5 @@
 const express = require('express');
+const { parsePlanInput, planIdForClient } = require('../helpers/clientPlan');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const Client = require('../models/client');
@@ -1402,7 +1403,9 @@ router.post('/', requirePlatformAdmin, wrapRoute(async (req, res) => {
     notify_url, 
     businessEmail, 
     businessEmailPassword, 
-    tier, 
+    plan,
+    subscriptionPlan,
+    tier,
     role, 
     permissions, 
     deliveryOptions,
@@ -1430,7 +1433,7 @@ router.post('/', requirePlatformAdmin, wrapRoute(async (req, res) => {
     notify_url,
     businessEmail,
     businessEmailPassword,
-    tier,
+    subscription: { plan: parsePlanInput(subscriptionPlan || plan || tier) || 'starter' },
     role: role || 'client',
     permissions: permissions || {
       bookings: false,
@@ -1882,7 +1885,8 @@ router.get('/:clientId/analytics/dashboard',
           companyName: client.companyName,
           clientID: client.clientID,
           analyticsEnabled: client.analyticsConfig?.googleAnalytics?.isEnabled || false,
-          tier: client.tier,
+          plan: planIdForClient(client),
+          tier: planIdForClient(client),
           role: client.role
         },
         period: { startDate, endDate },
