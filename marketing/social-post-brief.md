@@ -50,7 +50,10 @@ Do not aim posts at people who only want a cheap DIY site (Wix/Shopify self-serv
 - Extra-bold navy headline, usually two short lines, centered
 - Gray subtitle with middle dots (·) when used
 - One white rounded app card, soft shadow, thin border, flat vector UI, line icons, lots of whitespace
-- Footer: "We build it, launch it, and stay." + khanatechnologies.co.za
+- Footer: "We build it, launch it, and stay." in small gray (the domain line is optional)
+- Carousels: five small dots under the card, the current one navy
+- Keep the card to 2 to 4 short lines with thin outline icons; WhatsApp chats use green bubbles with white text
+- Reference look: the restaurant and bakery example sets Jason picked on 2026-11-07; the style block in `recraft-batch-2.md` matches them
 - Never on the image: buttons, "See live demo", prices, rand amounts, "Swipe", promo stickers, floating badges
 - Avoid terracotta/cream AI-default looks, purple gradients, dark neon glow, emoji clutter
 
@@ -80,3 +83,11 @@ Shop: "One cake. Collect Saturday. The confirmation comes from the shop's own ma
 
 ## Brand test
 If you remove the logo and the footer, the post should still feel like a calm product demo for a South African small business — not a generic SaaS purple ad and not a newspaper-style layout.
+
+## Backup if the AI keeps misspelling card text
+
+`marketing/templates/slide.html` draws the same look as a web page, so the words come out exactly right. Add an entry to `SLIDES`, then render it:
+
+```
+chrome --headless=new --hide-scrollbars --force-device-scale-factor=1 --window-size=1080,1080 --virtual-time-budget=4000 --screenshot=out.png "file:///.../marketing/templates/slide.html?s=1"
+```

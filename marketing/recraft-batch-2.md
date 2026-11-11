@@ -2,54 +2,56 @@
 
 Follows `marketing/social-post-brief.md`. Product post: no prices on the images or in the caption. Only features from the brief's "What Khana actually does" list.
 
-- **Format:** carousel, 5 slides, 1080×1080
+- **Format:** carousel, 5 slides, 1080×1080 (Recraft: Square, style "Vector illustration" or "Digital illustration")
 - **Audience tag:** shop · salon-clinic (owners who already have customers)
-- **Frame, the same on every slide:** style block, plus five small progress dots under the card (current dot navy, the rest light gray). Only the headline and card content change. "yourbusiness.co.za" is a placeholder domain.
+- **Look:** matches the example slides Jason picked on 2026-11-07 (the restaurant and bakery sets): pale blue-grey page, crescent mark, big navy headline, ONE white card with only 2 to 4 lines in it, five dots, gray tagline.
+- **How to use:** paste the style block, then the slide's scene, as one prompt. Keep the same seed for all five slides. Upload the crescent logo as a Recraft brand/reference image if you can; otherwise swap the AI's mark for the real logo afterwards.
+- **Check every slide before posting:** read each word in the card. If one is misspelled, regenerate or fix it. Fewer words in the card means fewer mistakes, so the scenes are kept short.
 
-## Style block (paste once, before each slide's scene)
+## Style block (paste before each slide's scene)
 
 ```
-Flat vector product illustration for a South African small-business software company. Background: pale cool off-white with a slight blue-white tint, plain, no gradients, no texture. Top centre: small navy crescent logo mark. Below it: extra-bold navy sans-serif headline, centred. Centre of the image: ONE white rounded app card with a soft shadow and a thin light-gray border, flat vector UI, simple line icons in navy and gray, generous whitespace, nothing cramped. Under the card: five small progress dots. Bottom centre footer in small gray text: "We build it, launch it, and stay." and below it "khanatechnologies.co.za". Calm, clean, product-demo feel. No people's faces, no photos, no buttons outside the card, no prices, no currency, no badges, no stickers, no emoji, no purple, no terracotta or cream tones, no neon, no dark background.
+Clean minimal flat UI marketing graphic, square. Background: soft pale blue-grey (#EDF1F8), completely plain, no gradient, no texture, no pattern. Top centre: a small dark navy crescent-moon logo mark with a small curved swoosh under it, no text next to it. Below it, centred: a very large extra-bold dark navy (#1B2559) sans-serif headline like Inter Extra Bold, tight letter spacing, lots of space around it. In the middle of the image: ONE white app card with large rounded corners, a thin light-gray outline and a soft gentle drop shadow, floating on the background. Inside the card: a small plain title at the top with a thin gray line under it, then only a few lines of large dark-gray text, each with a simple thin black outline icon on the left. Lots of white space inside the card, nothing cramped. Under the card: a row of five small round dots, one dark navy and four light gray. At the very bottom, centred, in small medium-gray text: "We build it, launch it, and stay." Calm, airy, premium, Apple-like product demo. No people, no faces, no photos, no hands, no phone frame, no buttons, no prices, no currency, no numbers except the ones written below, no badges, no stickers, no emoji, no second card, no charts, no purple, no cream or terracotta, no dark background, no extra text anywhere.
 ```
 
 ## Slide 1
 
 ```
-Headline: "Your own site." (one line)
-Progress dots: 1st navy, others light gray.
-Card: a clean small-business homepage on "yourbusiness.co.za" (small gray URL bar at top). Header with the text "Your Business", a soft placeholder image block, and below it a simple order section: three product tiles in a row, each a soft gray image placeholder with a short gray name line under it. Calm and simple.
+Headline, two lines: "Your own" / "site."
+Dots: the 1st dot navy.
+Card: title at the top left "yourbusiness.co.za" with a small outlined "Order" tag at the top right. Under the line, three rows: a cake outline icon and "Chocolate cake", a calendar outline icon and "Collect Saturday", a clock outline icon and "10:00".
 ```
 
 ## Slide 2
 
 ```
-Headline: "Your own mailbox." (one line)
-Progress dots: 2nd navy.
-Card: a simple email view. Sender line "Your Business <hello@yourbusiness.co.za>" with a small envelope line icon. Subject in bold: "Order confirmed: collect Saturday". Three short gray lines of body text and a small summary block with two lines: "1 × Celebration cake" and "Collect Saturday · 10:00".
+Headline, two lines: "Your own" / "mailbox."
+Dots: the 2nd dot navy.
+Card: an email. Top row: "From: hello@yourbusiness.co.za". Second row: "Subject: Order confirmed." Thin gray line. Then two lines of larger text: "Chocolate cake" and "Collect Saturday".
 ```
 
 ## Slide 3
 
 ```
-Headline: "Your WhatsApp." (one line)
-Progress dots: 3rd navy.
-Card: a flat WhatsApp-style chat. Header: "Your Business" with a small green verified-business tick. One outgoing message bubble in pale green: "Hi Thabo, your order is confirmed: 1 × Celebration cake, collect Saturday at 10:00." Small gray timestamp. Clean, flat, no phone frame.
+Headline, two lines: "Your" / "WhatsApp."
+Dots: the 3rd dot navy.
+Card: a WhatsApp chat. Small title "Your Business" at the top with a thin line under it. Two WhatsApp-green (#3FAE5A) message bubbles with white text, aligned right: "Your cake is confirmed. Collect Saturday." and "Reply here if anything changes."
 ```
 
 ## Slide 4
 
 ```
-Headline: "Your customer list." (one line)
-Progress dots: 4th navy.
-Card: a simple customer list titled "Customers" with a small people line icon. Five rows, each with a small round gray initial circle, a first name and initial, and a short gray note on the right: "Thabo M. · 3 orders", "Naledi K. · 1 booking", "Anika V. · 5 orders", "Lerato S. · 2 bookings", "Sipho D. · 1 order". Thin gray dividers. The top row softly highlighted in pale blue.
+Headline, two lines: "Your customer" / "list."
+Dots: the 4th dot navy.
+Card: small title "Customers" with a thin line under it. Four rows, each with a person outline icon, separated by thin gray lines: "Thabo · 3 orders", "Naledi · 1 booking", "Anika · 5 orders", "Sipho · 1 order". The first row has a very pale blue highlight behind it.
 ```
 
 ## Slide 5
 
 ```
 Headline, two lines: "And a team" / "that stays."
-Progress dots: 5th navy.
-Card: a flat chat between the owner and "Khana Technologies" (small navy crescent avatar). One gray incoming bubble from the owner: "Can we add the new Christmas range?" One pale-blue reply bubble: "Yes. Send the photos and prices, we'll load them." Small gray timestamps. Under the chat, three small gray labels separated by middle dots: "Hosting · updates · support".
+Dots: the 5th dot navy.
+Card: a chat. Small title "Khana Technologies" with a thin line under it. One light-gray bubble on the left with dark text: "Can we add the Christmas range?" One very pale blue bubble on the right with dark text: "Yes. Send the photos, we'll load them."
 ```
 
 ## Caption (ready to paste)
