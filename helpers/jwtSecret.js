@@ -48,7 +48,8 @@ function verifyJwtWithAnySecret(jwt, token) {
   let lastError = null;
   for (const secret of secrets) {
     try {
-      return { decoded: jwt.verify(token, secret), secretUsed: secret };
+      // Pin the algorithm: every token here is signed with HS256 (jsonwebtoken's default).
+      return { decoded: jwt.verify(token, secret, { algorithms: ['HS256'] }), secretUsed: secret };
     } catch (err) {
       lastError = err;
     }

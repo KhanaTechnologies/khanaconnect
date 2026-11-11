@@ -266,20 +266,23 @@ function wrapRoute(handler) {
     try {
       await handler(req, res, next);
     } catch (err) {
-      try {
-        req.__errorEmailed = true;
-        req.errorReference = req.errorReference || errorReference();
-        const resBody = typeof res.__getCapturedBody === 'function' ? res.__getCapturedBody() : undefined;
-        const subject = `API Error — ${req.method} ${req.originalUrl.split('?')[0]}`;
-        const html = formatErrorHtml({ req, resBody, err });
-        // Don't hold the response for SMTP.
-        sendErrorEmail({ subject, html, dedupeKey: `${subject}\n${err?.message || err}` }).catch(() => {});
-      } catch (mailerErr) {
-        console.error('[failureEmail] sendErrorEmail error (wrapRoute):', mailerErr.message || mailerErr);
+      const status = err && err.status && Number(err.status) >= 400 ? err.status : 500;
+      // 4xx errors thrown on purpose (bad input, not found) are the caller's mistake, not an incident.
+      if (status >= 500) {
+        try {
+          req.__errorEmailed = true;
+          req.errorReference = req.errorReference || errorReference();
+          const resBody = typeof res.__getCapturedBody === 'function' ? res.__getCapturedBody() : undefined;
+          const subject = `API Error — ${req.method} ${req.originalUrl.split('?')[0]}`;
+          const html = formatErrorHtml({ req, resBody, err });
+          // Don't hold the response for SMTP.
+          sendErrorEmail({ subject, html, dedupeKey: `${subject}\n${err?.message || err}` }).catch(() => {});
+        } catch (mailerErr) {
+          console.error('[failureEmail] sendErrorEmail error (wrapRoute):', mailerErr.message || mailerErr);
+        }
       }
 
       if (res.headersSent) return; // handler already answered before throwing
-      const status = err && err.status && Number(err.status) >= 400 ? err.status : 500;
       res.status(status).json({
         success: false,
         message:
@@ -310,17 +313,20 @@ async function globalErrorHandler(err, req, res, next) {
       });
     }
 
-    req.__errorEmailed = true;
-    req.errorReference = req.errorReference || errorReference();
-    const resBody = typeof res.__getCapturedBody === 'function' ? res.__getCapturedBody() : undefined;
-    const subject = `Uncaught Exception — ${req.method} ${req.originalUrl.split('?')[0]}`;
-    const html = formatErrorHtml({ req, resBody, err });
-
-    sendErrorEmail({ subject, html, dedupeKey: `${subject}\n${err?.message || err}` }).catch((e) => {
-      console.error('[failureEmail] sendErrorEmail failed (global handler):', e.message || e);
-    });
-
     const status = err && err.status && Number(err.status) >= 400 ? err.status : 500;
+
+    // Malformed JSON, oversized bodies, blocked CORS origins etc. are client errors: answer, don't email.
+    if (status >= 500) {
+      req.__errorEmailed = true;
+      req.errorReference = req.errorReference || errorReference();
+      const resBody = typeof res.__getCapturedBody === 'function' ? res.__getCapturedBody() : undefined;
+      const subject = `Uncaught Exception — ${req.method} ${req.originalUrl.split('?')[0]}`;
+      const html = formatErrorHtml({ req, resBody, err });
+
+      sendErrorEmail({ subject, html, dedupeKey: `${subject}\n${err?.message || err}` }).catch((e) => {
+        console.error('[failureEmail] sendErrorEmail failed (global handler):', e.message || e);
+      });
+    }
     res.status(status).json({
       success: false,
       message: status === 500 ? 'Internal Server Error' : err.message || 'Error',

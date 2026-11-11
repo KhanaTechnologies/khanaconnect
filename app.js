@@ -10,7 +10,6 @@ const rateLimit = require('express-rate-limit');
 const compression = require('compression');
 require('dotenv/config');
 const authJwt = require('./helpers/jwt');
-const errorHandler = require('./helpers/error-handler');
 const { mongoSanitize } = require('./middleware/mongoSanitize');
 const bandwidthMeter = require('./middleware/bandwidthMeter');
 const { sessionCookieAuth } = require('./helpers/sessionCookie');
@@ -159,7 +158,8 @@ const corsOptions = {
       const msg = `The CORS policy does not allow access from: ${origin}`;
       console.warn(`🚫 Blocked CORS request from: ${origin}`);
       alertBlockedOrigin(origin);
-      return callback(new Error(msg), false);
+      // 403, not 500: the error handler answers without emailing (alertBlockedOrigin already throttles alerts).
+      return callback(Object.assign(new Error(msg), { status: 403 }), false);
     }
     return callback(null, true);
   },

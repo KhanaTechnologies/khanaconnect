@@ -10,6 +10,7 @@ const Email = require('../models/Email');
 const EmailSubscriber = require('../models/emailSubscriber');
 const { sendMail, sendMailWithRetry } = require('../helpers/mailer');
 const { wrapRoute } = require('../helpers/failureEmail');
+const { escapeRegex } = require('../helpers/escapeRegex');
 const { fetchClientEmails, fetchClientSentEmails, addFlags, removeFlags, normalizeMessageId } = require('../helpers/imapService');
 const NewsletterService = require('../helpers/newsletterService');
 const {
@@ -528,11 +529,11 @@ router.route('/')
                 // Add search filter
                 if (search) {
                     messagesQuery.$or = [
-                        { subject: { $regex: search, $options: 'i' } },
-                        { from: { $regex: search, $options: 'i' } },
-                        { to: { $regex: search, $options: 'i' } },
-                        { text: { $regex: search, $options: 'i' } },
-                        { html: { $regex: search, $options: 'i' } }
+                        { subject: { $regex: escapeRegex(search), $options: 'i' } },
+                        { from: { $regex: escapeRegex(search), $options: 'i' } },
+                        { to: { $regex: escapeRegex(search), $options: 'i' } },
+                        { text: { $regex: escapeRegex(search), $options: 'i' } },
+                        { html: { $regex: escapeRegex(search), $options: 'i' } }
                     ];
                 }
 
@@ -1193,14 +1194,21 @@ router.get('/search', validateClient, wrapRoute(async (req, res) => {
         
         if (field === 'all' || !field) { // CHANGED from 'in' to 'field'
             searchConditions.$or = [
-                { subject: { $regex: query, $options: 'i' } },
-                { from: { $regex: query, $options: 'i' } },
-                { to: { $regex: query, $options: 'i' } },
-                { text: { $regex: query, $options: 'i' } },
-                { html: { $regex: query, $options: 'i' } }
+                { subject: { $regex: escapeRegex(query), $options: 'i' } },
+                { from: { $regex: escapeRegex(query), $options: 'i' } },
+                { to: { $regex: escapeRegex(query), $options: 'i' } },
+                { text: { $regex: escapeRegex(query), $options: 'i' } },
+                { html: { $regex: escapeRegex(query), $options: 'i' } }
             ];
         } else {
-            searchConditions[field] = { $regex: query, $options: 'i' }; // CHANGED from 'in' to 'field'
+            // Only these fields can be searched one at a time. Any other value (e.g. clientID)
+            // would replace the tenant filter above and expose other businesses' mail.
+            const SEARCH_FIELDS = { subject: 'subject', from: 'from', to: 'to', body: 'text', text: 'text', html: 'html' };
+            const searchField = SEARCH_FIELDS[String(field)];
+            if (!searchField) {
+                return res.status(400).json({ ok: false, message: 'Invalid search field' });
+            }
+            searchConditions[searchField] = { $regex: escapeRegex(query), $options: 'i' };
         }
 
         // Execute search

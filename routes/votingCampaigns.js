@@ -9,6 +9,7 @@ const Vote = require('../models/Vote');
 const Customer = require('../models/customer');
 const { body, validationResult } = require('express-validator');
 const { wrapRoute } = require('../helpers/failureEmail');
+const { escapeRegex } = require('../helpers/escapeRegex');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const { createDashboardAuth } = require('../helpers/dashboardAuth');
 const {
@@ -1143,9 +1144,10 @@ router.get('/', validateClient, wrapRoute(async (req, res) => {
   if (campaignType) filter.campaignType = campaignType;
   if (category) filter.categories = { $in: [category] };
   if (search) {
+    const searchRx = escapeRegex(search);
     filter.$or = [
-      { title: { $regex: search, $options: 'i' } },
-      { description: { $regex: search, $options: 'i' } }
+      { title: { $regex: searchRx, $options: 'i' } },
+      { description: { $regex: searchRx, $options: 'i' } }
     ];
   }
   if (startDate || endDate) {

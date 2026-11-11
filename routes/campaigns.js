@@ -9,6 +9,7 @@ const Campaign = require('../models/Campaign');
 const PreorderPledge = require('../models/PreorderPledge');
 const { body, validationResult } = require('express-validator');
 const { wrapRoute } = require('../helpers/failureEmail');
+const { escapeRegex } = require('../helpers/escapeRegex');
 const { verifyJwtWithAnySecret } = require('../helpers/jwtSecret');
 const { createDashboardAuth } = require('../helpers/dashboardAuth');
 const { uploadPublicAsset, unlinkLocalAssetByUrl } = require('../helpers/publicAssetUpload');
@@ -320,9 +321,10 @@ router.get('/', validateClient, wrapRoute(async (req, res) => {
   if (campaignType) filter.campaignType = campaignType;
   if (category) filter.categories = { $in: [category] };
   if (search) {
+    const searchRx = escapeRegex(search);
     filter.$or = [
-      { name: { $regex: search, $options: 'i' } },
-      { description: { $regex: search, $options: 'i' } }
+      { name: { $regex: searchRx, $options: 'i' } },
+      { description: { $regex: searchRx, $options: 'i' } }
     ];
   }
   if (startDate || endDate) {
@@ -777,11 +779,12 @@ router.get('/:id/signups', validateClient, wrapRoute(async (req, res) => {
   }
 
   if (search) {
+    const searchRx = escapeRegex(search);
     filter.$or = [
-      { email: { $regex: search, $options: 'i' } },
-      { firstName: { $regex: search, $options: 'i' } },
-      { lastName: { $regex: search, $options: 'i' } },
-      { phoneNumber: { $regex: search, $options: 'i' } }
+      { email: { $regex: searchRx, $options: 'i' } },
+      { firstName: { $regex: searchRx, $options: 'i' } },
+      { lastName: { $regex: searchRx, $options: 'i' } },
+      { phoneNumber: { $regex: searchRx, $options: 'i' } }
     ];
   }
 
