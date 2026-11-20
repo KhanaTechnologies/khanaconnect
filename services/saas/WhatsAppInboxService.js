@@ -434,6 +434,19 @@ class WhatsAppInboxService {
           } catch (btnErr) {
             console.warn('[whatsapp inbox] booking button reply failed:', btnErr.message);
           }
+          if (!bookingButtonHandled) {
+            // Email the owner when someone starts a conversation. Don't hold up the webhook for SMTP.
+            const { maybeAlertNewContact } = require('../../helpers/whatsappNewContactAlert');
+            maybeAlertNewContact({
+              clientId,
+              contactWaId: from,
+              contactName,
+              wamid,
+              body,
+              type,
+              timestamp,
+            }).catch(() => {});
+          }
           if (!bookingButtonHandled) try {
             const WhatsAppAutoResponderService = require('./WhatsAppAutoResponderService');
             // Prefer WABA owner (phone mapping) so shared-number reattribution

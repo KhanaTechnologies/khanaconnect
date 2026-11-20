@@ -144,4 +144,4 @@ async function sendWhatsAppWindowCloseAlertEmail({ client, recipients, threads, 
   return { sent };
 }
 
-module.exports = { sendWhatsAppWindowCloseAlertEmail, formatRemaining };
+module.exports = { sendWhatsAppWindowCloseAlertEmail, formatRemaining, resolveMailbox };
