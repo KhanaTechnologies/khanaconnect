@@ -435,17 +435,12 @@ class WhatsAppInboxService {
             console.warn('[whatsapp inbox] booking button reply failed:', btnErr.message);
           }
           if (!bookingButtonHandled) {
-            // Email the owner when someone starts a conversation. Don't hold up the webhook for SMTP.
-            const { maybeAlertNewContact } = require('../../helpers/whatsappNewContactAlert');
-            maybeAlertNewContact({
-              clientId,
-              contactWaId: from,
-              contactName,
-              wamid,
-              body,
-              type,
-              timestamp,
-            }).catch(() => {});
+            // Someone started a conversation: email Khana (lead inbox) or alert the business owner.
+            // Don't hold up the webhook for SMTP or the alert send.
+            const { maybeAlertNewContact, maybeAlertOwnerOfNewChat } = require('../../helpers/whatsappNewContactAlert');
+            const chat = { clientId, contactWaId: from, contactName, wamid, body, type, timestamp };
+            maybeAlertNewContact(chat).catch(() => {});
+            maybeAlertOwnerOfNewChat(chat).catch(() => {});
           }
           if (!bookingButtonHandled) try {
             const WhatsAppAutoResponderService = require('./WhatsAppAutoResponderService');

@@ -550,6 +550,25 @@ router.post('/whatsapp/conversions/test-event', requireRoles('owner', 'manager',
   }
 }));
 
+/** Owner alert settings as the dashboard shows them (see services/saas/OwnerAlertService.js). */
+function ownerAlertSettings(client, account) {
+  const wa = client?.whatsapp || {};
+  const events = wa.ownerAlertEvents || {};
+  return {
+    ownerAlertsEnabled: wa.ownerAlertsEnabled === true,
+    ownerAlertPhone: wa.ownerAlertPhone || '',
+    ownerAlertTarget: wa.ownerAlertTarget === 'business' ? 'business' : 'personal',
+    ownerAlertBusinessNumber: String(account?.display_phone_number || '').replace(/\D/g, ''),
+    ownerAlertEvents: {
+      booking: events.booking !== false,
+      order: events.order !== false,
+      reschedule: events.reschedule !== false,
+      message: events.message !== false,
+    },
+    ownerAlertEmailFallback: wa.ownerAlertEmailFallback !== false,
+  };
+}
+
 /** Readiness for client WhatsApp Cloud API notifications (toggle + credits + sender). */
 router.get('/whatsapp/status', requireRoles('owner', 'manager', 'operator', 'viewer'), wrapRoute(async (req, res) => {
   const clientId = req.tenant.clientId;
@@ -577,8 +596,7 @@ router.get('/whatsapp/status', requireRoles('owner', 'manager', 'operator', 'vie
     ok: true,
     data: {
       notificationsEnabled,
-      ownerAlertsEnabled: client?.whatsapp?.ownerAlertsEnabled === true,
-      ownerAlertPhone: client?.whatsapp?.ownerAlertPhone || '',
+      ...ownerAlertSettings(client, ownAccount),
       hasSender,
       usingOwnAccount,
       usingKhanaFallback: false,
@@ -636,6 +654,23 @@ router.put('/whatsapp/notifications', requireRoles('owner', 'manager'), wrapRout
     }
     $set['whatsapp.ownerAlertPhone'] = String(phone || '').replace(/\D/g, '');
   }
+  if ('ownerAlertTarget' in body) {
+    const target = String(body.ownerAlertTarget || '').trim().toLowerCase();
+    if (!['personal', 'business'].includes(target)) {
+      return res.status(400).json({ ok: false, message: 'ownerAlertTarget must be "personal" or "business".' });
+    }
+    $set['whatsapp.ownerAlertTarget'] = target;
+  }
+  if (body.ownerAlertEvents && typeof body.ownerAlertEvents === 'object') {
+    for (const event of ['booking', 'order', 'reschedule', 'message']) {
+      if (event in body.ownerAlertEvents) {
+        $set[`whatsapp.ownerAlertEvents.${event}`] = body.ownerAlertEvents[event] === true;
+      }
+    }
+  }
+  if ('ownerAlertEmailFallback' in body) {
+    $set['whatsapp.ownerAlertEmailFallback'] = body.ownerAlertEmailFallback === true;
+  }
   if (!Object.keys($set).length) {
     return res.status(400).json({ ok: false, message: 'Nothing to update' });
   }
@@ -655,8 +690,13 @@ router.put('/whatsapp/notifications', requireRoles('owner', 'manager'), wrapRout
     data: {
       clientID: client.clientID,
       notificationsEnabled: client.whatsapp?.notificationsEnabled === true,
-      ownerAlertsEnabled: client.whatsapp?.ownerAlertsEnabled === true,
-      ownerAlertPhone: client.whatsapp?.ownerAlertPhone || '',
+      ...ownerAlertSettings(
+        client,
+        await SaasWhatsAppAccount.findOne({ client_id: clientId, status: 'active' })
+          .sort({ updated_at: -1 })
+          .select('display_phone_number')
+          .lean()
+      ),
     },
   });
 }));

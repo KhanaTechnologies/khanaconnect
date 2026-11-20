@@ -141,8 +141,48 @@ async function maybeAlertNewContact({ clientId, contactWaId, contactName = '', w
   }
 }
 
+/**
+ * For businesses on the platform (not Khana's own lead inbox, which gets the email above):
+ * send the owner an alert when someone starts a WhatsApp chat with them, if they switched
+ * owner alerts on. Goes out through OwnerAlertService (Khana's number → own number → email).
+ * Never throws.
+ */
+async function maybeAlertOwnerOfNewChat({ clientId, contactWaId, contactName = '', wamid, body = '', type = 'text', timestamp }) {
+  try {
+    if (isEnabledForClient(clientId)) return { ok: false, skipped: 'khana_email' };
+    const contact = String(contactWaId || '').replace(/\D/g, '');
+    if (!clientId || !contact || !wamid) return { ok: false, skipped: 'invalid' };
+
+    const client = await Client.findOne({ clientID: clientId }).select('whatsapp').lean();
+    const wa = client?.whatsapp || {};
+    if (!wa.ownerAlertsEnabled || wa.ownerAlertEvents?.message === false) return { ok: false, skipped: 'off' };
+
+    // Never alert about the owner's own phone or the alert sender's number (no alert loops).
+    if (String(wa.ownerAlertPhone || '').replace(/\D/g, '') === contact) return { ok: false, skipped: 'own_number' };
+    const OwnerAlertService = require('../services/saas/OwnerAlertService');
+    if ((await OwnerAlertService.senderNumber()) === contact) return { ok: false, skipped: 'alert_sender' };
+
+    const { isNew } = await classifyInbound({ contactWaId: contact, wamid, timestamp });
+    if (!isNew) return { ok: false, skipped: 'ongoing_conversation' };
+
+    const text = String(body || '').replace(/\s+/g, ' ').trim();
+    const preview = text ? `"${text.length > 120 ? `${text.slice(0, 117)}…` : text}"` : `(${type || 'message'})`;
+    const who = contactName ? `${contactName} (+${contact})` : `+${contact}`;
+    return await OwnerAlertService.send(clientId, {
+      key: `message:${contact}:${wamid}`,
+      event: 'message',
+      headline: 'New WhatsApp message',
+      details: `${who}: ${preview} · reply in your WhatsApp inbox`,
+    });
+  } catch (e) {
+    console.warn('[whatsapp new-chat alert] failed:', e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
 module.exports = {
   maybeAlertNewContact,
+  maybeAlertOwnerOfNewChat,
   classifyInbound,
   isEnabledForClient,
   resolveRecipients,

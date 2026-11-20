@@ -5,7 +5,7 @@
  *  - no credit charge for utility messages sent while the customer's 24-hour window is open
  *    (Meta does not bill those either);
  *  - Confirm / Reschedule buttons on booking reminders;
- *  - a WhatsApp to the owner's own phone for each new booking, order and reschedule request.
+ *  - an alert to the owner for each new booking, order and reschedule request (OwnerAlertService).
  */
 const mongoose = require('mongoose');
 const Client = require('../../models/client');
@@ -310,6 +310,16 @@ class WhatsAppNotifyService {
     } catch (e) {
       console.warn('[whatsapp notify] refund failed:', e.message);
     }
+    if (msg.template_name === OWNER_ALERT_TEMPLATE) {
+      // An owner alert that didn't arrive goes out by email instead; not a fault with the customer messages.
+      try {
+        const OwnerAlertService = require('./OwnerAlertService');
+        if (await OwnerAlertService.onUndelivered(wamid, error)) return;
+      } catch (e) {
+        console.warn('[whatsapp notify] owner alert email fallback failed:', e.message);
+        return;
+      }
+    }
     const n = Number(code);
     if (Number.isFinite(n) && RECIPIENT_META_CODES.has(n)) return;
     if (msg.template_name) {
@@ -323,45 +333,10 @@ class WhatsAppNotifyService {
    * WhatsApp the owner's own phone. Deduplicated per key, so the same booking/order alerts once.
    * Never throws.
    */
-  static async sendOwnerAlert(clientId, { key, headline, details }) {
-    try {
-      const client = await Client.findOne({ clientID: clientId })
-        .select('whatsapp companyName clientName')
-        .lean();
-      const wa = client?.whatsapp || {};
-      const to = normalizePhoneE164(wa.ownerAlertPhone || '');
-      if (!wa.ownerAlertsEnabled || !to) return { ok: false, skipped: 'off' };
-      if (!(await this.hasApprovedTemplate(clientId, OWNER_ALERT_TEMPLATE))) {
-        return { ok: false, skipped: 'template_not_approved' };
-      }
-      const WhatsAppOwnerAlert = require('../../models/WhatsAppOwnerAlert');
-      try {
-        await WhatsAppOwnerAlert.create({ client_id: clientId, key: String(key).slice(0, 200) });
-      } catch (e) {
-        if (e?.code === 11000) return { ok: false, skipped: 'duplicate' };
-        throw e;
-      }
-      const WhatsAppService = require('./WhatsAppService');
-      const data = await WhatsAppService.sendTemplateMessage({
-        clientId,
-        to,
-        templateName: OWNER_ALERT_TEMPLATE,
-        messageType: 'utility',
-        components: [
-          {
-            type: 'body',
-            parameters: [headline, client.companyName || client.clientName || 'your business', details].map((t) => ({
-              type: 'text',
-              text: String(t || '—').replace(/\s+/g, ' ').slice(0, 600),
-            })),
-          },
-        ],
-      });
-      return { ok: true, data };
-    } catch (e) {
-      console.warn('[whatsapp notify] owner alert failed:', e.message);
-      return { ok: false, error: e.message };
-    }
+  static async sendOwnerAlert(clientId, alert) {
+    // Khana's number first, then the client's own, then email (services/saas/OwnerAlertService.js).
+    const OwnerAlertService = require('./OwnerAlertService');
+    return OwnerAlertService.send(clientId, alert);
   }
 
   /** Hook for every automatic customer message: alert the owner about new bookings/orders. */
@@ -373,12 +348,14 @@ class WhatsAppNotifyService {
       if (!booking) return;
       await this.sendOwnerAlert(clientId, {
         key: `booking:${booking._id}`,
+        event: 'booking',
         headline: 'New booking',
         details: `${firstNameAndInitial(booking.customerName)} · ${formatBookingWhen(booking)} · ${displayRef(booking._id)}`,
       });
     } else if (kind === 'order_confirmation' && opts.orderRef) {
       await this.sendOwnerAlert(clientId, {
         key: `order:${opts.orderRef}`,
+        event: 'order',
         headline: 'New order',
         details: [`Order ${displayRef(opts.orderRef)}`, opts.total ? `Total ${opts.total}` : '']
           .filter(Boolean)
@@ -446,6 +423,7 @@ class WhatsAppNotifyService {
       }
       await this.sendOwnerAlert(tenant, {
         key: `reschedule:${booking._id}:${new Date().toISOString().slice(0, 13)}`,
+        event: 'reschedule',
         headline: 'Reschedule request',
         details: `${firstNameAndInitial(booking.customerName)} · ${when} · reply in your WhatsApp inbox`,
       });

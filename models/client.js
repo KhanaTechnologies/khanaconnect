@@ -346,6 +346,17 @@ const clientSchema = new Schema({
     ownerAlertsEnabled: { type: Boolean, default: false },
     /** Owner's own phone for those alerts, digits-only E.164 (e.g. 27821234567). */
     ownerAlertPhone: { type: String, default: '', trim: true },
+    /** Which number gets owner alerts: their own phone (ownerAlertPhone) or the WhatsApp business number. */
+    ownerAlertTarget: { type: String, enum: ['personal', 'business'], default: 'personal' },
+    /** Which updates alert the owner. */
+    ownerAlertEvents: {
+      booking: { type: Boolean, default: true },
+      order: { type: Boolean, default: true },
+      reschedule: { type: Boolean, default: true },
+      message: { type: Boolean, default: true },
+    },
+    /** Email the owner when a WhatsApp alert can't be sent or isn't delivered. */
+    ownerAlertEmailFallback: { type: Boolean, default: true },
   },
 
   /** B2B module — security & multi-warehouse settings */

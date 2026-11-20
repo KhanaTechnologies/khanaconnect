@@ -1236,8 +1236,10 @@ class WhatsAppService {
       waba_id: account?.waba_id || '',
       mode: account?.mode || '',
       notifications_enabled: !!client?.whatsapp?.notificationsEnabled,
-      owner_alerts_enabled: !!client?.whatsapp?.ownerAlertsEnabled,
-      owner_alert_phone: client?.whatsapp?.ownerAlertPhone || '',
+      ...require('./OwnerAlertService').healthFields(client),
+      owner_alert_khana_ready: await require('./OwnerAlertService')
+        .khanaSenderReady()
+        .catch(() => false),
       send_failures: {
         count: failingSends,
         last_error: failingSends > 0 ? account?.last_notify_error || '' : '',
