@@ -5,7 +5,10 @@
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
-    "dev": "nodemon app.js"
+    "dev": "nodemon app.js",
+    "test:storefront": "node tests/storefrontApi.test.js",
+    "test:contract": "node tests/boilerplateApiContract.test.js",
+    "boilerplate:api": "node boilerplate/scripts/gen-api.cjs"
   },
   "author": "Khana Technologies",
   "license": "ISC",

@@ -8,6 +8,12 @@
  * express-jwt may exempt some paths; route-level middleware can still require Bearer — prefer sending a token when unsure.
  */
 const apiPath = process.env.API_URL || '/api/v1';
+const {
+  storefrontPaths,
+  storefrontSchemas,
+  storefrontSecurityScheme,
+  storefrontTag,
+} = require('./openapiStorefront');
 
 const B = [{ bearerAuth: [] }];
 const C = [{ customerBearer: [] }];
@@ -1930,7 +1936,6 @@ function buildPaths(a) {
     },
     [`${a}/email/subscribers/export`]: { get: op('get', 'Email', 'Export subscribers CSV', B) },
     [`${a}/email/health`]: { get: op('get', 'Email', 'Subsystem health', B) },
-    [`${a}/email/contact`]: { post: op('post', 'Email', 'Contact form to business inbox', B) },
     [`${a}/email/rethread`]: { post: op('post', 'Email', 'Recalculate threads', B) },
     [`${a}/email/signature/image`]: {
       post: {
@@ -1983,18 +1988,7 @@ function buildPaths(a) {
         },
       }),
     },
-    [`${a}/payments/payfast/checkout`]: {
-      post: op('post', 'Payments', 'Signed PayFast checkout for an order', B, {
-        description:
-          'Storefront API token or shopper token. Body `{ orderId, buyer? }` (`buyer`: `name_first`, `name_last`, `email_address`, `cell_number`). Builds the PayFast fields from the order (`amount` = `finalPrice`, `m_payment_id` = order id) and signs them with the business passphrase on the server. Returns `{ success, kind, id, method, action, host, fields }`; POST every key in `fields` unchanged to `action`. 404 unknown/other business, 409 paid/refunded/zero total/PayFast not set up.',
-      }),
-    },
-    [`${a}/payments/payfast/checkout/booking`]: {
-      post: op('post', 'Payments', 'Signed PayFast checkout for a booking deposit', B, {
-        description:
-          'Same as the order checkout, with body `{ bookingId, buyer? }`. `amount` = `payment.depositAmount`, `m_payment_id` = booking id, buyer defaults to the booking name and email.',
-      }),
-    },
+    // /payments/payfast/checkout(/booking): see config/openapiStorefront.js
 
     [`${a}/events/health`]: { get: op('get', 'Tracking', 'Tracking DB health', B) },
     [`${a}/events/batch`]: {
@@ -2065,6 +2059,7 @@ function spec() {
       { url: 'https://khanatechnologies.co.za', description: 'Production (example)' },
     ],
     tags: [
+      storefrontTag,
       { name: 'Meta', description: 'HTML home page served at `/` (Express view).' },
       { name: 'Auth', description: 'Reserved tag; primary auth flows live under **Client** and **Customer**.' },
       {
@@ -2164,6 +2159,7 @@ function spec() {
     ],
     components: {
       securitySchemes: {
+        ...storefrontSecurityScheme,
         bearerAuth: {
           type: 'http',
           scheme: 'bearer',
@@ -2185,6 +2181,7 @@ function spec() {
         },
       },
       schemas: {
+        ...storefrontSchemas,
         Error: {
           type: 'object',
           properties: {
@@ -3807,7 +3804,7 @@ function spec() {
         },
       },
     },
-    paths: buildPaths(a),
+    paths: { ...buildPaths(a), ...storefrontPaths(a) },
   };
 }
 

@@ -1,0 +1,17 @@
+{
+  "$comment": "Every API operation the boilerplate calls. Paths are relative to the API base (/api/v1). Add a line here before calling a new endpoint, then run `npm run gen:api`.",
+  "operations": [
+    { "id": "getSite", "method": "GET", "path": "/storefront/site" },
+    { "id": "listCategories", "method": "GET", "path": "/storefront/categories" },
+    { "id": "listProducts", "method": "GET", "path": "/storefront/products" },
+    { "id": "getProduct", "method": "GET", "path": "/storefront/products/{idOrSlug}" },
+    { "id": "createOrder", "method": "POST", "path": "/storefront/orders" },
+    { "id": "getOrder", "method": "GET", "path": "/storefront/orders/{id}" },
+    { "id": "payfastOrderCheckout", "method": "POST", "path": "/payments/payfast/checkout" },
+    { "id": "listServices", "method": "GET", "path": "/storefront/bookings/services" },
+    { "id": "getAvailability", "method": "GET", "path": "/storefront/bookings/availability" },
+    { "id": "createBooking", "method": "POST", "path": "/storefront/bookings" },
+    { "id": "payfastBookingCheckout", "method": "POST", "path": "/payments/payfast/checkout/booking" },
+    { "id": "sendContact", "method": "POST", "path": "/email/contact" }
+  ]
+}
