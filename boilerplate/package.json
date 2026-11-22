@@ -1,0 +1,33 @@
+{
+  "name": "khana-client-site",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Khana client website boilerplate: store and/or bookings on the khanaconnect API",
+  "scripts": {
+    "dev": "vite",
+    "dev:mock": "node mock/server.mjs",
+    "gen:api": "node scripts/gen-api.cjs",
+    "gen:check": "node scripts/gen-api.cjs --check",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run gen:check && tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "e2e": "node scripts/e2e.mjs"
+  },
+  "dependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-router-dom": "6.26.2"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "@vitejs/plugin-react-swc": "3.5.0",
+    "mongodb-memory-server": "10.1.4",
+    "typescript": "5.6.3",
+    "vite": "5.4.10"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

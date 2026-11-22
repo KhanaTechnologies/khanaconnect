@@ -364,6 +364,7 @@ app.use(`${api}/productsales`, productSalesRouter);
 app.use(`${api}/discountcode`, discountCodeRouter);
 app.use(`${api}/bookings`, bookingsRouter);
 app.use(`${api}/storefront/bookings`, publicBookingRouter);
+app.use(`${api}/storefront`, require('./routes/storefront'));
 app.use(`${api}/staff`, staffRouter);
 app.use(`${api}/services`, serviceRouter);
 app.use(`${api}/admin/bandwidth`, require('./routes/adminBandwidth'));
