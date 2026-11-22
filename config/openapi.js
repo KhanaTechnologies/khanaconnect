@@ -894,9 +894,859 @@ function buildSaasMetaPaths(a) {
   };
 }
 
+/** Shared bits for the other `/saas` builders below (same conventions as `buildSaasMetaPaths`). */
+const SAAS_ROLES = {
+  all: ' Roles: owner, manager, operator, viewer.',
+  ops: ' Roles: owner, manager, operator.',
+  write: ' Roles: owner, manager.',
+  billingAll: ' Roles: owner, manager, billing_admin, viewer, operator.',
+  billingRead: ' Roles: owner, manager, billing_admin, viewer.',
+};
+const SAAS_ADMIN = [{ bearerAuth: [] }, { saasAdminApiKey: [] }];
+const SAAS_ADMIN_NOTE = 'Khana platform admins only (admin JWT or `X-Admin-Api-Key`).';
+const pathParam = (name, description) => ({ name, in: 'path', required: true, schema: { type: 'string' }, description });
+const queryParam = (name, schema, description) => ({ name, in: 'query', schema, ...(description ? { description } : {}) });
+const printParams = [
+  queryParam('print', { type: 'string', enum: ['1'] }, '`1` returns printable HTML instead of JSON.'),
+  queryParam('format', { type: 'string', enum: ['html'] }, 'Same as `print=1`.'),
+];
+const htmlOrJson = (schemaName) => ({
+  description: 'JSON `{ ok, data }`, or `text/html` when `print=1` / `format=html`.',
+  content: {
+    'application/json': { schema: schemaRef(schemaName) },
+    'text/html': { schema: { type: 'string' } },
+  },
+});
+
+/**
+ * WhatsApp Cloud API setup, templates, Flows, conversions and test sends (`routes/saas.js`).
+ * Tenant from the Bearer JWT; role from the team member. Responses `{ ok, data }`.
+ */
+function buildSaasWhatsAppPaths(a) {
+  const s = `${a}/saas/whatsapp`;
+  const T = 'SaaS · WhatsApp';
+  const { all, ops, write } = SAAS_ROLES;
+  return {
+    [`${s}/accounts`]: {
+      post: op('post', T, 'Save Cloud API credentials (manual connect)', B, {
+        description: `Encrypts the token, disables the client's other active numbers, subscribes the app to the WABA and links a Conversions dataset. **409** when the number is active for another client.${ops}`,
+        ...jsonBody('SaasWhatsAppAccountBody', 'WABA, phone number id and access token'),
+        responses: { 201: J.created, 400: J.badRequest, 409: jsonErr('Number connected to another client') },
+      }),
+    },
+    [`${s}/accounts/disconnect`]: {
+      post: op('post', T, 'Disconnect the Cloud API number', B, { description: write.trim() }),
+    },
+    [`${s}/setup`]: {
+      get: op('get', T, 'Webhook callback URL, required templates and onboarding steps', B, {
+        description: `\`verifyToken\` is only filled for owner/manager.${all}`,
+      }),
+    },
+    [`${s}/embedded-signup/config`]: {
+      get: op('get', T, 'Public Embedded Signup config (app id, config id)', B, { description: all.trim() }),
+    },
+    [`${s}/embedded-signup/complete`]: {
+      post: op('post', T, 'Finish Meta Embedded Signup', B, {
+        description: `Exchanges the code, saves the WABA, subscribes webhooks and registers the number.${write}`,
+        ...jsonBody('SaasWhatsAppEmbeddedSignupBody', 'Code from the Embedded Signup popup'),
+        responses: { 201: J.created, 400: J.badRequest },
+      }),
+    },
+    [`${s}/register`]: {
+      post: op('post', T, 'Re-register the Cloud API phone number', B, {
+        description: `Use when auto-register failed during signup.${write}`,
+        ...jsonBody('SaasWhatsAppRegisterBody', 'Optional 6-digit two-step PIN'),
+      }),
+    },
+    [`${s}/account`]: {
+      get: op('get', T, 'Active Cloud API account (no token)', B, {
+        description: `\`data\` is \`null\` when nothing is connected.${all}`,
+      }),
+    },
+    [`${s}/conversions/status`]: {
+      get: op('get', T, 'Conversions API dataset status', B, { description: all.trim() }),
+    },
+    [`${s}/conversions/dataset`]: {
+      post: op('post', T, "Create or bind the WABA's Conversions dataset", B, {
+        description: `Body \`{ force? }\` (default true).${ops}`,
+        responses: { 500: J.serverError },
+      }),
+    },
+    [`${s}/conversions/decommission`]: {
+      post: op('post', T, 'Unlink the Conversions dataset', B, { description: write.trim() }),
+    },
+    [`${s}/conversions/test-event`]: {
+      post: op('post', T, 'Send a Conversions API test event', B, {
+        description: ops.trim(),
+        ...jsonBody('SaasWhatsAppConversionTestBody', 'Event to send'),
+        responses: { 500: J.serverError },
+      }),
+    },
+    [`${s}/status`]: {
+      get: op('get', T, 'Notification readiness (toggle, sender, credits) and owner alert settings', B, {
+        description: `Sends never fall back to Khana's WABA, so \`usingKhanaFallback\` is always false.${all}`,
+        responses: { 200: jsonResponse('SaasWhatsAppStatusResponse') },
+      }),
+    },
+    [`${s}/notifications`]: {
+      put: op('put', T, 'Customer notifications toggle and owner alert settings', B, {
+        description: `Every field is optional; only the ones sent change. **400** when nothing is sent or a value is invalid.${write}`,
+        ...jsonBody('SaasWhatsAppNotificationsBody', 'Fields to change'),
+        responses: { 400: J.badRequest, 404: J.notFound },
+      }),
+    },
+    [`${s}/templates`]: {
+      get: op('get', T, 'Synced message templates', B, {
+        description: all.trim(),
+        parameters: [queryParam('status', { type: 'string', example: 'APPROVED' })],
+      }),
+      post: op('post', T, 'Submit a template to Meta for approval', B, {
+        description: `Send a \`starter\` id, or a custom \`name\` + \`body\` (or raw \`components\`).${write}`,
+        ...jsonBody('SaasWhatsAppTemplateCreateBody', 'Starter id or custom template'),
+        responses: { 201: J.created, 400: J.badRequest },
+      }),
+      delete: op('delete', T, 'Delete a template on Meta', B, {
+        description: `\`name\` and \`language\` from the body or query.${write}`,
+        parameters: [queryParam('name', { type: 'string' }), queryParam('language', { type: 'string' })],
+        responses: { 400: J.badRequest },
+      }),
+    },
+    [`${s}/templates/starters`]: {
+      get: op('get', T, 'Built-in template starters', B, { description: all.trim() }),
+    },
+    [`${s}/templates/sync`]: {
+      post: op('post', T, 'Pull templates and statuses from Meta', B, { description: ops.trim() }),
+    },
+    [`${s}/templates/coach`]: {
+      post: op('post', T, 'Check a template draft before submitting', B, {
+        description: `Returns issues and tips (\`helpers/whatsappTemplateCoach.js\`). Nothing is sent to Meta.${all}`,
+        ...jsonBody('SaasWhatsAppTemplateCoachBody', 'Template draft'),
+      }),
+    },
+    [`${s}/templates/pack`]: {
+      post: op('post', T, 'Install the Khana template pack', B, {
+        description: write.trim(),
+        responses: { 201: J.created, 400: J.badRequest },
+      }),
+    },
+    [`${s}/health`]: {
+      get: op('get', T, 'Number quality and messaging health', B, { description: all.trim() }),
+    },
+    [`${s}/broadcasts/estimate`]: {
+      post: op('post', T, 'Estimate credits for a broadcast', B, {
+        description: all.trim(),
+        ...jsonBody('SaasWhatsAppBroadcastEstimateBody', 'Recipient count and message type'),
+      }),
+    },
+    [`${s}/messages/test-to-me`]: {
+      post: op('post', T, 'Send a template to your own number', B, {
+        description: `Body \`{ to?, templateName? (default hello_world), language? }\`.${write}`,
+        responses: { 400: J.badRequest },
+      }),
+    },
+    [`${s}/messages/template`]: {
+      post: op('post', T, 'Send a template message (billed)', B, {
+        description: `Deducts credits. Supports \`Idempotency-Key\`.${ops}`,
+        parameters: [{ name: 'Idempotency-Key', in: 'header', schema: { type: 'string' } }],
+        ...jsonBody('SaasWhatsAppTemplateSendBody', 'Recipient and template'),
+        responses: { 202: jsonResponse('FlexibleJson', 'Accepted') },
+      }),
+    },
+    [`${s}/messages/test`]: {
+      post: op('post', T, 'Send a sample Khana notification template', B, {
+        description: `Fills the template with test data (order TEST-001, booking TEST-BK, code 123456).${ops}`,
+        ...jsonBody('SaasWhatsAppTestSendBody', 'Recipient and template'),
+        responses: { 202: jsonResponse('FlexibleJson', 'Accepted'), 400: J.badRequest },
+      }),
+    },
+    [`${s}/audit`]: {
+      get: op('get', T, 'Template and setup audit log', B, {
+        description: all.trim(),
+        parameters: [queryParam('limit', { type: 'integer', default: 40, maximum: 100 })],
+      }),
+    },
+    [`${s}/flows/starters`]: {
+      get: op('get', T, 'Built-in Flow starters (booking, leads, contact)', B, { description: all.trim() }),
+    },
+    [`${s}/flows`]: {
+      get: op('get', T, 'Flows on the WABA', B, { description: all.trim() }),
+      post: op('post', T, 'Create a Flow from a starter', B, {
+        description: write.trim(),
+        ...jsonBody('SaasWhatsAppFlowCreateBody', 'Starter id'),
+        responses: { 201: J.created, 400: J.badRequest },
+      }),
+    },
+    [`${s}/flows/sync`]: {
+      post: op('post', T, 'Pull Flows from Meta', B, { description: ops.trim(), responses: { 400: J.badRequest } }),
+    },
+    [`${s}/flows/send`]: {
+      post: op('post', T, 'Send a Flow message', B, {
+        description: ops.trim(),
+        ...jsonBody('SaasWhatsAppFlowSendBody', 'Recipient and Flow'),
+        responses: { 202: jsonResponse('FlexibleJson', 'Accepted'), 400: J.badRequest },
+      }),
+    },
+    [`${s}/flows/{flowId}/publish`]: {
+      post: op('post', T, 'Publish a draft Flow', B, {
+        description: write.trim(),
+        parameters: [pathParam('flowId', 'Meta Flow id.')],
+        responses: { 400: J.badRequest },
+      }),
+    },
+  };
+}
+
+/** WhatsApp shared inbox: threads, notes, replies, broadcasts, auto-rules, canned replies. */
+function buildSaasWhatsAppInboxPaths(a) {
+  const s = `${a}/saas/whatsapp/inbox`;
+  const T = 'SaaS · WhatsApp inbox';
+  const { all, ops, write } = SAAS_ROLES;
+  const contact = pathParam('contactWaId', 'Contact WhatsApp number (digits or E.164).');
+  const accepted = { 202: jsonResponse('FlexibleJson', 'Accepted') };
+  return {
+    [`${s}/threads`]: {
+      get: op('get', T, 'List conversation threads', B, {
+        description: all.trim(),
+        parameters: [
+          queryParam('limit', { type: 'integer', default: 40 }),
+          queryParam('q', { type: 'string' }, 'Search text (alias `search`).'),
+          queryParam('stage', { type: 'string', enum: ['open', 'waiting', 'closed'] }),
+          queryParam('label', { type: 'string' }),
+          queryParam('assignee', { type: 'string' }),
+          queryParam('unread', { type: 'string', enum: ['1', 'true'] }, 'Only unread threads (alias `unread_only=true`).'),
+        ],
+      }),
+    },
+    [`${s}/threads/{contactWaId}`]: {
+      get: op('get', T, 'Messages in one thread', B, {
+        description: all.trim(),
+        parameters: [contact, queryParam('limit', { type: 'integer', default: 100 })],
+      }),
+      patch: op('patch', T, 'Update thread stage, labels or marketing opt-out', B, {
+        description: ops.trim(),
+        parameters: [contact],
+        ...jsonBody('SaasWhatsAppThreadMetaBody', 'Fields to change'),
+        responses: { 400: J.badRequest },
+      }),
+      delete: op('delete', T, 'Delete a thread from the inbox', B, { description: ops.trim(), parameters: [contact] }),
+    },
+    [`${s}/threads/{contactWaId}/notes`]: {
+      get: op('get', T, 'Internal notes on a thread', B, { description: all.trim(), parameters: [contact] }),
+      post: op('post', T, 'Add an internal note', B, {
+        description: `Author comes from the team session.${ops}`,
+        parameters: [contact],
+        ...jsonBody('SaasWhatsAppThreadNoteBody', 'Note text'),
+        responses: { 201: J.created, 400: J.badRequest },
+      }),
+    },
+    [`${s}/threads/{contactWaId}/notes/{noteId}`]: {
+      delete: op('delete', T, 'Delete a note', B, {
+        description: `Operators can only delete their own notes.${ops}`,
+        parameters: [contact, pathParam('noteId')],
+      }),
+    },
+    [`${s}/threads/{contactWaId}/assign`]: {
+      put: op('put', T, 'Assign a thread to a team member', B, {
+        description: `Body \`{ member_id }\` (alias \`memberId\`); empty unassigns.${ops}`,
+        parameters: [contact],
+      }),
+    },
+    [`${s}/threads/{contactWaId}/template`]: {
+      post: op('post', T, 'Send a template into a thread', B, {
+        description: `For contacts outside the 24-hour window. Supports \`Idempotency-Key\`.${ops}`,
+        parameters: [contact, { name: 'Idempotency-Key', in: 'header', schema: { type: 'string' } }],
+        ...jsonBody('SaasWhatsAppInboxTemplateBody', 'Template to send'),
+        responses: accepted,
+      }),
+    },
+    [`${s}/contacts/{contactWaId}/customer`]: {
+      post: op('post', T, 'Create a store customer from a WhatsApp contact', B, {
+        description: ops.trim(),
+        parameters: [contact],
+        ...jsonBody('SaasWhatsAppCustomerBody', 'Optional names and email'),
+        responses: { 201: J.created },
+      }),
+    },
+    [`${s}/contact-context/{contactWaId}`]: {
+      get: op('get', T, 'Customer, orders and bookings linked to a contact', B, { description: all.trim(), parameters: [contact] }),
+    },
+    [`${s}/customers/{customerId}`]: {
+      get: op('get', T, 'Customer summary', B, { description: all.trim(), parameters: [pathParam('customerId')] }),
+      put: op('put', T, 'Edit a customer from the inbox', B, {
+        description: ops.trim(),
+        parameters: [pathParam('customerId')],
+        ...jsonBody('SaasWhatsAppCustomerBody', 'Fields to change'),
+      }),
+    },
+    [`${s}/messages/{wamid}/media`]: {
+      get: op('get', T, 'Download message media (proxied from Meta)', B, {
+        description: `Binary body with the media's own \`Content-Type\`.${all}`,
+        parameters: [pathParam('wamid', 'WhatsApp message id.')],
+        responses: { 200: { description: 'Media file', content: { 'application/octet-stream': { schema: { type: 'string', format: 'binary' } } } } },
+      }),
+    },
+    [`${s}/messages/{wamid}`]: {
+      delete: op('delete', T, 'Delete a message from the inbox', B, {
+        description: ops.trim(),
+        parameters: [pathParam('wamid', 'WhatsApp message id.')],
+      }),
+    },
+    [`${s}/reply`]: {
+      post: op('post', T, 'Send a text reply', B, {
+        description: `Only inside the 24-hour window.${ops}`,
+        ...jsonBody('SaasWhatsAppInboxReplyBody', 'Recipient and text'),
+        responses: accepted,
+      }),
+    },
+    [`${s}/product`]: {
+      post: op('post', T, 'Share a store product', B, {
+        description: `Body \`{ to, productId }\` (aliases \`contact_wa_id\`, \`product_id\`).${ops}`,
+        responses: accepted,
+      }),
+    },
+    [`${s}/media`]: {
+      post: op('post', T, 'Send a file (max 16 MB)', B, {
+        description: ops.trim(),
+        requestBody: {
+          required: true,
+          content: {
+            'multipart/form-data': {
+              schema: {
+                type: 'object',
+                required: ['file', 'to'],
+                properties: {
+                  file: { type: 'string', format: 'binary' },
+                  to: { type: 'string', description: 'Alias `contact_wa_id`.' },
+                  caption: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+        responses: { ...accepted, 400: J.badRequest },
+      }),
+    },
+    [`${s}/stats`]: {
+      get: op('get', T, 'Inbox stats', B, { description: all.trim(), parameters: [queryParam('days', { type: 'integer', default: 30 })] }),
+    },
+    [`${s}/unread`]: {
+      get: op('get', T, 'Unread summary', B, { description: all.trim() }),
+    },
+    [`${s}/mine`]: {
+      get: op('get', T, 'Chats assigned to me', B, { description: `Returns \`{ chats, count, unread }\`.${all}` }),
+    },
+    [`${s}/assignees`]: {
+      get: op('get', T, 'Team members a thread can be assigned to', B, { description: all.trim() }),
+    },
+    [`${s}/window-alerts`]: {
+      get: op('get', T, 'Threads whose 24-hour window is closing (dry run)', B, { description: all.trim() }),
+    },
+    [`${s}/window-alerts/run`]: {
+      post: op('post', T, 'Send window-closing alerts now', B, { description: write.trim() }),
+    },
+    [`${s}/auto-rules`]: {
+      get: op('get', T, 'Keyword auto-reply rules', B, { description: all.trim() }),
+      post: op('post', T, 'Create an auto-reply rule', B, {
+        description: ops.trim(),
+        ...jsonBody('SaasWhatsAppAutoRuleBody', 'Rule'),
+        responses: { 201: J.created, 400: J.badRequest },
+      }),
+    },
+    [`${s}/auto-rules/{id}`]: {
+      patch: op('patch', T, 'Update an auto-reply rule', B, {
+        description: ops.trim(),
+        parameters: [paramId],
+        ...jsonBody('SaasWhatsAppAutoRuleBody', 'Fields to change'),
+        responses: { 400: J.badRequest, 404: J.notFound },
+      }),
+      delete: op('delete', T, 'Delete an auto-reply rule', B, { description: ops.trim(), parameters: [paramId] }),
+    },
+    [`${s}/broadcasts`]: {
+      get: op('get', T, 'Broadcasts', B, { description: all.trim() }),
+      post: op('post', T, 'Queue a template broadcast (max 200 recipients)', B, {
+        description: `Template must be approved and synced, or a built-in inbox template.${ops}`,
+        ...jsonBody('SaasWhatsAppBroadcastBody', 'Template and recipients'),
+        responses: { ...accepted, 400: J.badRequest },
+      }),
+    },
+    [`${s}/broadcasts/{id}`]: {
+      get: op('get', T, 'One broadcast with progress', B, { description: all.trim(), parameters: [paramId] }),
+    },
+    [`${s}/canned`]: {
+      get: op('get', T, 'Canned replies', B, { description: all.trim() }),
+      post: op('post', T, 'Create a canned reply', B, {
+        description: ops.trim(),
+        ...jsonBody('SaasWhatsAppCannedReplyBody', 'Canned reply'),
+        responses: { 201: J.created, 400: J.badRequest },
+      }),
+    },
+    [`${s}/canned/{id}`]: {
+      delete: op('delete', T, 'Delete a canned reply', B, { description: ops.trim(), parameters: [paramId] }),
+    },
+  };
+}
+
+/** CRM workspace: pipeline board, opportunities, tasks, vertical templates. */
+function buildSaasCrmPaths(a) {
+  const s = `${a}/saas/crm`;
+  const T = 'SaaS · CRM';
+  const { all, ops, write } = SAAS_ROLES;
+  return {
+    [`${s}/board`]: {
+      get: op('get', T, 'Pipeline board (stages, opportunities, stats)', B, { description: all.trim() }),
+    },
+    [`${s}/stages`]: {
+      put: op('put', T, 'Replace the pipeline stages', B, {
+        description: write.trim(),
+        ...jsonBody('SaasCrmStagesBody', 'Full stage list'),
+      }),
+    },
+    [`${s}/opportunities`]: {
+      post: op('post', T, 'Create an opportunity', B, {
+        description: ops.trim(),
+        ...jsonBody('SaasCrmOpportunityBody', '`title` is required'),
+        responses: { 201: J.created, 400: J.badRequest },
+      }),
+    },
+    [`${s}/opportunities/{id}`]: {
+      patch: op('patch', T, 'Update an opportunity', B, {
+        description: `Only \`title\`, \`stage_id\`, \`priority\`, \`status\`, \`value\`, \`notes\`, \`customer_*\` and \`owner_name\` can change.${ops}`,
+        parameters: [paramId],
+        ...jsonBody('SaasCrmOpportunityBody', 'Fields to change'),
+      }),
+    },
+    [`${s}/tasks`]: {
+      get: op('get', T, 'Tasks', B, {
+        description: all.trim(),
+        parameters: [
+          queryParam('status', { type: 'string', enum: ['open', 'completed', 'cancelled'] }),
+          queryParam('due', { type: 'string', enum: ['today', 'overdue', 'upcoming'] }, '`overdue` and `upcoming` only return open tasks.'),
+        ],
+      }),
+      post: op('post', T, 'Create a task', B, {
+        description: ops.trim(),
+        ...jsonBody('SaasCrmTaskBody', '`title` is required'),
+        responses: { 201: J.created, 400: J.badRequest },
+      }),
+    },
+    [`${s}/tasks/{id}`]: {
+      patch: op('patch', T, 'Update a task', B, {
+        description: ops.trim(),
+        parameters: [paramId],
+        ...jsonBody('SaasCrmTaskBody', 'Fields to change'),
+      }),
+    },
+    [`${s}/templates`]: {
+      get: op('get', T, 'Industry pipeline templates', B, { description: all.trim() }),
+    },
+    [`${s}/templates/apply`]: {
+      post: op('post', T, 'Apply an industry template', B, {
+        description: `Replaces the stages and adds the template's starter tasks.${write}`,
+        ...jsonBody('SaasCrmApplyTemplateBody', 'Vertical'),
+        responses: { 400: J.badRequest },
+      }),
+    },
+    [`${s}/export.csv`]: {
+      get: op('get', T, 'Export opportunities or tasks as CSV', B, {
+        description: all.trim(),
+        parameters: [queryParam('type', { type: 'string', enum: ['opportunities', 'tasks'], default: 'opportunities' })],
+        responses: { 200: { description: 'CSV file', content: { 'text/csv': { schema: { type: 'string' } } } } },
+      }),
+    },
+    [`${s}/reminders/run`]: {
+      post: op('post', T, 'Send due task reminders now', B, { description: write.trim() }),
+    },
+  };
+}
+
+/** Khana credits: balance, packs, EFT top-ups, invoices and statements, plus the public PayFast ITN. */
+function buildSaasBillingPaths(a) {
+  const s = `${a}/saas/billing`;
+  const T = 'SaaS · Billing';
+  const { write, billingAll, billingRead } = SAAS_ROLES;
+  const reference = pathParam('reference', 'Invoice / transaction reference.');
+  const range = [
+    queryParam('from', { type: 'string', format: 'date' }),
+    queryParam('to', { type: 'string', format: 'date' }),
+  ];
+  return {
+    [s]: {
+      get: op('get', T, 'Credit balance, recent transactions, WhatsApp usage and pricing', B, {
+        description: `Tops up the month's included credits first if due.${billingAll}`,
+      }),
+    },
+    [`${s}/credit-packs`]: {
+      get: op('get', T, 'Prepaid credit packs', B, { description: billingAll.trim() }),
+    },
+    [`${s}/payfast/itn`]: {
+      post: op('post', T, 'PayFast ITN for credit top-ups (public)', P, {
+        description: 'Called by PayFast. Signature-checked in `PayFastCreditsService.handleTopupItn`. Always answers 200; `ok: false` means the ITN was rejected.',
+        requestBody: {
+          required: true,
+          content: { 'application/x-www-form-urlencoded': { schema: { type: 'object', additionalProperties: true } } },
+        },
+        responses: { 200: J.ok },
+      }),
+    },
+    [`${s}/eft/request`]: {
+      post: op('post', T, 'Request an EFT top-up', B, {
+        description: `Credits stay pending until a Khana admin confirms payment.${write}`,
+        ...jsonBody('SaasEftRequestBody', 'Pack or amount'),
+        responses: { 201: J.created, 400: J.badRequest },
+      }),
+    },
+    [`${s}/eft/requests`]: {
+      get: op('get', T, 'My EFT top-up requests', B, {
+        description: billingRead.trim(),
+        parameters: [queryParam('limit', { type: 'integer', default: 20 })],
+      }),
+    },
+    [`${s}/eft/mark-paid`]: {
+      post: op('post', T, "Tell Khana you've paid an EFT", B, {
+        description: write.trim(),
+        ...jsonBody('SaasEftReferenceBody', 'EFT reference'),
+        responses: { 400: J.badRequest },
+      }),
+    },
+    [`${s}/eft/cancel`]: {
+      post: op('post', T, 'Cancel a pending EFT request', B, {
+        description: write.trim(),
+        ...jsonBody('SaasEftReferenceBody', 'EFT reference'),
+        responses: { 400: J.badRequest },
+      }),
+    },
+    [`${s}/invoices`]: {
+      get: op('get', T, 'Invoices', B, {
+        description: billingRead.trim(),
+        parameters: [queryParam('limit', { type: 'integer', default: 50 })],
+      }),
+    },
+    [`${s}/invoices/{reference}`]: {
+      get: op('get', T, 'One invoice (JSON or printable HTML)', B, {
+        description: billingRead.trim(),
+        parameters: [reference, ...printParams],
+        responses: { 200: htmlOrJson('FlexibleJson') },
+      }),
+    },
+    [`${s}/statement`]: {
+      get: op('get', T, 'Account statement (JSON or printable HTML)', B, {
+        description: billingRead.trim(),
+        parameters: [...range, ...printParams],
+        responses: { 200: htmlOrJson('FlexibleJson') },
+      }),
+    },
+    [`${s}/topup/manual`]: {
+      post: op('post', T, 'Record a manual top-up on this workspace', B, {
+        description: `With \`pack_id\` credits follow the pack; otherwise \`credits\` at list rate. **403** if \`client_id\` is another workspace.${write}`,
+        ...jsonBody('SaasManualTopupBody', 'Pack or credits'),
+      }),
+    },
+  };
+}
+
+/** Khana admin tools under `/saas/admin` (ad tips are in `buildSaasMetaPaths`). */
+function buildSaasAdminPaths(a) {
+  const s = `${a}/saas/admin`;
+  const T = 'SaaS · Admin';
+  const N = SAAS_ADMIN_NOTE;
+  const clientQuery = queryParam('client_id', { type: 'string' }, 'Alias `clientId`.');
+  const accepted = { 202: jsonResponse('FlexibleJson', 'Accepted') };
+  return {
+    [`${s}/billing/eft/pending`]: {
+      get: op('get', T, 'Pending EFT top-ups across clients', SAAS_ADMIN, {
+        description: N,
+        parameters: [clientQuery, queryParam('limit', { type: 'integer', default: 50 })],
+      }),
+    },
+    [`${s}/billing/eft/confirm`]: {
+      post: op('post', T, 'Confirm an EFT payment and release the credits', SAAS_ADMIN, {
+        description: N,
+        ...jsonBody('SaasEftReferenceBody', 'EFT reference'),
+        responses: { 400: J.badRequest },
+      }),
+    },
+    [`${s}/billing/invoices/{reference}`]: {
+      get: op('get', T, 'Any invoice by reference', SAAS_ADMIN, {
+        description: N,
+        parameters: [pathParam('reference'), ...printParams],
+        responses: { 200: htmlOrJson('FlexibleJson') },
+      }),
+    },
+    [`${s}/billing/statement/{clientId}`]: {
+      get: op('get', T, "A client's statement", SAAS_ADMIN, {
+        description: N,
+        parameters: [paramClientId, queryParam('from', { type: 'string', format: 'date' }), queryParam('to', { type: 'string', format: 'date' }), ...printParams],
+        responses: { 200: htmlOrJson('FlexibleJson') },
+      }),
+    },
+    [`${s}/billing/topup`]: {
+      post: op('post', T, 'Credit any client', SAAS_ADMIN, {
+        description: `${N} For EFTs confirmed offline or goodwill credits.`,
+        ...jsonBody('SaasAdminTopupBody', 'Client and pack or credits'),
+        responses: { 400: J.badRequest },
+      }),
+    },
+    [`${s}/pricing`]: {
+      get: op('get', T, 'All pricing rules', SAAS_ADMIN, { description: N }),
+      post: op('post', T, 'Add a pricing rule', SAAS_ADMIN, {
+        description: N,
+        ...jsonBody('SaasPricingRuleBody', 'Rule'),
+        responses: { 201: J.created, 400: J.badRequest },
+      }),
+    },
+    [`${s}/whatsapp/messages/sandbox-phones`]: {
+      post: op('post', T, 'List phone numbers on a sandbox WABA', SAAS_ADMIN, {
+        description: `${N} Body \`{ waba_id?, access_token? }\`; blanks fall back to env.`,
+      }),
+    },
+    [`${s}/whatsapp/messages/sandbox-validate`]: {
+      post: op('post', T, 'Check sandbox credentials', SAAS_ADMIN, {
+        description: `${N} Body \`{ phone_number_id?, access_token? }\`.`,
+      }),
+    },
+    [`${s}/whatsapp/messages/sandbox-test`]: {
+      post: op('post', T, 'Send a template from the sandbox number', SAAS_ADMIN, {
+        description: `${N} Recipient must be on the Meta test allow-list.`,
+        ...jsonBody('SaasAdminSandboxTestBody', 'Recipient, credentials and template'),
+        responses: { ...accepted, 400: J.badRequest },
+      }),
+    },
+    [`${s}/whatsapp/messages/test`]: {
+      post: op('post', T, "Send a sample notification from a client's number", SAAS_ADMIN, {
+        description: N,
+        ...jsonBody('SaasAdminWhatsAppTestBody', 'Recipient, client and template'),
+        responses: { ...accepted, 400: J.badRequest },
+      }),
+    },
+    [`${s}/whatsapp/inbox/reprocess`]: {
+      post: op('post', T, 'Re-run archived webhooks through the inbox', SAAS_ADMIN, {
+        description: `${N} Body \`{ limit? (50), onlyUnprocessed? (true) }\`.`,
+      }),
+    },
+    [`${s}/whatsapp/inbox/window-alerts/run`]: {
+      post: op('post', T, 'Run window-closing alerts for all clients (or one)', SAAS_ADMIN, {
+        description: `${N} Body \`{ clientId? }\`.`,
+      }),
+    },
+    [`${s}/whatsapp/register`]: {
+      post: op('post', T, "Register a client's Cloud API number", SAAS_ADMIN, {
+        description: `${N} Body \`{ client_id? (default Khana), pin? }\`.`,
+      }),
+    },
+    [`${s}/whatsapp-usage`]: {
+      get: op('get', T, 'WhatsApp usage, billing and failures across clients', SAAS_ADMIN, {
+        description: N,
+        parameters: [queryParam('days', { type: 'integer', default: 30, minimum: 1, maximum: 365 })],
+      }),
+    },
+    [`${s}/api-monitor/summary`]: {
+      get: op('get', T, 'Meta / WhatsApp API monitor summary (all clients or one)', SAAS_ADMIN, {
+        description: N,
+        parameters: [clientQuery, queryParam('days', { type: 'integer', default: 7, minimum: 1, maximum: 90 })],
+      }),
+    },
+    [`${s}/api-monitor/events`]: {
+      get: op('get', T, 'API monitor events', SAAS_ADMIN, {
+        description: N,
+        parameters: [clientQuery, ...saasMonitorEventQuery()],
+      }),
+    },
+  };
+}
+
+function saasMonitorEventQuery() {
+  return [
+    queryParam('days', { type: 'integer', default: 7, minimum: 1, maximum: 90 }),
+    queryParam('integration', {
+      type: 'string',
+      enum: ['meta_oauth', 'meta_ads', 'meta_graph', 'whatsapp_cloud', 'whatsapp_capi', 'whatsapp_inbox', 'system'],
+    }),
+    queryParam('outcome', { type: 'string', enum: ['success', 'warning', 'error'] }),
+    queryParam('cause', { type: 'string', example: 'permission_denied' }),
+    queryParam('limit', { type: 'integer', default: 50, maximum: 200 }),
+  ];
+}
+
+/** Public Meta webhooks (registered before `tenantResolver`). */
+function buildSaasWebhookPaths(a) {
+  const s = `${a}/saas/webhooks`;
+  const T = 'SaaS · Webhooks';
+  const challenge = (name) =>
+    op('get', T, `Meta webhook verification for ${name} (public)`, P, {
+      description: 'Echoes `hub.challenge` when `hub.verify_token` matches.',
+      parameters: [
+        queryParam('hub.mode', { type: 'string', example: 'subscribe' }),
+        queryParam('hub.verify_token', { type: 'string' }),
+        queryParam('hub.challenge', { type: 'string' }),
+      ],
+      responses: { 200: { description: 'The challenge as plain text', content: { 'text/plain': { schema: { type: 'string' } } } } },
+    });
+  const signed = { name: 'X-Hub-Signature-256', in: 'header', required: true, schema: { type: 'string' }, description: '`sha256=` HMAC of the raw body with the app secret.' };
+  const metaBody = { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } } };
+  return {
+    [`${s}/whatsapp`]: {
+      get: challenge('WhatsApp'),
+      post: op('post', T, 'WhatsApp Cloud API events (public, signed)', P, {
+        description: 'Messages, Business-app echoes, delivery statuses and template status updates. Archived before ingest; always answers 200 `{ ok, received }`.',
+        parameters: [signed],
+        requestBody: metaBody,
+      }),
+    },
+    [`${s}/meta-ads`]: {
+      get: challenge('Meta ads'),
+      post: op('post', T, 'Meta ads events (public, signed)', P, {
+        description: 'Acknowledged only; nothing is processed yet.',
+        parameters: [signed],
+        requestBody: metaBody,
+      }),
+    },
+  };
+}
+
+/** Workspace overview and the client's own API monitor. */
+function buildSaasOverviewPaths(a) {
+  const s = `${a}/saas`;
+  const T = 'SaaS · Overview';
+  const { write, billingAll } = SAAS_ROLES;
+  return {
+    [`${s}/overview`]: {
+      get: op('get', T, 'Credits, connected accounts and plan', B, { description: billingAll.trim() }),
+    },
+    [`${s}/api-monitor/summary`]: {
+      get: op('get', T, 'Meta / WhatsApp API health for this client', B, {
+        description: write.trim(),
+        parameters: [queryParam('days', { type: 'integer', default: 7, minimum: 1, maximum: 90 })],
+      }),
+    },
+    [`${s}/api-monitor/events`]: {
+      get: op('get', T, 'API monitor events for this client', B, {
+        description: write.trim(),
+        parameters: saasMonitorEventQuery(),
+      }),
+    },
+  };
+}
+
+/** Instagram Login and organic Facebook/Instagram publishing and scheduling under `/saas/meta`. */
+function buildSaasSocialPaths(a) {
+  const s = `${a}/saas/meta`;
+  const T = 'SaaS · Social posts';
+  const { all, write } = SAAS_ROLES;
+  const limit = [queryParam('limit', { type: 'integer' })];
+  const filesUpload = (extra = {}) => ({
+    required: true,
+    content: {
+      'multipart/form-data': {
+        schema: {
+          type: 'object',
+          required: ['files'],
+          properties: {
+            files: { type: 'array', maxItems: 10, items: { type: 'string', format: 'binary' }, description: 'Images or videos, up to 100 MB each.' },
+            ...extra,
+          },
+        },
+      },
+    },
+  });
+  return {
+    [`${s}/instagram/oauth/start`]: {
+      get: op('get', T, 'Instagram Login URL (no Facebook Page needed)', B, { description: `Returns \`{ url, debug }\`.${write}` }),
+    },
+    [`${s}/instagram/oauth/callback`]: {
+      get: op('get', T, 'Instagram OAuth redirect (public)', P, {
+        description: 'Client is read from the signed `state`. Redirects back to the dashboard with `instagram=connected` or `instagram=error`.',
+        parameters: ['code', 'state', 'error', 'error_reason', 'error_description'].map((n) => queryParam(n, { type: 'string' })),
+        responses: { 302: { description: 'Redirect to the dashboard' } },
+      }),
+    },
+    [`${s}/instagram/oauth/complete`]: {
+      post: op('post', T, 'Finish Instagram OAuth from the dashboard (public)', P, {
+        description: 'Same exchange as the callback, for a dashboard-hosted redirect URI.',
+        ...jsonBody('SaasMetaOAuthCompleteBody', 'OAuth code and signed state'),
+        responses: { 400: J.badRequest },
+      }),
+    },
+    [`${s}/instagram/oauth/status`]: {
+      get: op('get', T, 'Instagram Login connection status', B, { description: all.trim() }),
+    },
+    [`${s}/instagram/oauth/disconnect`]: {
+      post: op('post', T, 'Disconnect Instagram Login', B, { description: write.trim() }),
+    },
+    [`${s}/organic-posts`]: {
+      get: op('get', T, 'Recent organic Page and Instagram posts', B, { description: all.trim(), parameters: limit }),
+    },
+    [`${s}/instagram/media`]: {
+      get: op('get', T, 'Recent Instagram media', B, { description: all.trim(), parameters: limit }),
+    },
+    [`${s}/publish`]: {
+      post: op('post', T, 'Publish now to Facebook and/or Instagram', B, {
+        description: `Media must be public URLs (see \`/meta/instagram/upload\`).${write}`,
+        ...jsonBody('SaasSocialPublishBody', 'Destinations, media and caption'),
+        responses: { 400: J.badRequest },
+      }),
+    },
+    [`${s}/facebook/publish`]: {
+      post: op('post', T, 'Publish now to the Facebook Page', B, {
+        description: `\`destinations\` is ignored.${write}`,
+        ...jsonBody('SaasSocialPublishBody', 'Media and caption'),
+        responses: { 400: J.badRequest },
+      }),
+    },
+    [`${s}/instagram/publish`]: {
+      post: op('post', T, 'Publish now to Instagram', B, {
+        description: `\`destinations\` is ignored. Carousels need 2–10 images.${write}`,
+        ...jsonBody('SaasSocialPublishBody', 'Media and caption'),
+        responses: { 400: J.badRequest },
+      }),
+    },
+    [`${s}/instagram/upload`]: {
+      post: op('post', T, 'Upload media to public URLs (no publishing)', B, {
+        description: `Returns \`{ files, imageUrls, videoUrl }\` to pass to publish or schedule.${write}`,
+        requestBody: filesUpload(),
+        responses: { 201: J.created, 400: J.badRequest },
+      }),
+    },
+    [`${s}/instagram/publish-upload`]: {
+      post: op('post', T, 'Upload and publish to Instagram in one step', B, {
+        description: `Videos/Reels go straight to Meta (one file). Images are stored first; 2+ images become a carousel.${write}`,
+        requestBody: filesUpload({
+          mediaType: { type: 'string', enum: ['IMAGE', 'CAROUSEL', 'VIDEO', 'REELS'], default: 'IMAGE' },
+          caption: { type: 'string' },
+        }),
+        responses: { 400: J.badRequest },
+      }),
+    },
+    [`${s}/social-posts`]: {
+      get: op('get', T, 'Last 50 scheduled and published posts', B, { description: all.trim() }),
+    },
+    [`${s}/social-posts/schedule`]: {
+      post: op('post', T, 'Schedule a post', B, {
+        description: `\`scheduledFor\` must be at least 30 seconds ahead. **503** when the job scheduler is off.${write}`,
+        ...jsonBody('SaasSocialScheduleBody', 'Post and time'),
+        responses: { 201: J.created, 400: J.badRequest, 503: jsonErr('Scheduler not running') },
+      }),
+    },
+    [`${s}/social-posts/{id}/schedule`]: {
+      delete: op('delete', T, 'Cancel a scheduled post', B, {
+        description: write.trim(),
+        parameters: [paramId],
+        responses: { 404: J.notFound },
+      }),
+    },
+  };
+}
+
 function buildPaths(a) {
   return {
     ...buildSaasMetaPaths(a),
+    ...buildSaasWhatsAppPaths(a),
+    ...buildSaasWhatsAppInboxPaths(a),
+    ...buildSaasCrmPaths(a),
+    ...buildSaasBillingPaths(a),
+    ...buildSaasAdminPaths(a),
+    ...buildSaasWebhookPaths(a),
+    ...buildSaasOverviewPaths(a),
+    ...buildSaasSocialPaths(a),
     '/': {
       get: op('get', 'Meta', 'HTML home (Express view)', P, {
         responses: {
@@ -2388,12 +3238,52 @@ function spec() {
       {
         name: 'SaaS · Meta ads',
         description:
-          'Meta (Facebook/Instagram) ads under `/saas/meta` and `/saas/ads` (`routes/saas.js`). Tenant from the Bearer JWT `clientID`; team role decides read vs write. Responses are `{ ok, data }`. Campaign creates spend real money once active and respect the plan campaign limit. Other `/saas` areas (WhatsApp, CRM, billing, social posts, webhooks) are not documented here yet.',
+          'Meta (Facebook/Instagram) ads under `/saas/meta` and `/saas/ads` (`routes/saas.js`). Tenant from the Bearer JWT `clientID`; team role decides read vs write. Responses are `{ ok, data }`. Campaign creates spend real money once active and respect the plan campaign limit.',
       },
       {
         name: 'SaaS · Admin ad tips',
         description:
           'Khana-admin-only coaching for the managed ad service: rule-based tips with severity and the numbers behind each one. Never shown to clients.',
+      },
+      {
+        name: 'SaaS · WhatsApp',
+        description:
+          'WhatsApp Cloud API under `/saas/whatsapp`: connect (Embedded Signup or manual), templates, Flows, Conversions API, notification settings and test sends. Each client sends from its own number; billed sends deduct Khana credits.',
+      },
+      {
+        name: 'SaaS · WhatsApp inbox',
+        description:
+          'Shared team inbox under `/saas/whatsapp/inbox`: threads, notes, assignment, replies inside the 24-hour window, templates outside it, broadcasts, keyword auto-replies and canned replies.',
+      },
+      {
+        name: 'SaaS · CRM',
+        description:
+          'Sales pipeline under `/saas/crm`: stages, opportunities, tasks with reminders, industry templates and CSV export.',
+      },
+      {
+        name: 'SaaS · Billing',
+        description:
+          'Khana credits under `/saas/billing`: balance, prepaid packs, EFT top-ups, invoices and statements. `/saas/billing/payfast/itn` is the public PayFast callback.',
+      },
+      {
+        name: 'SaaS · Admin',
+        description:
+          'Khana-admin-only tools under `/saas/admin` (admin JWT or `X-Admin-Api-Key`): EFT confirmation, top-ups, pricing rules, WhatsApp sandbox and usage, API monitor across clients.',
+      },
+      {
+        name: 'SaaS · Webhooks',
+        description:
+          'Public Meta webhooks under `/saas/webhooks`. GET answers the verify challenge; POST bodies are checked against `X-Hub-Signature-256`.',
+      },
+      {
+        name: 'SaaS · Overview',
+        description:
+          'Workspace summary (`/saas/overview`) and the Meta / WhatsApp API monitor for the signed-in client (`/saas/api-monitor`).',
+      },
+      {
+        name: 'SaaS · Social posts',
+        description:
+          'Organic posting under `/saas/meta`: Instagram Login, publish now to Facebook/Instagram, media upload, and scheduled posts (needs the Agenda job scheduler).',
       },
       {
         name: 'Tracking',
@@ -2718,6 +3608,409 @@ function spec() {
                 campaignCap: { $ref: '#/components/schemas/SaasMetaCampaignCap' },
               },
             },
+          },
+        },
+        SaasWhatsAppAccountBody: {
+          type: 'object',
+          required: ['waba_id', 'phone_number_id', 'access_token'],
+          properties: {
+            waba_id: { type: 'string' },
+            phone_number_id: { type: 'string' },
+            access_token: { type: 'string', description: 'Stored encrypted; never returned.' },
+            mode: { type: 'string', default: 'embedded' },
+          },
+        },
+        SaasWhatsAppEmbeddedSignupBody: {
+          type: 'object',
+          required: ['code'],
+          properties: {
+            code: { type: 'string' },
+            waba_id: { type: 'string', description: 'Alias `wabaId`. From the popup session info.' },
+            phone_number_id: { type: 'string', description: 'Alias `phoneNumberId`.' },
+            event: { type: 'string', example: 'FINISH' },
+            pin: { type: 'string', description: 'Two-step verification PIN for registration.' },
+          },
+        },
+        SaasWhatsAppRegisterBody: {
+          type: 'object',
+          properties: { pin: { type: 'string', pattern: '^\\d{6}$' } },
+        },
+        SaasWhatsAppConversionTestBody: {
+          type: 'object',
+          properties: {
+            eventName: { type: 'string', default: 'LeadSubmitted', description: 'Alias `event_name`.' },
+            ctwaClid: { type: 'string', description: 'Click-to-WhatsApp click id. Alias `ctwa_clid`.' },
+            contactWaId: { type: 'string', description: 'Alias `contact_wa_id`.' },
+            currency: { type: 'string', default: 'ZAR' },
+            value: { type: 'number' },
+            testEventCode: { type: 'string', description: 'Alias `test_event_code`. Falls back to `WHATSAPP_CAPI_TEST_EVENT_CODE`.' },
+          },
+        },
+        SaasWhatsAppOwnerAlertEvents: {
+          type: 'object',
+          properties: {
+            booking: { type: 'boolean' },
+            order: { type: 'boolean' },
+            reschedule: { type: 'boolean' },
+            message: { type: 'boolean' },
+          },
+        },
+        SaasWhatsAppNotificationsBody: {
+          type: 'object',
+          properties: {
+            enabled: { type: 'boolean', description: 'Customer notifications. Alias `notificationsEnabled`.' },
+            ownerAlertsEnabled: { type: 'boolean' },
+            ownerAlertPhone: { type: 'string', example: '+27821234567', description: 'Empty string clears it.' },
+            ownerAlertTarget: { type: 'string', enum: ['personal', 'business'] },
+            ownerAlertEvents: { $ref: '#/components/schemas/SaasWhatsAppOwnerAlertEvents' },
+            ownerAlertEmailFallback: { type: 'boolean' },
+          },
+        },
+        SaasWhatsAppStatusResponse: {
+          type: 'object',
+          properties: {
+            ok: { type: 'boolean' },
+            data: {
+              type: 'object',
+              properties: {
+                notificationsEnabled: { type: 'boolean' },
+                ownerAlertsEnabled: { type: 'boolean' },
+                ownerAlertPhone: { type: 'string' },
+                ownerAlertTarget: { type: 'string', enum: ['personal', 'business'] },
+                ownerAlertBusinessNumber: { type: 'string' },
+                ownerAlertEvents: { $ref: '#/components/schemas/SaasWhatsAppOwnerAlertEvents' },
+                ownerAlertEmailFallback: { type: 'boolean' },
+                hasSender: { type: 'boolean' },
+                usingOwnAccount: { type: 'boolean' },
+                usingKhanaFallback: { type: 'boolean', example: false },
+                creditBalance: { type: 'number' },
+                creditsOk: { type: 'boolean' },
+                ready: { type: 'boolean' },
+                sender: {
+                  type: 'object',
+                  nullable: true,
+                  properties: { source: { type: 'string' }, phone_number_id: { type: 'string' }, waba_id: { type: 'string' } },
+                },
+                checklist: {
+                  type: 'array',
+                  items: { type: 'object', properties: { id: { type: 'string' }, label: { type: 'string' }, ok: { type: 'boolean' } } },
+                },
+              },
+            },
+          },
+        },
+        SaasWhatsAppTemplateCreateBody: {
+          type: 'object',
+          properties: {
+            starter: { type: 'string', description: 'Starter id from `/whatsapp/templates/starters`. Aliases `starter_id`, `starterId`.' },
+            name: { type: 'string', description: 'Lowercase, underscores.' },
+            language: { type: 'string', example: 'en_US', description: 'Alias `language_code`.' },
+            category: { type: 'string', enum: ['UTILITY', 'MARKETING', 'AUTHENTICATION'], default: 'UTILITY' },
+            body: { type: 'string', description: 'Aliases `body_text`, `text`.' },
+            header: { type: 'string', description: 'Alias `header_text`.' },
+            footer: { type: 'string', description: 'Alias `footer_text`.' },
+            body_examples: {
+              oneOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string', description: 'Pipe-separated.' }],
+            },
+            button_url: { type: 'string', description: 'Alias `buttonUrl`.' },
+            button_text: { type: 'string', default: 'Open', maxLength: 25 },
+            button_example: { type: 'string' },
+            components: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Raw Meta components; overrides the fields above.' },
+            allow_category_change: { type: 'boolean', default: true },
+          },
+        },
+        SaasWhatsAppTemplateCoachBody: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            category: { type: 'string', default: 'UTILITY' },
+            header: { type: 'string' },
+            body: { type: 'string' },
+            footer: { type: 'string' },
+            button_url: { type: 'string' },
+            body_examples: { type: 'array', items: { type: 'string' } },
+          },
+        },
+        SaasWhatsAppBroadcastEstimateBody: {
+          type: 'object',
+          properties: {
+            recipientCount: { type: 'integer', description: 'Alias `recipient_count`.' },
+            messageType: { type: 'string', enum: ['utility', 'marketing', 'auth', 'service'], default: 'utility', description: 'Alias `message_type`.' },
+          },
+        },
+        SaasWhatsAppTemplateSendBody: {
+          type: 'object',
+          required: ['to', 'templateName'],
+          properties: {
+            to: { type: 'string' },
+            templateName: { type: 'string' },
+            languageCode: { type: 'string', example: 'en_US' },
+            components: { type: 'array', items: { type: 'object', additionalProperties: true } },
+            messageType: { type: 'string', default: 'utility' },
+          },
+        },
+        SaasWhatsAppTestSendBody: {
+          type: 'object',
+          required: ['to'],
+          properties: {
+            to: { type: 'string' },
+            templateName: {
+              type: 'string',
+              enum: ['order_confirmation', 'order_status_update', 'booking_confirmation', 'booking_reminder', 'account_verification'],
+              default: 'order_confirmation',
+            },
+          },
+        },
+        SaasWhatsAppFlowCreateBody: {
+          type: 'object',
+          required: ['starter'],
+          properties: {
+            starter: { type: 'string', description: 'Aliases `starterId`, `starter_id`.' },
+            name: { type: 'string' },
+            publish: { type: 'boolean', default: true },
+          },
+        },
+        SaasWhatsAppFlowSendBody: {
+          type: 'object',
+          required: ['to'],
+          properties: {
+            to: { type: 'string' },
+            flow_id: { type: 'string', description: 'Alias `flowId`. Or use `flow_name`.' },
+            flow_name: { type: 'string', description: 'Alias `flowName`.' },
+            body: { type: 'string' },
+            header: { type: 'string' },
+            footer: { type: 'string' },
+            cta: { type: 'string', description: 'Button text. Alias `flow_cta`.' },
+          },
+        },
+        SaasWhatsAppThreadMetaBody: {
+          type: 'object',
+          properties: {
+            stage: { type: 'string', enum: ['open', 'waiting', 'closed'] },
+            marketing_opt_out: { type: 'boolean', description: 'Alias `marketingOptOut`.' },
+            labels: { type: 'array', items: { type: 'string' }, maxItems: 20, description: 'Replaces all labels.' },
+            add_labels: { type: 'array', items: { type: 'string' }, description: 'Alias `addLabels`.' },
+            remove_labels: { type: 'array', items: { type: 'string' }, description: 'Alias `removeLabels`.' },
+          },
+        },
+        SaasWhatsAppThreadNoteBody: {
+          type: 'object',
+          required: ['body'],
+          properties: { body: { type: 'string', description: 'Alias `note`.' } },
+        },
+        SaasWhatsAppInboxTemplateBody: {
+          type: 'object',
+          properties: {
+            templateName: { type: 'string', default: 'hello_world', description: 'Alias `template_name`.' },
+            language: { type: 'string', description: 'Alias `template_language`.' },
+            components: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          },
+        },
+        SaasWhatsAppCustomerBody: {
+          type: 'object',
+          properties: {
+            first_name: { type: 'string', description: 'Alias `firstName`.' },
+            last_name: { type: 'string', description: 'Alias `lastName`.' },
+            email: { type: 'string', description: 'Alias `emailAddress`.' },
+            phone: { type: 'string', description: 'Edit only. Alias `phoneNumber`.' },
+            address: { type: 'string', description: 'Edit only.' },
+            city: { type: 'string', description: 'Edit only.' },
+            contact_name: { type: 'string', description: 'Create only: WhatsApp profile name, split into first/last when names are blank.' },
+          },
+        },
+        SaasWhatsAppInboxReplyBody: {
+          type: 'object',
+          required: ['to', 'text'],
+          properties: {
+            to: { type: 'string', description: 'Aliases `contact_wa_id`, `contactWaId`.' },
+            text: { type: 'string', description: 'Aliases `message`, `body`.' },
+          },
+        },
+        SaasWhatsAppAutoRuleBody: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', maxLength: 80 },
+            keywords: {
+              oneOf: [{ type: 'array', items: { type: 'string' }, maxItems: 40 }, { type: 'string', description: 'Comma-separated.' }],
+            },
+            reply: { type: 'string', maxLength: 1000 },
+            match_mode: { type: 'string', enum: ['any', 'all', 'short_greeting'], default: 'any', description: 'Alias `matchMode`.' },
+            enabled: { type: 'boolean', default: true },
+            sort_order: { type: 'integer', description: 'Alias `sortOrder`.' },
+            cooldown_ms: { type: 'integer', nullable: true, description: 'Alias `cooldownMs`.' },
+          },
+        },
+        SaasWhatsAppBroadcastBody: {
+          type: 'object',
+          required: ['template_name', 'contact_wa_ids'],
+          properties: {
+            template_name: { type: 'string', description: 'Alias `templateName`.' },
+            language: { type: 'string', description: 'Defaults to the approved template language. Aliases `template_language`, `templateLanguage`.' },
+            contact_wa_ids: { type: 'array', items: { type: 'string' }, maxItems: 200, description: 'Aliases `contactWaIds`, `recipients`.' },
+            name: { type: 'string', maxLength: 120 },
+          },
+        },
+        SaasWhatsAppCannedReplyBody: {
+          type: 'object',
+          required: ['title', 'body'],
+          properties: { title: { type: 'string' }, body: { type: 'string' }, shortcut: { type: 'string' } },
+        },
+        SaasCrmStage: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            name: { type: 'string', maxLength: 80 },
+            order: { type: 'integer' },
+            color: { type: 'string', example: '#64748b' },
+            isClosed: { type: 'boolean' },
+          },
+        },
+        SaasCrmStagesBody: {
+          type: 'object',
+          required: ['stages'],
+          properties: { stages: { type: 'array', minItems: 1, items: { $ref: '#/components/schemas/SaasCrmStage' } } },
+        },
+        SaasCrmOpportunityBody: {
+          type: 'object',
+          properties: {
+            title: { type: 'string' },
+            stage_id: { type: 'string', description: 'Defaults to the first stage.' },
+            status: { type: 'string', enum: ['open', 'won', 'lost'], default: 'open' },
+            priority: { type: 'string', enum: ['low', 'medium', 'high'], default: 'medium' },
+            value: { type: 'number' },
+            currency: { type: 'string', default: 'ZAR' },
+            customer_name: { type: 'string' },
+            customer_email: { type: 'string' },
+            customer_phone: { type: 'string' },
+            source: { type: 'string' },
+            notes: { type: 'string' },
+            owner_name: { type: 'string' },
+            linked_order_id: { type: 'string' },
+            linked_booking_id: { type: 'string' },
+          },
+        },
+        SaasCrmTaskBody: {
+          type: 'object',
+          properties: {
+            title: { type: 'string' },
+            description: { type: 'string' },
+            status: { type: 'string', enum: ['open', 'completed', 'cancelled'], description: 'Update only; new tasks start open.' },
+            priority: { type: 'string', enum: ['low', 'medium', 'high'], default: 'medium' },
+            due_at: { type: 'string', format: 'date-time' },
+            reminder_at: { type: 'string', format: 'date-time' },
+            assignee_name: { type: 'string' },
+            assignee_user_id: { type: 'string' },
+            linked_opportunity_id: { type: 'string' },
+            linked_order_id: { type: 'string' },
+            linked_booking_id: { type: 'string' },
+            linked_whatsapp_contact: { type: 'string' },
+            customer_name: { type: 'string' },
+            customer_email: { type: 'string' },
+            customer_phone: { type: 'string' },
+          },
+        },
+        SaasCrmApplyTemplateBody: {
+          type: 'object',
+          required: ['vertical'],
+          properties: {
+            vertical: { type: 'string', enum: ['salon', 'restaurant', 'retail', 'services'] },
+            assignee_name: { type: 'string' },
+          },
+        },
+        SaasEftRequestBody: {
+          type: 'object',
+          properties: {
+            pack_id: { type: 'string', description: 'Alias `packId`. Or send `amount_zar`.' },
+            amount_zar: { type: 'number', description: 'Alias `amountZar`.' },
+            note: { type: 'string' },
+          },
+        },
+        SaasEftReferenceBody: {
+          type: 'object',
+          required: ['reference'],
+          properties: { reference: { type: 'string' }, note: { type: 'string' } },
+        },
+        SaasManualTopupBody: {
+          type: 'object',
+          properties: {
+            pack_id: { type: 'string' },
+            credits: { type: 'number', description: 'Used when no `pack_id`.' },
+            amount: { type: 'number' },
+            reference: { type: 'string' },
+            client_id: { type: 'string', description: 'Must be this workspace if sent.' },
+          },
+        },
+        SaasAdminTopupBody: {
+          type: 'object',
+          required: ['client_id'],
+          properties: {
+            client_id: { type: 'string', description: 'Alias `clientId`.' },
+            pack_id: { type: 'string', description: 'Alias `packId`.' },
+            credits: { type: 'number', description: 'Used when no `pack_id`.' },
+            amount: { type: 'number' },
+            reference: { type: 'string' },
+          },
+        },
+        SaasPricingRuleBody: {
+          type: 'object',
+          required: ['service'],
+          properties: {
+            service: { type: 'string', example: 'whatsapp' },
+            message_type: { type: 'string', enum: ['marketing', 'utility', 'auth', 'service', 'setup', 'management', 'optimization'], default: 'service' },
+            tier: { type: 'string', enum: ['all', 'starter', 'launch', 'growth', 'scale', 'enterprise'], default: 'all' },
+            cost_per_unit: { type: 'number' },
+            markup_percentage: { type: 'number' },
+            active: { type: 'boolean', default: true },
+            notes: { type: 'string' },
+          },
+        },
+        SaasAdminSandboxTestBody: {
+          type: 'object',
+          required: ['to'],
+          properties: {
+            to: { type: 'string', description: 'Alias `phone`.' },
+            phone_number_id: { type: 'string', description: 'Falls back to `WHATSAPP_TEST_PHONE_NUMBER_ID`.' },
+            access_token: { type: 'string' },
+            templateName: { type: 'string', default: 'hello_world' },
+            languageCode: { type: 'string', default: 'en_US' },
+          },
+        },
+        SaasAdminWhatsAppTestBody: {
+          type: 'object',
+          required: ['to'],
+          properties: {
+            to: { type: 'string', description: 'Alias `phone`.' },
+            client_id: { type: 'string', description: "Defaults to the caller's client, then Khana." },
+            templateName: { type: 'string', default: 'order_confirmation' },
+          },
+        },
+        SaasSocialPublishBody: {
+          type: 'object',
+          properties: {
+            destinations: {
+              type: 'array',
+              items: { type: 'string', enum: ['facebook', 'instagram', 'both'] },
+              default: ['instagram'],
+              description: '`/meta/publish` only.',
+            },
+            mediaType: { type: 'string', enum: ['IMAGE', 'CAROUSEL', 'VIDEO', 'REELS'], default: 'IMAGE', description: 'Alias `media_type`.' },
+            imageUrl: { type: 'string', description: 'Alias `image_url`.' },
+            imageUrls: { type: 'array', items: { type: 'string' }, description: 'Alias `image_urls`.' },
+            videoUrl: { type: 'string', description: 'Alias `video_url`.' },
+            caption: { type: 'string' },
+          },
+        },
+        SaasSocialScheduleBody: {
+          type: 'object',
+          required: ['scheduledFor'],
+          properties: {
+            scheduledFor: { type: 'string', format: 'date-time' },
+            destinations: { type: 'array', items: { type: 'string', enum: ['facebook', 'instagram', 'both'] }, default: ['instagram'] },
+            mediaType: { type: 'string', enum: ['IMAGE', 'CAROUSEL', 'VIDEO', 'REELS'], default: 'IMAGE' },
+            imageUrls: { type: 'array', items: { type: 'string' } },
+            imageUrl: { type: 'string', description: 'Used when `imageUrls` is not sent.' },
+            videoUrl: { type: 'string' },
+            caption: { type: 'string' },
           },
         },
         FlexibleJson: {
