@@ -368,6 +368,8 @@ app.use(`${api}/staff`, staffRouter);
 app.use(`${api}/services`, serviceRouter);
 app.use(`${api}/admin/bandwidth`, require('./routes/adminBandwidth'));
 app.use(`${api}`, require('./routes/caseStudies'));
+// Before adminRouter so /admin/template-invites is not shadowed.
+app.use(`${api}`, require('./routes/templateInvites'));
 app.use(`${api}/admin`, adminRouter);
 app.use(`${api}/admin/site-analytics`, adminSiteAnalyticsRouter);
 app.use(`${api}/resources`, resourcesRouter); 

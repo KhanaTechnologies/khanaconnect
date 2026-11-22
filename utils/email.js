@@ -1230,6 +1230,67 @@ async function sendTeamDashboardInviteEmail({
 }
 
 // -----------------------------
+// Website design gallery — private invite
+// -----------------------------
+async function sendTemplateGalleryInviteEmail({
+  to,
+  name,
+  businessName,
+  galleryLink,
+  expiresAt,
+  adminBusinessEmail,
+  adminBusinessEmailPassword,
+  adminCompanyName,
+  emailSignature = '',
+  adminClientId = null,
+}) {
+  const { formatDisplayDate } = require('../helpers/planQuoteEmail');
+  const formattedClientName = getFormattedClientName(adminCompanyName || 'Khana Technologies');
+  const decryptedFrom = decrypt(adminBusinessEmail);
+  const qm = qTenant(adminClientId);
+  const greeting = name || businessName || 'there';
+  const forBusiness = businessName ? ` for ${businessName}` : '';
+  const until = formatDisplayDate(expiresAt);
+
+  const emailContent = wrapTransactionalEmail(
+    'Pick a website design you like',
+    `
+            <p style="margin:0 0 16px;">Hi ${escapeHtml(greeting)},</p>
+            <p style="margin:0 0 16px;">Here is your private link to our website designs${escapeHtml(forBusiness)}. Browse them on your phone or computer, add your logo and business name to see each design in your own colours, and tap <strong>I like this one</strong> when something feels right.</p>
+            ${ctaButton({ href: galleryLink, label: 'See the designs' })}
+            <p style="margin:0 0 16px;">The link is just for you${until ? ` and works until ${escapeHtml(until)}` : ''}. Your logo stays on your device while you browse.</p>
+            <p style="margin:0 0 16px;">Questions? Just reply to this email.</p>
+            <p style="margin:0;">Warm regards,<br>${formattedClientName}</p>
+        `,
+    { formattedClientName, showKhanaLogo: true }
+  );
+
+  const result = await sendWithRetry(
+    () => createTransporter(adminBusinessEmail, adminBusinessEmailPassword),
+    {
+      from: decryptedFrom,
+      to,
+      subject: `Your website designs${forBusiness}`.slice(0, 120),
+      ...(await mimeFrom(
+        emailContent,
+        `Hi ${greeting}, here is your private link to our website designs${forBusiness}: ${galleryLink}` +
+          (until ? `\n\nThe link works until ${until}.` : ''),
+        emailSignature
+      )),
+    },
+    5,
+    1600,
+    qm
+  );
+
+  console.log(
+    `[sendTemplateGalleryInviteEmail] Sent to ${to}` +
+      (result?.messageId ? ` (messageId: ${result.messageId})` : ' (queued for retry)')
+  );
+  return result;
+}
+
+// -----------------------------
 // Dashboard activity — owner email alerts
 // -----------------------------
 async function sendTeamActivityNotifyEmail({
@@ -1571,6 +1632,7 @@ module.exports = {
     sendResetPasswordEmail,
     sendTeamDashboardResetEmail,
     sendTeamDashboardInviteEmail,
+    sendTemplateGalleryInviteEmail,
     sendTeamActivityNotifyEmail,
     sendContactUsEmail,
     sendPlanQuoteEmails,
