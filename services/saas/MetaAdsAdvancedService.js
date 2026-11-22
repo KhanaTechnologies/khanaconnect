@@ -7,6 +7,7 @@ const Product = require('../../models/product');
 const SaasUsageEvent = require('../../models/SaasUsageEvent');
 const { usageBillingQueue } = require('../../queues/saasQueues');
 const { publishedProductFilter } = require('../../helpers/productCatalogFields');
+const { metaCampaignCapStatus } = require('../../helpers/clientPlan');
 const {
   loadClientWithMeta,
   normalizeAdAccountId,
@@ -114,6 +115,18 @@ async function assertNotSharedAdAccount(client) {
 async function assertCampaignCredits(clientId) {
   const BillingService = require('./BillingService');
   await BillingService.assertCreditsForAction(clientId, 'ads_service_fee', 'setup', 1);
+}
+
+/** Plan limit on Meta campaigns created from the dashboard (helpers/clientPlan.js). */
+function assertCampaignCap(client) {
+  const status = metaCampaignCapStatus(client);
+  if (status.reached) {
+    throw httpError(
+      `Campaign limit reached on the ${status.planLabel} plan (${status.used} of ${status.cap}). Archive an old campaign or move to a bigger plan to create more.`,
+      403
+    );
+  }
+  return status;
 }
 
 /**
@@ -557,6 +570,7 @@ async function getSetupHub(clientId) {
     instagramConnected: !!client.metaAds.instagramUserId,
     instagramUsername: client.metaAds.instagramUsername || '',
     catalogId: client.metaAds.catalogId || '',
+    campaignCap: metaCampaignCapStatus(client),
   };
 }
 
@@ -1166,6 +1180,7 @@ async function createClickToWhatsAppCampaign(
   const { budgetNum, cents } = assertDailyBudget(dailyBudget);
   const durationDays = Math.min(Math.max(Number(days) || 7, 1), 30);
   const adStatus = String(status).toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'PAUSED';
+  assertCampaignCap(client);
   await assertCampaignCredits(clientId);
   const campaignName = buildReadableCampaignName(client, 'WhatsApp', { name, caption: message });
   const targeting = buildTargetingSpec({
@@ -1395,6 +1410,7 @@ async function createLeadAd(
   const { budgetNum, cents } = assertDailyBudget(dailyBudget);
   const durationDays = Math.min(Math.max(Number(days) || 7, 1), 30);
   const adStatus = String(status).toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'PAUSED';
+  assertCampaignCap(client);
   await assertCampaignCredits(clientId);
   const campaignName = buildReadableCampaignName(client, 'Leads', {
     name,
@@ -1710,6 +1726,7 @@ async function createCatalogSalesCampaign(
   const { budgetNum, cents } = assertDailyBudget(dailyBudget);
   const durationDays = Math.min(Math.max(Number(days) || 7, 1), 30);
   const adStatus = String(status).toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'PAUSED';
+  assertCampaignCap(client);
   await assertCampaignCredits(clientId);
   const campaignName = buildReadableCampaignName(client, 'Catalog', { name });
   const pixelId = client.metaAds.pixelId ? String(client.metaAds.pixelId) : '';

@@ -69,6 +69,30 @@ function metaCampaignCapForClient(client) {
   return metaCampaignCapForPlan(planIdForClient(client));
 }
 
+/**
+ * Where a client stands against their plan's Meta campaign limit.
+ * Archived / deleted campaigns don't count toward the limit.
+ * cap 0 = unlimited (remaining null).
+ */
+function metaCampaignCapStatus(client) {
+  const plan = planIdForClient(client);
+  const cap = metaCampaignCapForPlan(plan);
+  const campaigns = Array.isArray(client?.metaAds?.campaigns) ? client.metaAds.campaigns : [];
+  const used = campaigns.filter((c) => {
+    const status = String(c?.status || '').toLowerCase();
+    return status !== 'archived' && status !== 'deleted';
+  }).length;
+  return {
+    plan,
+    planLabel: PLAN_LABELS[plan],
+    cap,
+    unlimited: cap === 0,
+    used,
+    remaining: cap === 0 ? null : Math.max(cap - used, 0),
+    reached: cap > 0 && used >= cap,
+  };
+}
+
 function includedSeatsForPlan(planId, planBuilder = DEFAULT_PLAN_BUILDER) {
   const seats = planBuilder?.includedSeats || DEFAULT_PLAN_BUILDER.includedSeats;
   const n = Number(seats[normalizePlanId(planId)]);
@@ -126,6 +150,7 @@ module.exports = {
   planLabel,
   metaCampaignCapForPlan,
   metaCampaignCapForClient,
+  metaCampaignCapStatus,
   includedSeatsForPlan,
   extraSeatsForClient,
   loadPlanBuilder,
