@@ -2384,6 +2384,31 @@ router.post('/admin/billing/topup', adminOnly, wrapRoute(async (req, res) => {
   res.json({ ok: true, data: result });
 }));
 
+/**
+ * Admin-only ad tips (Khana managed ad service). Reads the client's Meta numbers with ads_read and
+ * turns them into rule-based suggestions (config/adTipsThresholds.js). Clients never see these.
+ */
+router.get('/admin/meta/ad-tips/clients', adminOnly, wrapRoute(async (_req, res) => {
+  const MetaAdTipsService = require('../services/saas/MetaAdTipsService');
+  const clients = await MetaAdTipsService.listClientsWithAds();
+  res.json({ ok: true, data: { clients } });
+}));
+
+router.get('/admin/meta/ad-tips/:clientId', adminOnly, wrapRoute(async (req, res) => {
+  const MetaAdTipsService = require('../services/saas/MetaAdTipsService');
+  try {
+    const data = await MetaAdTipsService.getAdTipsForClient(String(req.params.clientId || '').trim(), {
+      days: req.query.days,
+      month: req.query.month,
+      preset: req.query.preset,
+    });
+    res.json({ ok: true, data });
+  } catch (err) {
+    const statusCode = Number(err?.status) >= 400 ? Number(err.status) : 400;
+    res.status(statusCode).json({ ok: false, message: err.message || 'Ad tips failed' });
+  }
+}));
+
 router.get('/admin/pricing', adminOnly, wrapRoute(async (_req, res) => {
   const rules = await SaasPricingRule.find({}).sort({ service: 1, message_type: 1, updated_at: -1 });
   res.json({ ok: true, data: rules });

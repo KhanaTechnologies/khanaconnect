@@ -644,8 +644,259 @@ function buildClientPaths(a, B, P, paramClientId) {
   };
 }
 
+/**
+ * SaaS Meta ads routes (`routes/saas.js`, mounted at `${a}/saas`).
+ * Tenant comes from the Bearer JWT's clientID (or `X-Client-Id` without a token); roles from the team member.
+ * Responses use `{ ok, data }`.
+ */
+function buildSaasMetaPaths(a) {
+  const s = `${a}/saas`;
+  const T = 'SaaS · Meta ads';
+  const ADMIN = 'SaaS · Admin ad tips';
+  const read = ' Roles: owner, manager, operator, viewer.';
+  const write = ' Roles: owner, manager.';
+  const insightsQuery = [
+    { name: 'days', in: 'query', schema: { type: 'integer', default: 30 }, description: 'Rolling window in days. Ignored when `month` or `preset` is set.' },
+    { name: 'month', in: 'query', schema: { type: 'string', pattern: '^\\d{4}-\\d{2}$' }, description: 'Calendar month `YYYY-MM` (capped at today).' },
+    {
+      name: 'preset',
+      in: 'query',
+      schema: { type: 'string', enum: ['last_7d', 'last_14d', 'last_30d', 'last_90d', 'last_month', 'this_month', 'maximum'] },
+      description: 'Meta date preset.',
+    },
+  ];
+  const campaignId = { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Meta campaign id.' };
+  const capNote =
+    ' Returns **403** when the plan campaign limit is reached (`metaCampaignCapStatus` in `helpers/clientPlan.js`; archived/deleted campaigns do not count). Also checks campaign credits.';
+  const okData = (schemaName, description = 'OK') => jsonResponse(schemaName, description);
+
+  return {
+    // Connection
+    [`${s}/meta/oauth/start`]: {
+      get: op('get', T, 'Facebook Login URL for this client', B, { description: `Returns \`{ url }\` to send the owner to Facebook.${write}` }),
+    },
+    [`${s}/meta/oauth/callback`]: {
+      get: op('get', T, 'Facebook OAuth redirect (public)', P, {
+        description: 'Redirect target registered with Meta. Client is read from the signed `state`. No Bearer needed.',
+        parameters: [
+          { name: 'code', in: 'query', schema: { type: 'string' } },
+          { name: 'state', in: 'query', schema: { type: 'string' } },
+          { name: 'error', in: 'query', schema: { type: 'string' } },
+        ],
+      }),
+    },
+    [`${s}/meta/oauth/complete`]: {
+      post: op('post', T, 'Finish Facebook OAuth from the dashboard (public)', P, {
+        description: 'Body `{ code, state }` (or `error`). Exchanges the code for a long-lived token and stores it encrypted.',
+        ...jsonBody('SaasMetaOAuthCompleteBody', 'OAuth code and signed state'),
+      }),
+    },
+    [`${s}/meta/oauth/status`]: {
+      get: op('get', T, 'Connection status (page, ad account, Instagram, pixel)', B, { description: read.trim() }),
+    },
+    [`${s}/meta/oauth/disconnect`]: {
+      post: op('post', T, 'Disconnect Facebook', B, { description: write.trim() }),
+    },
+    [`${s}/meta/refresh-token`]: {
+      post: op('post', T, 'Force a token refresh', B, { description: write.trim() }),
+    },
+    [`${s}/meta/app-permissions`]: {
+      get: op('get', T, 'Approved / pending Meta app permissions + 7-day API monitor summary', B, { description: read.trim() }),
+    },
+    [`${s}/meta/pages`]: {
+      get: op('get', T, 'Facebook Pages the token can manage', B, { description: read.trim() }),
+    },
+    [`${s}/meta/ad-accounts`]: {
+      get: op('get', T, 'Ad accounts the token can use', B, { description: read.trim() }),
+    },
+    [`${s}/meta/ad-accounts/create`]: {
+      post: op('post', T, "Create an ad account under the client's Business Manager", B, {
+        description: `Defaults to ZAR and Africa/Johannesburg (timezone 141). Spend stays on the client's own Meta payment method.${write}`,
+        ...jsonBody('SaasMetaAdAccountCreateBody', 'Optional name, currency, timezone'),
+        responses: { 201: J.created, 400: J.badRequest },
+      }),
+    },
+    [`${s}/meta/selection`]: {
+      put: op('put', T, 'Choose the Page and/or ad account', B, {
+        description: `At least one of \`page_id\`, \`ad_account_id\`.${write}`,
+        ...jsonBody('SaasMetaSelectionBody', 'Page and/or ad account'),
+        responses: { 400: J.badRequest },
+      }),
+    },
+    [`${s}/meta/setup`]: {
+      get: op('get', T, 'Setup checklist, account health and plan campaign limit', B, {
+        description: `Includes \`campaignCap\` ({ plan, planLabel, cap, unlimited, used, remaining, reached }).${read}`,
+        responses: { 200: okData('SaasMetaSetupResponse') },
+      }),
+    },
+    [`${s}/meta/pixel/test-event`]: {
+      post: op('post', T, 'Send a test pixel event (Conversions API)', B, {
+        description: 'Body `{ eventName?, testEventCode? }`. Roles: owner, manager, operator.',
+        responses: { 400: J.badRequest },
+      }),
+    },
+
+    // Results
+    [`${s}/meta/insights`]: {
+      get: op('get', T, 'Ad results for the selected ad account', B, {
+        description: `Account totals, per-campaign rows and a daily series (\`time_increment=1\`). Uses \`ads_read\`. Results are picked in priority order: chats, purchases, leads, sign-ups, link clicks, engagements (\`helpers/metaAdResults.js\`).${read}`,
+        parameters: insightsQuery,
+        responses: { 200: okData('SaasMetaInsightsResponse'), 400: J.badRequest },
+      }),
+    },
+    [`${s}/meta/insights/breakdowns`]: {
+      get: op('get', T, 'Results split by age, gender, platform, device or country', B, {
+        description: read.trim(),
+        parameters: [
+          ...insightsQuery,
+          {
+            name: 'breakdown',
+            in: 'query',
+            schema: { type: 'string', enum: ['age', 'gender', 'age,gender', 'publisher_platform', 'impression_device', 'country'], default: 'age' },
+          },
+        ],
+        responses: { 400: J.badRequest },
+      }),
+    },
+
+    // Targeting and audiences
+    [`${s}/meta/targeting/search`]: {
+      get: op('get', T, 'Search locations and interests for targeting', B, {
+        description: read.trim(),
+        parameters: [
+          { name: 'q', in: 'query', required: true, schema: { type: 'string' } },
+          { name: 'type', in: 'query', schema: { type: 'string', example: 'adgeolocation' } },
+          { name: 'limit', in: 'query', schema: { type: 'integer' } },
+          { name: 'country_code', in: 'query', schema: { type: 'string', example: 'ZA' } },
+          { name: 'location_types', in: 'query', schema: { type: 'string' }, description: 'JSON array or comma list, e.g. `city,region`.' },
+        ],
+      }),
+    },
+    [`${s}/meta/audience-presets`]: {
+      get: op('get', T, 'Built-in audience presets', B, { description: read.trim() }),
+    },
+    [`${s}/meta/custom-audiences`]: {
+      get: op('get', T, 'Custom audiences on the ad account', B, { description: read.trim() }),
+    },
+    [`${s}/meta/custom-audiences/preview`]: {
+      get: op('get', T, 'Preview a customer-list audience before creating it', B, {
+        description: read.trim(),
+        parameters: [{ name: 'preset', in: 'query', schema: { type: 'string' } }],
+      }),
+    },
+    [`${s}/meta/custom-audiences/from-customers`]: {
+      post: op('post', T, "Create a custom audience from the client's customers", B, {
+        description: `Body \`{ name?, preset?, description? }\`. Contact details are hashed before upload.${write}`,
+        responses: { 201: J.created },
+      }),
+    },
+
+    // Campaigns
+    [`${s}/meta/campaigns`]: {
+      get: op('get', T, 'Campaigns created through Khana', B, { description: read.trim() }),
+    },
+    [`${s}/meta/campaigns/{id}/status`]: {
+      post: op('post', T, 'Pause, activate or archive a campaign', B, {
+        description: write.trim(),
+        parameters: [campaignId],
+        ...jsonBody('SaasMetaCampaignStatusBody', 'New status'),
+        responses: { 400: J.badRequest },
+      }),
+    },
+    [`${s}/meta/campaigns/{id}/budget`]: {
+      post: op('post', T, 'Change the daily budget', B, {
+        description: write.trim(),
+        parameters: [campaignId],
+        ...jsonBody('SaasMetaCampaignBudgetBody', 'Daily budget in account currency'),
+        responses: { 400: J.badRequest },
+      }),
+    },
+    [`${s}/meta/creatives/image`]: {
+      post: op('post', T, 'Upload an ad image', B, {
+        description: `Returns the Meta image \`hash\` to pass as \`image_hash\`.${write}`,
+        requestBody: {
+          required: true,
+          content: {
+            'multipart/form-data': {
+              schema: { type: 'object', required: ['image'], properties: { image: { type: 'string', format: 'binary' } } },
+            },
+          },
+        },
+        responses: { 201: J.created, 400: J.badRequest },
+      }),
+    },
+    [`${s}/meta/campaigns/whatsapp`]: {
+      post: op('post', T, 'Create a click-to-WhatsApp campaign', B, {
+        description: `Creates campaign, ad set and ad on Meta (spends money once active).${capNote}${write}`,
+        ...jsonBody('SaasMetaWhatsAppCampaignBody', 'Campaign settings'),
+        responses: { 201: J.created, 400: J.badRequest },
+      }),
+    },
+    [`${s}/meta/campaigns/lead`]: {
+      post: op('post', T, 'Create an instant-form lead ad', B, {
+        description: `Leads stay in Meta Ads Manager (\`leads_retrieval\` is not approved).${capNote}${write}`,
+        ...jsonBody('SaasMetaLeadCampaignBody', 'Campaign and form settings'),
+        responses: { 201: J.created, 400: J.badRequest },
+      }),
+    },
+    [`${s}/meta/catalog/sync`]: {
+      post: op('post', T, 'Sync products to the Meta catalog', B, {
+        description: `Body \`{ limit? }\`.${write}`,
+      }),
+    },
+    [`${s}/meta/campaigns/catalog`]: {
+      post: op('post', T, 'Create a catalog sales campaign', B, {
+        description: `Needs a synced catalog.${capNote}${write}`,
+        ...jsonBody('SaasMetaCampaignBaseBody', 'Campaign settings'),
+        responses: { 201: J.created, 400: J.badRequest },
+      }),
+    },
+    [`${s}/meta/posts`]: {
+      get: op('get', T, 'Page posts that can be boosted', B, {
+        description: `On a permission error returns \`posts: []\` with \`error\`.${read}`,
+        parameters: [{ name: 'limit', in: 'query', schema: { type: 'integer' } }],
+      }),
+    },
+    [`${s}/meta/boost`]: {
+      post: op('post', T, 'Boost a Page or Instagram post', B, {
+        description: `Requires \`post_id\` and \`daily_budget\`. Optional \`days\`, \`country\`, \`status\`, \`targeting\`, \`source\` (facebook|instagram), \`name\`, \`caption\`.${write}`,
+        responses: { 201: J.created, 400: J.badRequest },
+      }),
+    },
+    [`${s}/ads/accounts`]: {
+      post: op('post', T, 'Attach an ad account by id (legacy)', B, {
+        description: `Body \`{ ad_account_id, ownership_type?, meta_business_id? }\`.${write}`,
+        responses: { 201: J.created, 400: J.badRequest },
+      }),
+    },
+    [`${s}/ads/campaigns`]: {
+      post: op('post', T, 'Create a campaign (legacy)', B, {
+        description: `Body \`{ name, objective, budget?, access_token? }\`. Supports \`Idempotency-Key\`. Also enforces the plan campaign limit.${write}`,
+        responses: { 201: J.created, 400: J.badRequest },
+      }),
+    },
+
+    // Khana admin
+    [`${s}/admin/meta/ad-tips/clients`]: {
+      get: op('get', ADMIN, 'Clients with a connected ad account', [{ bearerAuth: [] }, { saasAdminApiKey: [] }], {
+        description: 'Khana platform admins only (admin JWT or `X-Admin-Api-Key`). Clients never see this.',
+        responses: { 200: okData('SaasAdTipsClientsResponse') },
+      }),
+    },
+    [`${s}/admin/meta/ad-tips/{clientId}`]: {
+      get: op('get', ADMIN, "Rule-based tips on one client's ads", [{ bearerAuth: [] }, { saasAdminApiKey: [] }], {
+        description:
+          'Khana platform admins only. Reads the client account with `ads_read` (read-only; no ads created) and runs `services/saas/adTipsRules.js`. Thresholds live in `config/adTipsThresholds.js`. Money rules are skipped for non-ZAR accounts.',
+        parameters: [paramClientId, ...insightsQuery],
+        responses: { 200: okData('SaasAdTipsResponse'), 400: J.badRequest },
+      }),
+    },
+  };
+}
+
 function buildPaths(a) {
   return {
+    ...buildSaasMetaPaths(a),
     '/': {
       get: op('get', 'Meta', 'HTML home (Express view)', P, {
         responses: {
@@ -2135,6 +2386,16 @@ function spec() {
       },
       { name: 'Payments', description: 'PayFast ITN (`/payments/payfast/itn`) and related gateway hooks.' },
       {
+        name: 'SaaS · Meta ads',
+        description:
+          'Meta (Facebook/Instagram) ads under `/saas/meta` and `/saas/ads` (`routes/saas.js`). Tenant from the Bearer JWT `clientID`; team role decides read vs write. Responses are `{ ok, data }`. Campaign creates spend real money once active and respect the plan campaign limit. Other `/saas` areas (WhatsApp, CRM, billing, social posts, webhooks) are not documented here yet.',
+      },
+      {
+        name: 'SaaS · Admin ad tips',
+        description:
+          'Khana-admin-only coaching for the managed ad service: rule-based tips with severity and the numbers behind each one. Never shown to clients.',
+      },
+      {
         name: 'Tracking',
         description: 'Browser/event pipeline (`/events`): batch ingest, stats, anonymous linking — see `routes/trackingEvents.js`.',
       },
@@ -2183,6 +2444,12 @@ function spec() {
           description:
             'Required only when the matching *_WEBHOOK_ENABLED env is true. Also accepted: X-Order-Webhook-Secret (orders), X-Booking-Webhook-Secret (bookings).',
         },
+        saasAdminApiKey: {
+          type: 'apiKey',
+          in: 'header',
+          name: 'X-Admin-Api-Key',
+          description: 'Alternative to an admin JWT on `/saas/admin/*` routes. Must match `SAAS_ADMIN_API_KEY`.',
+        },
       },
       schemas: {
         Error: {
@@ -2191,6 +2458,266 @@ function spec() {
             ok: { type: 'boolean', example: false },
             message: { type: 'string' },
             error: { type: 'string' },
+          },
+        },
+        SaasMetaOAuthCompleteBody: {
+          type: 'object',
+          properties: {
+            code: { type: 'string' },
+            state: { type: 'string', description: 'Signed state from `/saas/meta/oauth/start`.' },
+            error: { type: 'string' },
+            error_description: { type: 'string' },
+          },
+        },
+        SaasMetaAdAccountCreateBody: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            currency: { type: 'string', default: 'ZAR' },
+            timezone_id: { type: 'integer', default: 141, description: 'Meta timezone id (141 = Africa/Johannesburg).' },
+          },
+        },
+        SaasMetaSelectionBody: {
+          type: 'object',
+          properties: { page_id: { type: 'string' }, ad_account_id: { type: 'string', description: 'Without the `act_` prefix.' } },
+        },
+        SaasMetaCampaignCap: {
+          type: 'object',
+          properties: {
+            plan: { type: 'string', example: 'starter' },
+            planLabel: { type: 'string', example: 'Starter' },
+            cap: { type: 'integer', nullable: true, example: 5 },
+            unlimited: { type: 'boolean' },
+            used: { type: 'integer', example: 4 },
+            remaining: { type: 'integer', nullable: true, example: 1 },
+            reached: { type: 'boolean' },
+          },
+        },
+        SaasMetaSetupResponse: {
+          type: 'object',
+          properties: {
+            ok: { type: 'boolean' },
+            data: {
+              type: 'object',
+              properties: {
+                checklist: { type: 'object', additionalProperties: { type: 'boolean' } },
+                account: { type: 'object', additionalProperties: true },
+                paymentHint: { type: 'string' },
+                nextSteps: { type: 'array', items: { type: 'string' } },
+                campaignCap: { $ref: '#/components/schemas/SaasMetaCampaignCap' },
+              },
+              additionalProperties: true,
+            },
+          },
+        },
+        SaasMetaResultSummary: {
+          type: 'object',
+          description: 'Spend and delivery totals plus the main result (`helpers/metaAdResults.js`).',
+          properties: {
+            spend: { type: 'number' },
+            impressions: { type: 'number' },
+            clicks: { type: 'number' },
+            reach: { type: 'number' },
+            ctr: { type: 'number', description: 'Percent.' },
+            cpc: { type: 'number' },
+            cpm: { type: 'number' },
+            frequency: { type: 'number' },
+            results: { type: 'number' },
+            resultLabel: { type: 'string', example: 'Chats started' },
+            resultSingular: { type: 'string', example: 'chat' },
+            resultKey: { type: 'string', enum: ['chats', 'purchases', 'leads', 'signups', 'link_clicks', 'engagements', 'none'] },
+            costPerResult: { type: 'number', nullable: true },
+            conversionsTracked: { type: 'boolean' },
+          },
+        },
+        SaasMetaDailyRow: {
+          type: 'object',
+          properties: {
+            date: { type: 'string', format: 'date' },
+            spend: { type: 'number' },
+            impressions: { type: 'number' },
+            clicks: { type: 'number' },
+            reach: { type: 'number' },
+            results: { type: 'number' },
+          },
+        },
+        SaasMetaInsightsResponse: {
+          type: 'object',
+          properties: {
+            ok: { type: 'boolean' },
+            data: {
+              type: 'object',
+              properties: {
+                adAccountId: { type: 'string' },
+                adAccountName: { type: 'string' },
+                label: { type: 'string', example: 'Last 30 days' },
+                since: { type: 'string', format: 'date' },
+                until: { type: 'string', format: 'date' },
+                currency: { type: 'string', example: 'ZAR' },
+                account: { $ref: '#/components/schemas/SaasMetaResultSummary' },
+                campaigns: {
+                  type: 'array',
+                  items: {
+                    allOf: [
+                      { $ref: '#/components/schemas/SaasMetaResultSummary' },
+                      { type: 'object', properties: { campaignId: { type: 'string' }, name: { type: 'string' } } },
+                    ],
+                  },
+                },
+                daily: { type: 'array', items: { $ref: '#/components/schemas/SaasMetaDailyRow' } },
+                warnings: { type: 'array', items: { type: 'string' } },
+              },
+            },
+          },
+        },
+        SaasMetaCampaignStatusBody: {
+          type: 'object',
+          required: ['status'],
+          properties: { status: { type: 'string', enum: ['active', 'paused', 'archived', 'deleted'], description: 'Case-insensitive.' } },
+        },
+        SaasMetaCampaignBudgetBody: {
+          type: 'object',
+          required: ['daily_budget'],
+          properties: { daily_budget: { type: 'number', example: 50, description: 'Account currency (e.g. rand), not cents.' } },
+        },
+        SaasMetaTargetingInput: {
+          type: 'object',
+          description: 'Optional targeting; anything left out uses SA defaults.',
+          properties: {
+            countries: { type: 'array', items: { type: 'string' }, example: ['ZA'] },
+            cities: { type: 'array', items: { type: 'object', additionalProperties: true } },
+            regions: { type: 'array', items: { type: 'object', additionalProperties: true } },
+            age_min: { type: 'integer', example: 18 },
+            age_max: { type: 'integer', example: 65 },
+            genders: { type: 'array', items: { type: 'integer' }, description: '1 = men, 2 = women. Empty = all.' },
+            interests: { type: 'array', items: { type: 'object', additionalProperties: true } },
+            custom_audiences: { type: 'array', items: { type: 'object', additionalProperties: true } },
+            publisher_platforms: { type: 'array', items: { type: 'string', enum: ['facebook', 'instagram'] }, description: 'Omit for Advantage+ placements.' },
+            facebook_positions: { type: 'array', items: { type: 'string' } },
+            instagram_positions: { type: 'array', items: { type: 'string' } },
+            custom_locations: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Pins with lat/lng and radius.' },
+            advantage_audience: { type: 'boolean' },
+          },
+          additionalProperties: true,
+        },
+        SaasMetaCampaignBaseBody: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            daily_budget: { type: 'number', example: 50 },
+            days: { type: 'integer', example: 7, description: 'Run window, set at creation time.' },
+            country: { type: 'string', default: 'ZA' },
+            status: { type: 'string', enum: ['PAUSED', 'ACTIVE'], default: 'PAUSED' },
+            targeting: { $ref: '#/components/schemas/SaasMetaTargetingInput' },
+          },
+        },
+        SaasMetaWhatsAppCampaignBody: {
+          allOf: [
+            { $ref: '#/components/schemas/SaasMetaCampaignBaseBody' },
+            {
+              type: 'object',
+              properties: {
+                message: { type: 'string', description: 'Ad text; also prefilled in the WhatsApp chat (first 500 chars).' },
+                image_hash: { type: 'string', description: 'From `POST /saas/meta/creatives/image`.' },
+                image_url: { type: 'string' },
+              },
+            },
+          ],
+        },
+        SaasMetaLeadCampaignBody: {
+          allOf: [
+            { $ref: '#/components/schemas/SaasMetaCampaignBaseBody' },
+            {
+              type: 'object',
+              properties: {
+                image_hash: { type: 'string' },
+                headline: { type: 'string' },
+                body: { type: 'string' },
+                privacy_policy_url: { type: 'string', format: 'uri' },
+                thank_you_message: { type: 'string' },
+              },
+            },
+          ],
+        },
+        SaasAdTipsClientsResponse: {
+          type: 'object',
+          properties: {
+            ok: { type: 'boolean' },
+            data: {
+              type: 'object',
+              properties: {
+                clients: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      clientId: { type: 'string' },
+                      companyName: { type: 'string' },
+                      plan: { type: 'string' },
+                      adAccountId: { type: 'string' },
+                      adAccountName: { type: 'string' },
+                      pixelLinked: { type: 'boolean' },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        SaasAdTip: {
+          type: 'object',
+          properties: {
+            id: {
+              type: 'string',
+              example: 'high_frequency',
+              description:
+                'Rule id: no_conversion_tracking, pixel_no_conversions, high_frequency, low_ctr, high_cpm, ctr_declining, budget_fragmentation, learning_phase, weekday_weekend.',
+            },
+            severity: { type: 'string', enum: ['critical', 'warning', 'info'] },
+            scope: {
+              type: 'object',
+              properties: { type: { type: 'string', enum: ['account', 'campaign', 'adset'] }, id: { type: 'string' }, name: { type: 'string' } },
+            },
+            title: { type: 'string' },
+            why: { type: 'string' },
+            action: { type: 'string' },
+            metrics: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: { label: { type: 'string' }, value: { type: 'string' }, threshold: { type: 'string' } },
+              },
+            },
+          },
+        },
+        SaasAdTipsResponse: {
+          type: 'object',
+          properties: {
+            ok: { type: 'boolean' },
+            data: {
+              type: 'object',
+              properties: {
+                clientId: { type: 'string' },
+                companyName: { type: 'string' },
+                connected: { type: 'boolean' },
+                message: { type: 'string', description: 'Set when not connected.' },
+                adAccountId: { type: 'string' },
+                adAccountName: { type: 'string' },
+                label: { type: 'string' },
+                currency: { type: 'string' },
+                account: { $ref: '#/components/schemas/SaasMetaResultSummary' },
+                campaigns: { type: 'array', items: { type: 'object', additionalProperties: true } },
+                daily: { type: 'array', items: { $ref: '#/components/schemas/SaasMetaDailyRow' } },
+                adsets: { type: 'array', items: { type: 'object', additionalProperties: true } },
+                tips: { type: 'array', items: { $ref: '#/components/schemas/SaasAdTip' } },
+                summary: {
+                  type: 'object',
+                  properties: { critical: { type: 'integer' }, warning: { type: 'integer' }, info: { type: 'integer' } },
+                },
+                warnings: { type: 'array', items: { type: 'string' } },
+                campaignCap: { $ref: '#/components/schemas/SaasMetaCampaignCap' },
+              },
+            },
           },
         },
         FlexibleJson: {

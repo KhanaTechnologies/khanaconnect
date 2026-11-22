@@ -2,6 +2,7 @@ const axios = require('axios');
 const Client = require('../../models/client');
 const SaasUsageEvent = require('../../models/SaasUsageEvent');
 const { usageBillingQueue } = require('../../queues/saasQueues');
+const { summariseResults } = require('../../helpers/metaAdResults');
 const META_GRAPH_BASE = process.env.META_GRAPH_BASE || 'https://graph.facebook.com/v25.0';
 const META_APP_ID = process.env.META_APP_ID || process.env.FACEBOOK_APP_ID || '';
 const META_APP_SECRET = process.env.META_APP_SECRET || process.env.FACEBOOK_APP_SECRET || '';
@@ -692,24 +693,29 @@ async function getInsights(clientId, { days = 30, month = '', preset = '' } = {}
 
   let accountInsights = null;
   let campaignRows = [];
+  let accountCurrency = '';
   const warnings = [];
 
   try {
     const accRes = await graphGet(`/act_${adAccountId}/insights`, token, {
-      fields: 'spend,impressions,clicks,reach,ctr,cpc,cpm,actions',
+      fields: 'spend,impressions,clicks,reach,ctr,cpc,cpm,frequency,actions,account_currency',
       ...dateParams,
       level: 'account',
     });
     const row = Array.isArray(accRes?.data) ? accRes.data[0] : null;
     if (row) {
+      const spend = Number(row.spend) || 0;
+      if (row.account_currency) accountCurrency = String(row.account_currency).toUpperCase();
       accountInsights = {
-        spend: Number(row.spend) || 0,
+        spend,
         impressions: Number(row.impressions) || 0,
         clicks: Number(row.clicks) || 0,
         reach: Number(row.reach) || 0,
         ctr: Number(row.ctr) || 0,
         cpc: Number(row.cpc) || 0,
         cpm: Number(row.cpm) || 0,
+        frequency: Number(row.frequency) || 0,
+        ...summariseResults(row.actions, spend),
         dateStart: row.date_start || window.since || null,
         dateStop: row.date_stop || window.until || null,
       };
@@ -723,6 +729,8 @@ async function getInsights(clientId, { days = 30, month = '', preset = '' } = {}
         ctr: 0,
         cpc: 0,
         cpm: 0,
+        frequency: 0,
+        ...summariseResults([], 0),
         dateStart: window.since || null,
         dateStop: window.until || null,
       };
@@ -738,27 +746,65 @@ async function getInsights(clientId, { days = 30, month = '', preset = '' } = {}
 
   try {
     const campRes = await graphGet(`/act_${adAccountId}/insights`, token, {
-      fields: 'campaign_name,campaign_id,spend,impressions,clicks,reach,ctr',
+      fields: 'campaign_name,campaign_id,spend,impressions,clicks,reach,ctr,cpm,frequency,actions',
       ...dateParams,
       level: 'campaign',
       limit: 50,
     });
     const rows = Array.isArray(campRes?.data) ? campRes.data : [];
     campaignRows = rows
-      .map((r) => ({
-        name: String(r.campaign_name || 'Campaign'),
-        campaignId: r.campaign_id ? String(r.campaign_id) : '',
-        spend: Number(r.spend) || 0,
-        impressions: Number(r.impressions) || 0,
-        clicks: Number(r.clicks) || 0,
-        reach: Number(r.reach) || 0,
-        ctr: Number(r.ctr) || 0,
-      }))
+      .map((r) => {
+        const spend = Number(r.spend) || 0;
+        const res = summariseResults(r.actions, spend);
+        return {
+          name: String(r.campaign_name || 'Campaign'),
+          campaignId: r.campaign_id ? String(r.campaign_id) : '',
+          spend,
+          impressions: Number(r.impressions) || 0,
+          clicks: Number(r.clicks) || 0,
+          reach: Number(r.reach) || 0,
+          ctr: Number(r.ctr) || 0,
+          cpm: Number(r.cpm) || 0,
+          frequency: Number(r.frequency) || 0,
+          results: res.results,
+          resultLabel: res.resultLabel,
+          costPerResult: res.costPerResult,
+        };
+      })
       .sort((a, b) => b.spend - a.spend);
   } catch (err) {
     const msg = formatGraphError(err);
     console.warn('[meta ads] campaign insights failed:', msg);
     warnings.push(`Campaign insights failed: ${msg}`);
+  }
+
+  // One row per day for the trend chart (and the admin weekend / weekday tip).
+  let daily = [];
+  try {
+    const dayRes = await graphGet(`/act_${adAccountId}/insights`, token, {
+      fields: 'spend,impressions,clicks,reach,actions',
+      ...dateParams,
+      level: 'account',
+      time_increment: 1,
+      limit: 100,
+    });
+    daily = (Array.isArray(dayRes?.data) ? dayRes.data : [])
+      .map((r) => {
+        const spend = Number(r.spend) || 0;
+        return {
+          date: String(r.date_start || ''),
+          spend,
+          impressions: Number(r.impressions) || 0,
+          clicks: Number(r.clicks) || 0,
+          reach: Number(r.reach) || 0,
+          results: summariseResults(r.actions, spend).results,
+        };
+      })
+      .filter((r) => r.date)
+      .sort((a, b) => a.date.localeCompare(b.date));
+  } catch (err) {
+    // Trend is a nice-to-have; totals above still stand.
+    console.warn('[meta ads] daily insights failed:', formatGraphError(err));
   }
 
   client.metaAds.lastSync = new Date();
@@ -776,6 +822,8 @@ async function getInsights(clientId, { days = 30, month = '', preset = '' } = {}
     label: window.label,
     account: accountInsights,
     campaigns: campaignRows,
+    daily,
+    currency: accountCurrency || 'ZAR',
     warning: warnings[0] || '',
     warnings,
   };
