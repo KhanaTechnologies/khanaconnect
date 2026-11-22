@@ -3289,6 +3289,11 @@ function spec() {
         name: 'Tracking',
         description: 'Browser/event pipeline (`/events`): batch ingest, stats, anonymous linking — see `routes/trackingEvents.js`.',
       },
+      {
+        name: 'Admin site analytics',
+        description:
+          'Khana-admin-only site activity under `/admin/site-analytics` (`routes/adminSiteAnalytics.js`): client directory, `TrackingEvent` time series, CSV/JSON export, and saved ad periods to compare traffic against. Needs a platform-admin dashboard session (`middleware/requireAdmin.js`); a plain Bearer token for the admin client is not enough.',
+      },
       { name: 'Analytics', description: 'Aggregated reporting (`/analytics/overview`).' },
       {
         name: 'Preorder pledge',
